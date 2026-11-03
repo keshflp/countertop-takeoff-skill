@@ -4,23 +4,30 @@
 # ///
 """Generate a SYNTHETIC apartment plan PDF with KNOWN countertop areas.
 
-The fixture mimics the repetitive structure of multifamily drawing sets:
+Two cases:
+  --case original (default): the clean V1 fixture - unit schedule + two
+      per-type plan sheets drawn at 1/4" = 1'-0" (18 pt/ft); total 168.75 SF.
+  --case messy: the V2 hostile fixture (see examples/messy_fixture.py):
+      floor-column schedule with an ADA subset, a rotated sheet with two
+      viewports at different scales, island/peninsula/adjacent-room
+      geometry, hatching, a sink loop, split/fractional dimension text, a
+      REV B duplicate sheet, and a searchable raster scan page.
 
-  page 1  SHEET A-001  UNIT SCHEDULE (the multiplier table: Type A x3, Type B x2)
-  page 2  SHEET A-101  TYPE A FLOOR PLAN (kitchen counter L-shape + vanity, dimensioned)
-  page 3  SHEET A-102  TYPE B FLOOR PLAN (kitchen counter rectangle + vanity, dimensioned)
-
-Drawn at 1/4" = 1'-0"  ->  72 pt/inch / 4  =  18.0 PDF points per real foot.
-Because the coordinates are chosen, the true countertop areas are known exactly
-and printed at the end (KNOWN TRUTH). The pipeline must recover them.
+Because the coordinates are chosen, the true countertop areas are known
+exactly and printed at the end (KNOWN TRUTH). The pipeline must recover them.
 
 Usage:
-    uv run examples/make_fixture.py [--out examples/fixture.pdf]
+    uv run examples/make_fixture.py [--case original|messy]
+                                    [--out examples/fixture.pdf]
 """
 
 import argparse
 import os
+import sys
+
 import pymupdf
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 PT_PER_FT = 18.0  # 1/4" = 1'-0"
 FONT = "helv"
@@ -102,8 +109,16 @@ def plan_page(doc, sheet, title, unit, kitchen, kitchen_label_at, vanity,
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--case", choices=["original", "messy"],
+                    default="original",
+                    help="original = clean V1 fixture; messy = V2 hostile"
+                         " fixture")
     ap.add_argument("--out", default="examples/fixture.pdf")
     args = ap.parse_args()
+    if args.case == "messy":
+        import messy_fixture
+        messy_fixture.build(args.out)
+        return
 
     doc = pymupdf.open()
 
