@@ -175,6 +175,192 @@ def calibrate_page(page, pad, filter_text=None, spread_fail=5.0):
             "unmatched": unmatched, "spread_pct": round(spread, 3)}
 
 
+# --------------------------------------------- schedule multiplication + QA
+
+def aggregate_types(measured_jobs, schedule, spot_tolerance):
+    """Group instances by room type, spot-check them, extend by schedule count."""
+    counts = (schedule or {}).get("counts", {})
+    types = []
+    order = []
+    for job in measured_jobs:
+        if job["room_type"] not in order:
+            order.append(job["room_type"])
+    for room_type in order:
+        instances = [j for j in measured_jobs if j["room_type"] == room_type]
+        base = instances[0]
+        base_sf = base["instance_sf"]
+        count = counts.get(room_type)
+        count_note = None
+        if count is None:
+            count = 1
+            count_note = ("no schedule count found for this type; used 1 -"
+                          " VERIFY against the unit schedule")
+        spot_checks = []
+        for other in instances[1:]:
+            dev = (abs(other["instance_sf"] - base_sf) / base_sf * 100.0
+                   if base_sf else 0.0)
+            spot_checks.append({
+                "instance": other["instance"],
+                "sf": other["instance_sf"],
+                "deviation_pct": round(dev, 3),
+                "ok": dev <= spot_tolerance,
+            })
+        types.append({
+            "room_type": room_type,
+            "schedule_count": count,
+            "schedule_sheet": (schedule or {}).get("sheet"),
+            "count_note": count_note,
+            "base_instance": base["instance"],
+            "sf_per_unit": base_sf,
+            "extended_sf": round(base_sf * count, 2),
+            "spot_checks": spot_checks,
+            "instances": instances,
+        })
+    return types
+
+
+def run_audit(types, calibrations, spread_fail):
+    """Self-audit checklist. Returns list of {check, status, detail}."""
+    items = []
+
+    def add(check, status, detail):
+        items.append({"check": check, "status": status, "detail": detail})
+
+    if calibrations:
+        worst = max(c["spread_pct"] for c in calibrations.values())
+        n = sum(len(c["labels"]) for c in calibrations.values())
+        add("calibration", "pass" if worst <= spread_fail else "fail",
+            f"{n} dimension label(s) matched on {len(calibrations)} sheet(s);"
+            f" worst spread {worst:.2f}% (limit {spread_fail}%)")
+    else:
+        add("calibration", "fail", "no calibration was performed")
+
+    for t in types:
+        for inst in t["instances"]:
+            for r in inst["regions"]:
+                status = "pass"
+                if r["notes"]:
+                    status = "warn"
+                if r.get("expected_range_ok") is False:
+                    status = "fail"
+                detail = (f"{t['room_type']}/{inst['instance']}/{r['name']}:",
+                          f" {r['area_sf']:.2f} SF in {r['vertices']}-vertex loop;"
+                          f" {r['segments_in_bbox']} segs, {r['loops_found']} loops,"
+                          f" bbox cap {r['bbox_area_sf']:.2f} SF")
+                add("region closure/sanity", status, "".join(detail))
+
+    for t in types:
+        for sc in t["spot_checks"]:
+            add("spot-check",
+                "pass" if sc["ok"] else "fail",
+                f"{t['room_type']}: {sc['instance']} = {sc['sf']:.2f} SF vs base"
+                f" {t['sf_per_unit']:.2f} SF (dev {sc['deviation_pct']:.2f}%)")
+
+    for t in types:
+        status = "warn" if t["count_note"] else "pass"
+        add("schedule count", status,
+            f"type {t['room_type']}: count {t['schedule_count']}"
+            + (f" ({t['count_note']})" if t["count_note"] else
+               f" from schedule sheet {t['schedule_sheet']}")
+            + " - agent must have READ this from the schedule text")
+
+    total_units = sum(t["schedule_count"] for t in types)
+    add("coverage", "pass",
+        f"{sum(len(t['instances']) for t in types)} instance(s) measured across"
+        f" {len(types)} type(s); schedule total {total_units} units")
+    return items
+
+
+# -------------------------------------------------------------- output
+
+def build_report(spec, calibrations, types, audit):
+    lines = []
+    lines.append("# Countertop Takeoff Report")
+    lines.append("")
+    lines.append(f"- source PDF: `{spec['pdf']}`")
+    lines.append(f"- generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}")
+    lines.append(f"- schedule counts from sheet {(spec.get('schedule') or {}).get('sheet', '?')}"
+                 " (agent-read from indexed page text)")
+    lines.append("")
+    lines.append("## Calibration")
+    lines.append("")
+    lines.append("| page | sheet | label | segment pt | real ft | pt/ft |")
+    lines.append("|-----:|-------|-------|-----------:|--------:|------:|")
+    for page_no in sorted(calibrations):
+        c = calibrations[page_no]
+        for lb in c["labels"]:
+            lines.append(f"| {lb['page']} | {lb['sheet'] or '?'} | {lb['label']}"
+                         f" | {lb['seg_len_pt']:.2f} | {lb['real_ft']:.4f}"
+                         f" | {lb['pt_per_ft']:.4f} |")
+        lines.append("")
+        lines.append(f"Scale used on page {page_no}: **{c['scale_pt_per_ft']:.4f} pt/ft**"
+                     f" (median of {len(c['labels'])} labels,"
+                     f" spread {c['spread_pct']:.2f}%)")
+        lines.append("")
+    lines.append("## Takeoff by type")
+    for t in types:
+        lines.append("")
+        lines.append(f"### Type {t['room_type']} - schedule count {t['schedule_count']}")
+        lines.append("")
+        lines.append("| instance | sheet (page) | region | SF | edge LF (info) |")
+        lines.append("|----------|--------------|--------|---:|---------------:|")
+        for inst in t["instances"]:
+            for r in inst["regions"]:
+                lines.append(f"| {inst['instance']} | {inst['sheet']} ({inst['page']})"
+                             f" | {r['name']} | {r['area_sf']:.2f}"
+                             f" | {r['edge_lf_info']:.2f} |")
+        lines.append("")
+        lines.append(f"Per-unit total: **{t['sf_per_unit']:.2f} SF**"
+                     f" -> x{t['schedule_count']} units = **{t['extended_sf']:.2f} SF**")
+        for sc in t["spot_checks"]:
+            verdict = "PASS" if sc["ok"] else "FAIL"
+            lines.append(f"Spot-check {sc['instance']}: {sc['sf']:.2f} SF vs base"
+                         f" {t['sf_per_unit']:.2f} SF"
+                         f" (dev {sc['deviation_pct']:.2f}%) {verdict}")
+        if t["count_note"]:
+            lines.append(f"WARNING: {t['count_note']}")
+    lines.append("")
+    lines.append("## Totals")
+    lines.append("")
+    lines.append("| type | SF/unit | units | extended SF |")
+    lines.append("|------|--------:|------:|------------:|")
+    total_ext = 0.0
+    total_units = 0
+    for t in types:
+        total_ext += t["extended_sf"]
+        total_units += t["schedule_count"]
+        lines.append(f"| {t['room_type']} | {t['sf_per_unit']:.2f}"
+                     f" | {t['schedule_count']} | {t['extended_sf']:.2f} |")
+    lines.append(f"| **total** |  | {total_units} | **{total_ext:.2f}** |")
+    lines.append("")
+    lines.append("## QA table")
+    lines.append("")
+    lines.append("| room type | instance measured | SF | schedule count | extended SF | source |")
+    lines.append("|-----------|-------------------|---:|---------------:|------------:|--------|")
+    for t in types:
+        for inst in t["instances"]:
+            if inst["instance"] == t["base_instance"] or True:
+                lines.append(
+                    f"| {t['room_type']} | {inst['instance']}"
+                    f" | {inst['instance_sf']:.2f} | {t['schedule_count']}"
+                    f" | {t['extended_sf']:.2f}"
+                    f" | {spec['pdf']} p.{inst['page']} ({inst['sheet']}) |")
+    lines.append("")
+    lines.append("## Self-audit")
+    lines.append("")
+    mark = {"pass": "x", "warn": " ", "fail": "!!"}
+    for item in audit:
+        lines.append(f"- [{mark[item['status']]}] {item['check']}:"
+                     f" {item['status'].upper()} - {item['detail']}")
+    failed = [i for i in audit if i["status"] == "fail"]
+    warned = [i for i in audit if i["status"] == "warn"]
+    lines.append("")
+    overall = "FAIL" if failed else ("PASS (with warnings)" if warned else "PASS")
+    lines.append(f"**Overall: {overall}**"
+                 f" ({len(failed)} fail, {len(warned)} warn)")
+    return "\n".join(lines) + "\n"
+
+
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("jobs", help="job spec JSON (see module docstring)")
@@ -324,7 +510,71 @@ def run_pipeline(args):
         print(f"measured {job['room_type']}/{job['instance']}:"
               f" {measured_jobs[-1]['instance_sf']:.2f} SF"
               f"  ({', '.join(r['name'] + ' ' + format(r['area_sf'], '.2f') + ' SF' for r in regions)})")
-    raise MeasureError("STUB: aggregation and report land in the next commits")
+    types = aggregate_types(measured_jobs, spec.get("schedule"),
+                            args.spot_tolerance)
+    audit = run_audit(types, calibrations, args.spread_fail)
+    report = build_report(spec, calibrations, types, audit)
+    print()
+    print(report)
+    if args.report:
+        with open(args.report, "w", encoding="utf-8") as f:
+            f.write(report)
+        print(f"wrote {args.report}")
+    if args.csv_path:
+        write_csv(args.csv_path, spec, types)
+        print(f"wrote {args.csv_path}")
+    if args.json_path:
+        write_results_json(args.json_path, spec, calibrations, types, audit, args)
+        print(f"wrote {args.json_path}")
+    failed = [i for i in audit if i["status"] == "fail"]
+    if failed:
+        raise MeasureError(
+            f"self-audit FAILED ({len(failed)} item(s)); numbers above must not"
+            " be quoted until fixed")
+    return 0
+
+
+def write_csv(path, spec, types):
+    cols = ["room_type", "instance", "region", "sheet", "page", "region_sf",
+            "edge_lf_info", "instance_sf", "schedule_count", "extended_sf",
+            "source", "notes"]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(cols)
+        for t in types:
+            for inst in t["instances"]:
+                for r in inst["regions"]:
+                    notes = "; ".join(r["notes"]) if r["notes"] else ""
+                    if inst["instance"] != t["base_instance"]:
+                        notes = (notes + "; " if notes else "") + "spot-check instance"
+                    writer.writerow([
+                        t["room_type"], inst["instance"], r["name"],
+                        inst["sheet"], inst["page"], f"{r['area_sf']:.2f}",
+                        f"{r['edge_lf_info']:.2f}", f"{inst['instance_sf']:.2f}",
+                        t["schedule_count"], f"{t['extended_sf']:.2f}",
+                        f"{spec['pdf']} p.{inst['page']} ({inst['sheet']})",
+                        notes,
+                    ])
+
+
+def write_results_json(path, spec, calibrations, types, audit, args):
+    payload = {
+        "pdf": spec["pdf"],
+        "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "settings": {"snap_pt": args.snap, "pad_pt": args.pad,
+                     "spot_tolerance_pct": args.spot_tolerance,
+                     "spread_fail_pct": args.spread_fail},
+        "calibrations": {str(k): v for k, v in calibrations.items()},
+        "types": [
+            {k: v for k, v in t.items() if k != "instances"} for t in types
+        ],
+        "jobs": spec["jobs"],
+        "audit": audit,
+        "status": ("FAIL" if any(i["status"] == "fail" for i in audit)
+                   else "PASS"),
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=1)
 
 
 def main(argv=None):
