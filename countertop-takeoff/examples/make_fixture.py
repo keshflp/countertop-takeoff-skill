@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.9"
-# dependencies = ["pymupdf>=1.24"]
+# dependencies = ["pymupdf==2.1"]
 # ///
 """Generate a SYNTHETIC apartment plan PDF with KNOWN countertop areas.
 

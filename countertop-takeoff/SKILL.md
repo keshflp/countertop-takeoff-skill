@@ -1,250 +1,246 @@
 ---
 name: countertop-takeoff
+version: 2.0.0
 description: >-
   Countertop square-footage takeoff from architectural plan/spec PDFs for
-  countertop subcontractors bidding apartments and hotels. Indexes the drawing
-  set, finds the unit schedule (multiplier table), calibrates drawing scale
-  from labeled dimensions, measures countertop polygons from extracted vector
-  geometry with scripts, multiplies by the schedule, and emits a cited QA
-  report + CSV. Use when the user shares plan PDFs and asks for countertop
-  quantities, square footage, SF, or a takeoff.
+  countertop subcontractors bidding apartments and hotels. Preflights the
+  drawing pack (raster/hybrid detection, revision conflicts), plans an
+  approved scope with a completeness ledger, records schedule evidence with
+  quoted rows and word boxes, calibrates per viewport from TWO agreeing
+  labeled dimensions, measures agent-SELECTED boundary segments with code,
+  audits scope/schedule reconciliation, renders overlay evidence, and gates
+  delivery behind an independent audit. Use when the user shares plan PDFs
+  and asks for countertop quantities, square footage, SF, or a takeoff.
 ---
 
-# Countertop Takeoff (V1: square footage only)
+# Countertop Takeoff (V2: auditable square footage)
 
-You are doing a countertop takeoff on a set of plan/spec PDFs for a countertop
-subcontractor. Multifamily/hospitality sets are repetitive: a unit schedule
-lists room types (Type A ×24, Type B ×12…) and each type has ONE repeated plan.
-V1 scope is **square footage only**. Edge linear feet, backsplash, cutouts,
-slab yield, pricing, and invoicing are later phases — see "Extension points".
+You are doing a countertop takeoff on a set of plan/spec PDFs for a
+countertop subcontractor. Multifamily/hospitality sets are repetitive: a unit
+schedule lists room types (Type A ×24, Type B ×12…) and each type has ONE
+repeated plan. V2 scope is **square footage only**. Edge linear feet,
+backsplash, cutout pricing, slab yield, pricing, and invoicing are later
+phases — see "Extension points".
 
-Every command below runs from THIS skill folder (the folder containing
-`SKILL.md`). Scripts are plain Python driven by `uv`:
+Every command runs from THIS skill folder (the folder containing `SKILL.md`).
+Scripts are plain Python driven by `uv`:
 
 ```console
 uv run scripts/index_pdf.py <file.pdf>
 ```
 
-`uv` auto-provisions Python and the pinned dependencies (`pymupdf`, `shapely`)
-on first use — no Python install needed. Fallback for machines without uv:
-`pip install -r scripts/requirements.txt`, then run `python` instead of
-`uv run`.
+`uv` auto-provisions Python and the pinned dependencies (`pymupdf==2.1`,
+`shapely==2.2.0`) on first use — no Python install needed. Machines without
+uv: `pip install -r scripts/requirements.txt`, then run `python` directly.
+This skill is developed on Windows: never assume Unix tools (`grep`,
+`sed`) — filter JSON with Python one-liners or the printed summaries.
 
 ## Non-negotiable rules
 
 1. **Vision for recognition, code for measurement.** You may LOOK at rendered
-   pages only to decide WHAT to measure (which sheets show kitchens/vanities,
-   where the unit schedule is, what a polyline represents). You must NEVER
-   produce a quantity by eyeballing an image. Every number in the deliverable
-   comes from `measure.py` operating on extracted vector geometry.
-2. **Mandatory scale calibration.** Never convert PDF points to feet without a
-   calibration factor recovered from a labeled dimension ON THE SAME SHEET
-   (e.g. a "10'-0"" string whose endpoints exist in the vector data). If
-   calibration fails, STOP and tell the user. Never assume a scale from the
-   title block note (1/4"=1'-0" is often wrong on half-size or non-standard
-   prints) — you may use it only as a sanity band around the measured factor.
-3. **Multiplication is earned, never assumed.** The unit/room-type schedule is
-   the multiplier table. Find it, read its counts from page TEXT, verify them
-   at the check-in gate, and only then multiply. No schedule + no repetition =
-   fallback mode (step 10).
-4. **Check-in gate.** Pause for user approval after indexing (step 7 in the
-   flow below) — before any extraction work.
-5. **Cite everything.** Every number cites sheet + page. Deliver the QA table.
-6. **Self-audit.** Run the step-9 checklist before presenting results. If any
-   item fails, fix or disclose — never silently ship.
+   pages only to decide WHAT to measure. You must NEVER produce a quantity by
+   eyeballing an image, and you must never type a scale factor or a length:
+   you SELECT recorded words/segments and the code computes everything.
+2. **Text is not vectors.** A searchable raster page (OCR'd scan) has text
+   but no linework. Only preflight class `vector` pages may be measured;
+   everything else gets an explicit skip/block with a quoted reason.
+3. **Multiplication is earned, never assumed.** Counts come from the
+   schedule with quoted row text + word boxes, as integers, with explicit
+   ADA-style variant allocation. A missing count is a FAILURE, not a default.
+4. **Human approval gates measurement.** You present the scope ledger +
+   schedule plan and WAIT. No extraction work before approval.
+5. **Independent audit gates delivery.** After measurement you render the
+   audit pack and a FRESH agent (or an independent human, recorded as such)
+   must approve before exports are delivered.
+6. **Cite everything.** Every number carries page, viewport, segment ids,
+   and the actual calibration factor. Exit codes and `status` fields are
+   law: a `failed` run's numbers must not be quoted.
 
-## Workflow
+## Workflow — run the steps IN THIS ORDER
 
-### 1) Intake & page inventory
+### Step 1. Intake & pack QA (preflight)
 
-- Ask for / locate the PDF(s). If plans are only available on a planroom,
-  the USER downloads them manually (respect the vendor's terms — this skill
-  never scrapes planrooms).
-- Run `uv run scripts/index_pdf.py <file.pdf>` for each PDF. It writes
-  `<pdf>.index.json` (full per-page TEXT + flags) and prints a table:
-  sheet numbers, unit-schedule/plan/spec flags, countertop keyword hits,
-  dimension-label counts, type tags.
-- Skim the JSON text of flagged pages. Note: scanned (raster-only) pages have
-  no text and no vectors — if `dim_count` is 0 everywhere and text is empty,
-  the set needs OCR/vector treatment that V1 does not do. Say so and stop.
+- Ask for / locate the PDF(s). Plans on a planroom are downloaded BY THE USER
+  manually (never scrape planrooms).
+- Run `uv run scripts/index_pdf.py <file.pdf>` for each PDF. It prints the
+  page table (sheet, class, rotation, segments, image coverage) and writes
+  `<pdf>.index.json` with full page text + findings.
+- READ the summary and the JSON. Note: pages classed `searchable_raster` /
+  `raster` / `hybrid` / `uncertain`, duplicate pages, and sheet-id conflicts.
+  These NEED a disposition in step 3. Conflicts mean one sheet number appears
+  twice with different content — find the revision marks (REV A/B…) and
+  figure out which page is authoritative, or list it as an open question.
 
-### 2) Find the unit schedule (the multiplier table)
+### Step 2. Find the unit schedule and identify plan sheets
 
-- Candidates are pages flagged `unit_schedule` (or "schedule" + qty/type tags).
-  READ their text. Build the table: `type -> count`, and note the source sheet
-  (e.g. A-001). Room types may also appear as unit types (1BR/2BR), room
-  numbers with repeated tags, or hospitality keys (King run, Queen run, ADA).
-- Cross-check counts against anything else in the set that states totals
-  (cover sheet stats, parking count × bedrooms). Discrepancies go to the
-  check-in gate, not to silent judgment calls.
-- If there is NO schedule and plans show each room individually → jump to
-  step 10 (fallback mode).
+- Candidates: pages flagged `unit_schedule`. READ their TEXT in the index
+  JSON. Build the table: `type -> count`, quoting each row verbatim, and
+  record where it sits (sheet, page). Watch for: floor subtotals, ADA-style
+  subset columns ("TYPE A (ADA)"), and stated project totals — these feed
+  reconciliation later.
+- Exception rules: corner/end units, ADA-modified units, ground/penthouse
+  variants, and amenity spaces (lobby, clubroom, pool bath) are measured
+  SEPARATELY with their own counts. An amenity counter on a raster page is
+  an explicit skip with a "manual takeoff pending" reason — never silent.
+- If there is NO schedule and rooms don't repeat → plan step 3 in
+  `individual_rooms` mode.
 
-### 3) Identify countertop-bearing sheets per type
+### Step 3. Plan the approved scope + schedule evidence, then STOP for approval
 
-- From the index: plan sheets with `counter_terms` (counter/countertop/vanity/
-  kitchen) — usually one plan per TYPE, not per unit. Elevations/details give
-  construction info, not area; ignore them for V1.
-- Extract vector geometry for ONLY those pages:
-  `uv run scripts/extract_geometry.py <file.pdf> --pages 2,3 --out build/<name>.geometry.json`
-  (1-based page numbers, exactly as index_pdf prints them).
-- If you have page images or a rendering surface, you may view pages to locate
-  countertops; then express each location as a bbox + interior seed point in
-  PDF page coordinates (the geometry JSON tells you the page size; segment
-  coordinates cluster around the linework you identified). This is the ONLY
-  vision-to-code handoff: coordinates for WHERE, never numbers for HOW MUCH.
-- You can find seed points without images too: `words` in the geometry JSON
-  give label positions (e.g. the word "KITCHEN"), and `segments` cluster by
-  room. Grep the JSON: `grep -o '"t": *"KITCHEN"[^}]*' build/*.geometry.json`.
+Before ANY geometry work, write the plan:
 
-### 4) Calibration
+1. **Scope ledger**: EVERY page gets `measured` (with the expected region
+   ids you plan: kitchen, island, peninsula, vanity — including amenities)
+   or `intentionally_skipped` with a quoted reason (schedule sheet,
+   superseded revision, unmeasurable scan), or `blocked` if unresolved.
+2. **Schedule evidence**: per type — the count (integer), the quoted row
+   text, the schedule page/sheet, floor rows if the schedule has them, and
+   explicit variants with `included_in_parent_total`.
+3. **Declarations**: anything contradictory (plan/spec depth conflicts,
+   suspected revisions, ambiguous labels) as `policy.declarations`.
 
-- `measure.py` calibrates automatically: it finds dimension-like words
-  (`10'-0"`, `2'-6"`, `8'`…) in the page's text layer, matches each to the
-  longest vector segment whose midpoint sits inside the label's bbox (+pad),
-  and computes `pt_per_ft = segment_length / real_length`. Multiple labels are
-  cross-checked (median; >5% spread = hard stop).
-- You do not need to do anything — but you DO need to verify the printed
-  calibration table in the report: labels matched, scales, spread. If a sheet
-  has no usable dimension strings (common on scanned sheets), measure.py exits
-  with `CALIBRATION FAILED`. Do NOT proceed by assuming a scale; ask the user
-  for a known dimension (e.g. a door width) and pass it explicitly via the job
-  spec: `"calibration": {"text": "3'-0\""}` — only if such a label truly exists
-  on that sheet.
-- Sanity band: the measured factor should roughly match the title-block scale
-  (1/4"=1'-0" ⇒ ~18 pt/ft at full size; half-size prints halve it). A wild
-  mismatch means the wrong sheet region or a scaled photocopy — investigate.
+Then present to the user and WAIT — this is the v2 human gate, BEFORE any
+extraction:
 
-### 5) Measure one instance per type (scripts, exact geometry)
+- the page table with classes and your disposition plan;
+- the schedule table as READ (quote the rows) + variant handling;
+- the region plan per measured page;
+- every open question (conflicts, unclear counts).
 
-- Write a job spec JSON (schema in `scripts/measure.py` docstring;
-  working example: `examples/fixture.jobs.json`). Per TYPE, measure ONE
-  instance: one entry with `page`, `sheet`, and `regions` — each region =
-  `{"name": "kitchen", "bbox": [x0,y0,x1,y1], "seed": [x,y],
-  "expected_sf_range": [min,max]}`.
-- bbox rules: big enough to contain the ENTIRE countertop outline with margin,
-  small enough to EXCLUDE neighboring linework (dimension lines/ticks, wall
-  lines not part of the counter, adjacent counters). Seed = any point strictly
-  inside the counter outline. Add `expected_sf_range` from gut sense — it is a
-  QA guard, NOT the measurement (range breach = audit fail).
-- Run: `uv run scripts/measure.py <jobs>.json --report build/report.md --csv build/takeoff.csv --json build/results.json`
-- How it measures: segments inside bbox → endpoints snapped → linework noded
-  and closed into loops (shapely `polygonize`) → smallest loop containing the
-  seed = the countertop → shoelace area ÷ scale² = SF. The report also lists
-  edge LF per region as INFORMATIONAL ONLY (phase-2 scope).
-- Typical real-world bboxes are generous; when a bbox catches extra closed
-  loops (walls), the tool takes the smallest loop containing the seed and
-  notes it. Verify such notes.
+Only after explicit approval continue. If the user corrects a count, redo
+step 3 and re-present. Do not skip the gate even if told "just do it" —
+summarize and offer a one-line approve/fix choice.
 
-### 6) Spot-check + exception hunt
+### Step 4. Extract geometry, select spans/boundaries, measure
 
-- Spot-check: measure a SECOND instance of the same type (another sheet showing
-  the same type, or the same region with an independently chosen bbox) as a
-  second job entry. `measure.py` compares instances per type; >2% deviation =
-  audit FAIL. Resolve before shipping (different revisions? different unit?).
-- Exception hunt — look for units whose SF differs from their type and must be
-  measured separately (add them as their own room_type/instance entries):
-  - **Mirrored units**: same SF; verify ONE mirrored instance matches its type.
-  - **Corner / end units**, **ADA-modified units**, **ground/penthouse
-    variants**: usually their own plan sheet — measure separately, get their
-    true count from the schedule or key plan.
-  - **Amenity spaces** (lobby, clubroom, pool bath): no type letter — measure
-    each individually with `schedule_count` 1 or their own count.
-  - **Missing/mismatched tags**: any counter on a plan whose type you cannot
-    name goes to the check-in gate as an open question.
+AFTER approval:
 
-### 7) Check-in gate with the user (MANDATORY PAUSE)
+1. Extract vectors for the pages you plan to measure (plus any you need to
+   inspect):
+   `uv run scripts/extract_geometry.py <file.pdf> --pages all --out build/<name>.geometry.json`
+   Segment ids are stable; coordinates are in DISPLAYED page space
+   (rotation already applied).
+2. Build the V2 job spec (`references/job-spec-v2.md` has the full schema;
+   `examples/fixture.jobs.json` and `examples/messy.jobs.json` are working
+   examples). You write ONLY selections and evidence:
+   - **Calibration spans** per (page, viewport): pick TWO+ labeled
+     dimensions on that sheet and the segments of their dimension lines.
+     To find candidates, filter the geometry with Python (no grep):
+     `uv run --with pymupdf==2.1 python -c "import json; g=json.load(open('build/x.geometry.json')); [print(w['id'], w['t'], round(w['x0'],1), round(w['y0'],1)) for w in g['pages'][1]['words'] if chr(39) in w['t'] or '\"' in w['t']]"`
+     then look for long segments near the label bbox. Code parses split and
+     fractional labels and computes every length; the factor is never typed.
+   - **Region boundaries**: pick the segment ids that form each countertop's
+     closed outline (walls included where they bound the counter). The
+     selection must close into exactly one loop — dangling endpoints,
+     hatch ticks, or dimension lines in the selection are REFUSED with the
+     offending coordinates named. Give each region a strictly-interior seed
+     and an honest `expected_sf_range` (apartment kitchens ~15–45 SF,
+     vanities ~4–15 SF — a guard, not a target).
+   - **Scope ledger + schedule evidence + declarations** from step 3.
+3. Run:
+   `uv run scripts/measure.py <jobs>.json --report build/report.md --csv build/takeoff.csv --json build/results.json`
+   - exit 0 = required checks passed (`ready`/`warning`); exit 2 = refusal —
+     READ the named reason, fix the spec or selections, re-run. Never edit
+     outputs by hand; never quote numbers from a failed run.
+4. Check `status` and every audit line: calibration spreads in the 2–5% band
+   must be explained; expected-range breaches mean a wrong span or wrong
+   boundary — never a "close enough".
 
-After indexing and BEFORE extraction/measurement, present and wait for
-approval:
+### Step 5. Render the audit pack (overlays)
 
-1. Sheets found (page → sheet → title, candidate role).
-2. Room/unit types found and counts as read from the schedule (quote them).
-3. The exact item list you intend to take off (type → sheet → regions).
-4. Anything ambiguous (unclear counts, exceptions, suspected revisions).
+```console
+uv run scripts/audit_pack.py build/results.json --pack build/audit_pack
+```
 
-Only after explicit approval continue. If the user corrects a count, fix the
-job spec and re-run. Do not skip the gate even if the user said "just do it"
-— summarize and give them a clear one-line approve/fix choice.
+Full-page + close-up PNGs per region: translucent measured shell, region id,
+area, the ACTUAL factor, seed marker, calibration span highlights, cutouts.
+`index.md` lists what the reviewer must check. These overlays are the
+handoff to the independent audit — the reviewer sees whether shells sit on
+real countertop linework, whether seeds are inside, and whether calibration
+spans are on true dimension lines.
 
-### 8) Extended takeoff table + QA table
+### Step 6. Independent audit (MANDATORY before delivery)
 
-`measure.py` emits both. Deliver them (report.md text + takeoff.csv) and keep
-the CSV undamaged — it feeds the shop's quoting workflow later:
+Give a FRESH agent (new session, no context from this takeoff) the audit
+pack, the raw PDF, the index/geometry JSONs, and this prompt:
 
-- **Totals**: per type — SF/unit (from ONE measured instance), schedule count,
-  extended SF; project total.
-- **QA table**: room type | instance measured | SF | schedule count |
-  extended SF | source (pdf, page, sheet). Every number traces to a sheet.
-- CSV columns: `room_type, instance, region, sheet, page, region_sf,
-  edge_lf_info, instance_sf, schedule_count, extended_sf, source, notes`.
+> You are auditing a countertop takeoff you did NOT perform. In the folder:
+> the original plan PDF, `<pdf>.index.json` (preflight), the job spec
+> `<name>.jobs.json`, `results.json`, `report.md`, and `audit_pack/` overlay
+> PNGs. Do NOT trust the report. Verify from raw evidence:
+> 1. RE-READ the unit schedule page text yourself and confirm every count,
+>    floor total and ADA/subset handling matches what the spec used.
+> 2. Check the scope ledger: every page dispositioned? Any skipped page that
+>    actually contains countertop scope (amenities, scan pages)? Are the
+>    stated reasons honest?
+> 3. Check each overlay against the raw sheet: shell on the countertop
+>    outline, seed strictly inside, nothing double-counted or missing
+>    (islands, peninsulas), calibration spans on true dimension lines.
+> 4. Spot-check one area by hand: pick a rectangular region, compute
+>    length x width from the printed factor, compare to the recorded SF.
+> 5. Check the CSV: base rows only carry extension; recheck rows are blank;
+>    type totals + grand total match results.json.
+> Reply with `VERDICT: approved` or `VERDICT: rejected` plus specific
+> findings. You are the safety net, not a formality.
 
-### 9) Self-audit checklist (run before presenting results)
+Record the outcome:
 
-Every item prints in the report's Self-audit section; re-verify the human ones:
+```console
+uv run scripts/audit_pack.py build/results.json --record-receipt \
+    --reviewer "fresh-agent: <session>" --verdict approved --notes "..."
+```
 
-- [ ] Calibration factor reported per sheet, labels matched, spread within
-      limit (script enforces; you read the table).
-- [ ] Counts match the schedule YOU read — and you showed them to the user at
-      the gate.
-- [ ] Per-type SF within sane ranges (script checks `expected_sf_range`;
-      sanity bands: apartment kitchen counters ~15–45 SF, vanities ~4–15 SF;
-      hotels vary more — use judgment, flag surprises).
-- [ ] No unexplained room tags: every measured region answered "which type,
-      how many"; every schedule type answered "where measured".
-- [ ] Spot-check deviations within tolerance (script enforces; you explain any
-      warn).
-- [ ] No region's SF exceeds its bbox cap (script enforces).
-- [ ] Citations: every row carries pdf + page + sheet (script generates).
+If NO fresh agent is available, an INDEPENDENT HUMAN must do the same review,
+recorded as `--reviewer "human: <name>"` — the substitution is recorded in
+the evidence, never hidden. `verdict rejected` is recorded verbatim and the
+issues go back to step 4.
 
-If anything FAILs: fix the job spec and re-run, or disclose the failure.
-`measure.py` exits non-zero on fail — never edit its output by hand.
+### Step 7. Deliver exports
 
-### 10) No-pattern fallback mode
-
-If the set has NO unit schedule AND rooms do not repeat (custom homes, clubs,
-restaurants): declare **"no repetition pattern found"** to the user, then:
-
-- list EVERY countertop-bearing room as its own "type" with count 1,
-- measure each room's instance individually (steps 4–5 per room),
-- expect the check-in gate to be longer: confirm the full room list before
-  measuring,
-- totals = plain sum; QA table shows count 1 everywhere — that is correct here,
-  not a bug.
-
-Never invent repetition ("these two bathrooms look the same") without user
-confirmation at the gate.
-
-## Extension points (future phases — do NOT implement now)
-
-- **Edge linear feet**: `edge_lf_info` per region is already computed and
-  reported (informational). Phase 2 promotes front-edge vs backsplash edges by
-  identifying which polygon edges face open floor.
-- **Backsplash height / SF**: needs section/elevation data (edge heights).
-- **Cutouts**: sinks/ranges are inner loops; V1 picks the outer face only.
-  Phase 3 subtracts inner loops contained in the face.
-- **Slab yield / seam planning**: polygon layout vs standard slab sizes.
-- **Pricing + QuickBooks invoices**: SF × unit price matrix per material.
-- **Shop-drawing PDFs**: counter elevations from the measured polygons.
+Only now deliver: `report.md`, `takeoff.csv`, `results.json`, the audit pack
+and the recorded receipt. A `warning` status delivery must list the warnings
+and the reviewer's disposition of them. A `failed` or still-`pending`
+delivery is FORBIDDEN.
 
 ## Smoke test (2 minutes, no real project needed)
 
-Prove the toolchain works on any machine:
+Prove the toolchain works on any machine (the generator is byte-deterministic,
+so the example job spec's pinned source hash matches the regenerated PDF):
 
 ```console
-uv run examples/make_fixture.py --out build/smoke.pdf
-uv run scripts/index_pdf.py build/smoke.pdf
-uv run scripts/extract_geometry.py build/smoke.pdf --pages 2,3 --out build/fixture.geometry.json
-uv run scripts/measure.py examples/fixture.jobs.json --report build/smoke_report.md --csv build/smoke.csv
+uv run examples/make_fixture.py --out examples/fixture.pdf
+uv run scripts/index_pdf.py examples/fixture.pdf
+uv run scripts/extract_geometry.py examples/fixture.pdf --pages all --out build/fixture.geometry.json
+uv run scripts/measure.py examples/fixture.jobs.json --report build/report.md --csv build/takeoff.csv --json build/results.json
 ```
 
-Expected: total **168.75 SF** (Type A 38.25 ×3 + Type B 27.00 ×2), calibration
-18.0000 pt/ft, self-audit PASS. Full walkthrough with verified output:
-`examples/run_example.md`.
+Expected: total **168.75 SF** (Type A 38.25 ×3 + Type B 27.00 ×2), factors
+18.0000 pt/ft from three agreeing spans per page, `status: ready`,
+`review_status: independent_audit_pending`. Then:
+
+```console
+uv run scripts/audit_pack.py build/results.json --pack build/audit_pack
+uv run examples/tests_v2.py
+```
+
+The full walkthrough lives in `examples/run_example.md`; the hostile fixture
+(`--case messy`) and the complete refusal matrix are covered by the test
+suite.
+
+## Extension points (future phases — do NOT implement now)
+
+- **Edge linear feet / backsplash**: the measured polygons and recorded
+  policy are the groundwork; identifying front edge vs wall edge is next.
+- **Cutout pricing**: cutouts are already selectable inner loops; pricing is
+  out of scope until the profile groundwork activates.
+- **Slab yield / seam planning, pricing + QuickBooks, shop drawings**:
+  unchanged roadmap; none of it is built here.
 
 ## Method & output details
 
-- Measuring method, calibration math, geometry extraction, exception rules:
-  `references/method.md`.
-- Exact output formats (report, CSV, results JSON, exit codes):
+- Measuring method, calibration rules, boundary closure, curve tolerance,
+  limitations: `references/method.md`.
+- V2 job-spec schema: `references/job-spec-v2.md`.
+- Exact output formats (report, CSV, results JSON, exit codes): 
   `references/output-format.md`.
+- Company profile (identity groundwork): `references/company-profile.md`.
