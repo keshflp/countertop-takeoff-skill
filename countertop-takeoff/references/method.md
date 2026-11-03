@@ -1,11 +1,47 @@
-# Measuring method (V3)
+# Measuring method (V4)
 
 How this skill turns drawing sets (vector PDFs, DXF, rasters) into
 trustworthy, auditable quantities. Written for the agent doing the takeoff
 and for the human auditing it.
 
-## V3 deltas over V2 (this section is current; the rest describes the
+## V4 deltas over V3 (this section is current; the rest describes the
 shared method)
+
+- ONE RESOLVED QUANTITY MODEL: every deliverable total (project, type
+  rows, assembly BoQ, piece BoQ, CSV grand total) derives from the same
+  resolved records and cannot disagree; the run reconciles the views
+  against each other (not by regrouping extensions). Included variants
+  (e.g. ADA inside a parent type) are SUBTRACTED from parent counts;
+  package scope applies once per assembly in every aggregation branch.
+- EVIDENCE BINDING: schedule counts must correspond NUMERICALLY to the
+  quoted evidence ("3" never supports 30; image-evidence counts cite
+  `count_cells`); room reconciliation derives counts from the deduped tag
+  records, not from the supplied summary; the image route RECOMPUTES the
+  area from recorded selections (an edited result number over unchanged
+  pixels is rejected), requires the crop bound to (source, page, bbox,
+  zoom) and the overlay proof; `real_ft` overrides contradicting readable
+  labels become callouts.
+- CONSISTENT DEGRADATION: only the three stops stop a job. Image-range
+  breaches, overlaps, duplicate boundaries, unplanned regions, and failed
+  rechecks degrade LOCALLY — the affected records are withheld blank
+  (numeric quantities NULLED; the measured value kept aside as
+  `measured_area_sf` diagnostics) behind named callouts. Degraded fields
+  are genuinely null — never a value wearing a blank declaration.
+- CAD CORRECTNESS: metres are 1/0.3048 ft per m (V3 shipped 3.048);
+  $INSUNITS 8 is MICROINCHES; MINSERT arrays expand row × col; layer-0
+  block children inherit the insert's effective layer (filtering AFTER
+  expansion); polyline bulges become disclosed arc approximations with
+  chord counts solved for ≤0.5% area error per curve; non-standard OCS
+  extrusions are named exclusions; CAD (and image) source bytes are
+  re-hashed before measuring.
+- ASSEMBLY-EA ESTIMATE (rate profile): EA × exact rate, never SF × price;
+  unmatched/ambiguous rates and withheld quantities stay blank; explicit
+  zero-rates price real 0.00 lines; Decimal + ROUND_HALF_UP to cents;
+  estimate.md / .json / .pdf agree on the grand total (blank while any
+  in-scope amount is unknown).
+
+## V3 deltas over V2 (the rest of this section describes the shared
+V2-established method)
 
 - Image-coverage thresholds are PERCENT (20 / 60); raster fingerprints hash
   actual stored pixels (`get_image_info(xrefs=True)`).

@@ -1,26 +1,28 @@
 ---
 name: countertop-takeoff
-version: 3.0.0
+version: 4.0.0
 description: >-
   Countertop takeoffs (SF, edge feet, splash, cutouts) from plan PDFs, DXF,
   and rasters. Preflights the pack, transcribes bitmap schedules with
   crop-hash evidence, cross-validates counts against plan room tags,
   calibrates per viewport from TWO agreeing dimensions, measures
   agent-selected vector boundaries (plus DXF and image routes), and emits
-  PIECE + ASSEMBLY BoQs from one evidence model. Runs to completion;
+  PIECE + ASSEMBLY BoQs from ONE resolved quantity model - plus an
+  optional assembly-EA estimate (rate x EA). Runs to completion;
   unresolvable quantities stay BLANK behind CALLOUTS. Use for countertop
   quantity requests on plan sets.
 ---
 
-# Countertop Takeoff (V3: measure everything measurable, disclose the rest)
+# Countertop Takeoff (V4: one resolved quantity model, evidence-bound)
 
 You are doing a countertop takeoff on a drawing set for a countertop
 subcontractor. Run to completion, then notify once — no approval gates, no
-idle waiting. Unresolvable quantities stay **BLANK** (never zero) behind a
-named CALLOUT; the run finishes `complete`, `complete_with_callouts`, or
-`stopped` (exit 0 / 0 / 2). Commands run from THIS skill folder via uv
-(`uv run scripts/<name>.py`; uv provisions Python + deps). Windows-first:
-filter JSON with Python one-liners, never grep/sed.
+idle waiting. Unresolvable quantities stay **BLANK** (never zero, and
+GENUINELY null — a withheld number never survives as a value in another
+field) behind a named CALLOUT; the run finishes `complete`,
+`complete_with_callouts`, or `stopped` (exit 0 / 0 / 2). Commands run from
+THIS skill folder via uv (`uv run scripts/<name>.py`; uv provisions Python
++ deps). Windows-first: filter JSON with Python one-liners, never grep/sed.
 
 ## Non-negotiable rules
 
@@ -29,15 +31,19 @@ filter JSON with Python one-liners, never grep/sed.
    recorded words/segments/points and the code computes. OCR text proves
    nothing about linework; only vector geometry, verified-units CAD, or the
    calibrated image route produces quantities.
-2. **Counts are earned.** Every count quotes evidence: schedule rows with
-   word boxes, or a bitmap-schedule crop (hash recorded) with cell boxes,
-   reconciled against plan room tags. Missing counts stay missing — never
-   defaulted to 1.
+2. **Counts are earned, and they correspond.** Every count quotes evidence:
+   schedule rows with word boxes, or a bitmap-schedule crop (hash recorded)
+   with cell boxes, reconciled against plan room tags. The count VALUE must
+   correspond numerically to the quoted evidence (a quoted "3" never
+   supports a count of 30; image-evidence counts cite `count_cells`); plan
+   room tags are DEDUPED RECORDS, and a supplied summary contradicting them
+   withholds the type. Missing counts stay missing — never defaulted to 1.
 3. **Graduated degradation.** Bad boundary, missing calibration, unusable
-   raster, disagreed count: try alternate routes, then exclude ONLY the
-   unresolved quantities (blank + callout naming room/type, source pages,
-   reason, blank fields). Valid EA counts, lengths and finishes survive
-   even when SF is impossible.
+   raster, disagreed count, range breach, overlap, unplanned region,
+   failed recheck: try alternate routes, then withhold ONLY the unresolved
+   quantities (blank + callout naming room/type, source pages, reason,
+   blank fields) and finish the job. Valid EA counts, lengths and finishes
+   survive even when SF is impossible.
 4. **Exactly three stops** (exit 2; everything else degrades): (a) no valid
    calibration anywhere (verified native-CAD units qualify); (b) no unit
    schedule AND no repeatable pattern after reading images and plan tags;
@@ -94,14 +100,30 @@ assemblies (room/type, package millwork|FFE|public_BOH, finish tag ST/PL/W,
 inch dims, handing, quantity basis) and pieces (geometry or stated dims,
 edge runs by profile+exposure, splash runs with LH/RH returns, cutouts EA,
 source links: length from plan/elevation, depth/thickness/material from
-sections/specs).
+sections/specs). Image-evidence schedule types cite `count_cells` (row/col
+of the transcribed cells that prove each count).
 
 ### Step 5. Measure
 `uv run scripts/measure.py <jobs>.json --report build/report.md --csv
 build/takeoff.csv --piece-csv build/pieces.csv --assembly-csv
 build/assemblies.csv --json build/results.json`. Exit 0 = deliverable
 (callouts in the CALLOUTS section); exit 2 = one of the three stops — read
-the named reason. Never edit outputs by hand.
+the named reason. Never edit outputs by hand. Every deliverable derives
+from ONE resolved quantity model: project total == assembly BoQ total ==
+piece BoQ total == report == CSV grand total (the run asserts this).
+
+### Step 5b. Estimate (when the shop asks for pricing)
+With a rate profile (`examples/example.rate-profile.json` shows the v2
+pricing schema — rates[] pin `match.assembly_kind` plus dims/finish, uom
+EA, unit_price, includes[]): `uv run scripts/estimate.py
+build/results.json --profile <rate-profile.json> --out-md
+build/estimate.md --out-json build/estimate.json --out-pdf
+build/estimate.pdf` (or add `--estimate-profile` to the measure command).
+Each in-scope assembly prices EA × exact rate; unmatched or ambiguous
+rates and withheld quantities stay BLANK behind callouts; the grand total
+is BLANK while any in-scope amount is unknown. The .pdf is a minimal
+stdlib render of estimate.md — render a richer PDF from the same md with
+the host's document tooling if you have one; the grand total must agree.
 
 ### Steps 6–7. Audit pack, independent audit, deliver
 `uv run scripts/audit_pack.py build/results.json --pack build/audit_pack`
@@ -110,15 +132,17 @@ such) the pack + raw sources + JSONs to re-verify counts, shells, spans and
 omissions; record the receipt with `--record-receipt`. If no independent
 auditor is available, deliver with the receipt status disclosed
 (`independent_audit_unavailable`) — disclosed, not hidden, not a blocker.
-Then deliver report, CSVs (piece BoQ + assembly BoQ — same records, NEVER
-summed), results.json, audit pack, receipt, and ONE final summary: totals,
-what is BLANK and why (CALLOUTS), and the coverage ledger (every
-inventoried item: measured | package_excluded | superseded | unresolved).
-FF&E-deferred finishes carry "brand/color TBD" flags.
+Then deliver report, CSVs (piece BoQ + assembly BoQ — same resolved
+records, NEVER summed), results.json, audit pack, receipt, estimate (when
+priced), and ONE final summary: totals, what is BLANK and why (CALLOUTS),
+and the coverage ledger (every inventoried item: measured | included_scope
+| package_excluded | superseded | unresolved). FF&E-deferred finishes
+carry "brand/color TBD" flags.
 
 ## Method & output details
 Method, calibration bands, boundary closure, curve tolerance:
-`references/method.md` · V3 schema: `references/job-spec-v3.md` · output
-formats: `references/output-format.md` · company profile:
-`references/company-profile.md` · CAD landscape + optional CAD-MCP
-escalation (docs only): `references/cad-context.md`
+`references/method.md` · V3/V4 schema: `references/job-spec-v3.md` · output
+formats (incl. estimate): `references/output-format.md` · company profile
++ rate profile (v2 pricing schema): `references/company-profile.md` · CAD
+landscape + optional CAD-MCP escalation (docs only):
+`references/cad-context.md`

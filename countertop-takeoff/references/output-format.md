@@ -1,13 +1,13 @@
-# Output format spec (V2)
+# Output format spec (V4)
 
-Exact formats produced by the V2 pipeline. Consumers (the agent's report,
-the audit pack, later phases) rely on these, not prose.
+Exact formats produced by the V4 pipeline. Consumers (the agent's report,
+the audit pack, the estimate, later phases) rely on these, not prose.
 
 ## 1. Markdown report (`measure.py --report`)
 
 Sections, in order:
 
-1. **Header** — source PDF + sha256 prefix, UTC timestamp, mode and
+1. **Header** — source PDF(s) + sha256 prefixes, UTC timestamp, mode and
    gross-area policy, declarations (conflicts/omissions/revision decisions)
    recorded for the auditor.
 2. **Approved scope** — table `page | sheet | disposition | detail` (detail
@@ -16,31 +16,46 @@ Sections, in order:
 3. **Schedule evidence** — the quoted rows, counts, variant flags
    (included in parent total vs additional), stated totals; or the
    `individual_rooms` declaration.
-4. **Calibration** — per (page, viewport): one row per span
+4. **Calibration** — per (source, page, viewport): one row per span
    (`label | seg pt | real ft | pt/ft`), then the factor actually used and
-   the spread verdict (OK / WARNING).
-5. **Takeoff by region** — per type: region rows with `region | variant |
+   the spread verdict (OK / WARNING), plus disclosed `real_ft` overrides.
+5. **Takeoff by region** — per type: rows with `region | variant |
    assembly/material | sheet (page, viewport) | SF | count | extended SF |
-   factor pt/ft` (the ACTUAL per-region factor — v1's report could say 18.00
-   while the math used 18.36), type totals, and the project total.
-6. **Audit checklist** — every pass/warn/fail item with detail, the review
-   status line (pending / approved / rejected with reviewer), and the
-   overall verdict: `READY`, `WARNING`, or `FAILED`.
+   factor pt/ft` (the ACTUAL per-region factor), type totals (excluded
+   package scope shown separately), and the project total.
+6. **CALLOUTS** — every degraded-but-disclosed finding: scope, reason,
+   blank fields.
+7. **Coverage ledger** — every inventoried item (rooms, types, variants,
+   regions, pages, assemblies, pieces) in exactly one state:
+   `measured | included_scope | package_excluded | superseded | unresolved`.
+8. **ASSEMBLY BoQ + PIECE BoQ** — two views of the SAME resolved records
+   (never summed); piece extensions ×EA; splash handing/returns preserved.
+9. **Audit checklist** — every pass/warn/fail item with detail, the review
+   status line, and the overall run status:
+   `complete`, `complete_with_callouts`, or `stopped`.
 
 ## 2. CSV (`--csv`) — written ONLY when no required check failed
 
 Columns: `row_kind, room_type, variant, region_id, sheet, page, viewport,
 region_sf, count_applied, region_extended_sf, pt_per_ft_used, source, notes`
 
-Row kinds:
+Jobs WITHOUT assemblies keep the V2 shape:
 - `base` — one row per measured base region; `count_applied` = the units
-  this region's SF multiplies (standard units, or the variant's count);
-  `region_extended_sf = region_sf × count_applied`
-- `recheck_of_base` — QA recheck rows: `count_applied` 0, `region_extended_sf`
-  EMPTY (v1 multiplied recheck rows by full counts and totaled 567.00 SF for
-  a 168.75 SF job — never again)
+  this region's SF multiplies; `region_extended_sf = region_sf ×
+  count_applied`
+- `recheck_of_base` — QA recheck rows: `count_applied` 0,
+  `region_extended_sf` EMPTY
 - `type_total` — exactly one per type with the type's extended SF
 - `grand_total` — one row, project total
+
+Jobs WITH assemblies derive every row from the ONE resolved model (P0.1):
+- `base` — one row per PIECE (blank SF/extensions stay blank; notes carry
+  the state + the named blanks)
+- `type_total` — one per active type
+- `excluded_package_total` — one row with the excluded package SF,
+  documented as NEVER added into the grand total
+- `grand_total` — equals the project total and BOTH BoQ view totals
+  (equality asserted by the run)
 
 On a failed run the CSV is not written, and any pre-existing export file is
 renamed `<name>.stale-<utc>` so an old export can't look current.
@@ -108,7 +123,30 @@ After an independent audit, `audit_pack.py --record-receipt` adds:
 | code | meaning |
 |---|---|
 | 0 | `complete` (deliverable) or `complete_with_callouts` (deliver with the CALLOUTS list: blank fields named, never zeros); CSVs written |
-| 2 | `stopped` — one of the three catastrophic cases: no valid calibration anywhere (verified-units CAD qualifies), no schedule and no repeatable pattern, or source integrity mismatch; also spec malformation. Diagnostics (report + results JSON) are still written; no exports; stale exports quarantined — even when the pipeline itself crashes |
+| 2 | `stopped` — one of the three catastrophic cases: no valid calibration anywhere (verified-units CAD OR a valid image-route calibration qualifies), no schedule and no repeatable pattern, or source integrity mismatch (ALL source kinds are re-hashed before measuring); also spec malformation. Diagnostics (report + results JSON) are still written; no exports; stale exports quarantined — even when the pipeline itself crashes. A `stopped` run can never receive an approved audit receipt |
+
+## 5b. Estimate (`estimate.py` / `measure.py --estimate-profile`)
+
+Three files, all from ONE computation over the assembly BoQ + rate
+profile:
+
+- `estimate.json` — schema `countertop-takeoff/v4 estimate`; currency,
+  sha256 of the results JSON + rate profile, `lines[]` (item_code,
+  description with inch dims, assembly_ids, qty_ea, unit_price,
+  line_total, rate_reference {item_code, includes, uom},
+  quantity_evidence, callout_references, arithmetic string),
+  `priced_subtotal`, `grand_total` (null while any in-scope amount is
+  unknown), `unknown_amounts`, `exclusions` (package-excluded assemblies,
+  never priced), `callouts`, and the arithmetic block (Decimal exact,
+  ROUND_HALF_UP to whole cents per line, single-currency rule)
+- `estimate.md` — header (company, timestamp, currency, provenance);
+  table `Item code | Description | QTY EA | Unit price | Total`; priced
+  subtotal; exclusions; CALLOUTS; grand total — BLANK while any in-scope
+  amount is unknown
+- `estimate.pdf` — minimal stdlib render of estimate.md (Courier text
+  pages). The AGENT HOST's document tooling may render a richer PDF from
+  the same md instead; the contract is that the PDF carries the SAME
+  grand total as md + json
 
 ## 6. Side files (regenerable, gitignored)
 

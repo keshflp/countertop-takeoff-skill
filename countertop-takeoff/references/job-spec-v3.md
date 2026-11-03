@@ -1,12 +1,13 @@
-# V3 job spec — the evidence document
+# Job spec — the evidence document (V3 schema, V4 semantics)
 
 `measure.py` is driven by a JSON job spec the AGENT writes after reading
 the indexed pack. Every number in the deliverable is either computed from
 recorded geometry or quoted from recorded evidence (word boxes, or a
-crop-hash-verified bitmap transcription). V2 specs
-(`"schema": "countertop-takeoff/v2"`) remain valid single-source specs.
-Working examples: `examples/fixture.jobs.json` (v2), the output of
-`examples/make_hotel_jobs.py` (full v3).
+crop-hash-verified bitmap transcription). V4 (P0.1/P0.2) binds every
+quantity to that evidence and derives ALL deliverable totals from ONE
+resolved model. V2 specs (`"schema": "countertop-takeoff/v2"`, single
+source) remain valid. Working examples: `examples/fixture.jobs.json` (v2),
+the output of `examples/make_hotel_jobs.py` (full v3).
 
 ## Top level
 
@@ -29,12 +30,18 @@ Working examples: `examples/fixture.jobs.json` (v2), the output of
 
 - `evidence.kind = "text"`: each type carries `row_text` + `word_boxes`
   that must reference ACTUAL extracted words (fabricated quotes refuse to
-  multiply).
-- `evidence.kind = "image"`: `crop_image` + `crop_sha256` + `render_zoom` +
-  `crop_bbox` (displayed points) + `headers` + `cells` (transcribed text +
-  boxes) + `uncertain_cells`. The audit re-renders the crop and compares
-  the hash — proving WHICH pixels were read. A mismatch withholds the
-  counts (blank + callout).
+  multiply) AND whose numbers must correspond to the count (the count
+  appears as a quoted number token, the boxes are pure integers summing
+  to the count, or per-floor `rows[]` whose quoted texts carry each
+  value). A quoted "3" never supports a count of 30.
+- `evidence.kind = "image"`: `crop_image` + `crop_sha256` + `render_zoom`
+  + `crop_bbox` (displayed points) + `headers` + `cells` (transcribed text
+  + boxes) + `uncertain_cells`. The audit re-renders the crop and compares
+  the hash — proving WHICH pixels were read. Each type ALSO declares
+  `count_cells` (row/col of the transcribed cells that prove the count);
+  the count VALUE is checked against those cell texts — an edited count
+  over verified pixels is caught. A mismatch withholds the counts (blank
+  + callout).
 - `types[]`: `{"type", "count", "row_text", "rows"?}` — positive INTEGER
   counts; `rows[]` decompose per floor (sum must equal count; mismatches
   are disclosed callouts, not refusals).
@@ -43,9 +50,11 @@ Working examples: `examples/fixture.jobs.json` (v2), the output of
 - `stated_totals`: floor/project totals quoted from the page; disagreements
   are disclosed callouts (the quoted per-row counts stay authoritative).
 - `room_inventory`: `rooms[]` (deduped plan tags), `per_type_counts`
-  (plan-derived), `count_resolutions` (explicit resolutions with evidence).
-  An unexplained schedule-vs-plan mismatch (the 3→30 invention trap)
-  withholds the affected extension. NEVER default a missing count to 1.
+  (supplied summary), `count_resolutions` (explicit resolutions with
+  evidence). V4 derives the plan-derived counts FROM the `rooms[]` tag
+  records: a supplied `per_type_counts` contradicting the tags (an edited
+  inventory) withholds the type exactly like a schedule-vs-tags mismatch
+  (the 3→30 invention trap). NEVER default a missing count to 1.
 
 ## `scope` — the completeness ledger input
 
@@ -77,11 +86,21 @@ millwork|FFE|public_BOH, "finish_tag"?: "ST"|"PL"|"W"|..., "width_in"?,
 "pieces": [piece_id...], "sources": [{"source_id", "page"}]}`
 
 - Unknown dims stay `null` (blank), never 0.
-- `room_type_count` EA = the validated schedule count for the type/variant
-  (withheld when the count is unsupported); `enumerated` EA = 1.
-- When ALL assemblies are enumerated, each measured instance counts ONCE
-  (no schedule multiplication); package-excluded assemblies are reported
-  separately as `package_excluded`.
+- V4 resolves each assembly's EA INDEPENDENTLY: `enumerated` EA = 1;
+  `room_type_count` EA = the schedule count MINUS the counts of included
+  variants (an ADA room inside the parent count is subtracted from the
+  standard EA, never added again); `room_type_count` + variant EA = that
+  variant's own count. Unsupported evidence or a reconciliation conflict
+  withholds the EA (blank), never guesses.
+- Package exclusion is applied once per assembly in EVERY aggregation
+  branch; excluded assemblies are reported separately (`package_excluded`).
+- Piece↔assembly membership is bidirectional: orphan pieces, pieces
+  claimed by two assemblies, assembly piece-list entries without records,
+  and measured regions covered by no piece are flagged (callouts; the
+  affected extensions stay blank).
+- ALL deliverable totals (project, type rows, both BoQ views, CSV grand
+  total) derive from this one resolved model and cannot disagree; the run
+  asserts their equality (`dual BoQ reconciliation`).
 
 ## `pieces[]`
 
@@ -94,7 +113,10 @@ millwork|FFE|public_BOH, "finish_tag"?: "ST"|"PL"|"W"|..., "width_in"?,
 "profile": {"source_id", "page", "kind": plan|elevation|section|spec|
 schedule|detail|other, "note"?}}}`
 
-- Unknown lengths/dims keep the affected BoQ fields BLANK with a callout.
-- Piece BoQ extensions use the SAME validated assembly counts as the
-  assembly BoQ — the two views are never summed with each other; their
-  consistency is checked and both totals reported.
+- Unknown lengths/dims keep the affected BoQ fields BLANK with a callout:
+  an unknown edge blanks THAT profile's LF (never folded into a known
+  length of the same profile); an unknown splash height blanks splash SF
+  (never 0); handed splash runs keep `handing`/`returns_in` in the BoQ.
+- Piece extensions (SF, edge LF, splash, cutouts) are multiplied by the
+  SAME resolved assembly EA; the piece BoQ and the assembly BoQ are two
+  views of the same resolved records — never summed with each other.

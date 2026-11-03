@@ -7,9 +7,12 @@ apartments and hotels.
 
 Give your AI agent a set of plans and it will:
 
-1. **Intake** — collect every file (local paths, chat attachments, Google
-   Drive / OneDrive) into one job directory with a manifest: requested vs
-   resolved, sizes, SHA-256 hashes, page counts, expected-count verdict.
+1. **Intake** — collect every file (local paths, chat attachments, Drive /
+   OneDrive files fetched by your agent) into one job directory with a
+   manifest: requested vs resolved, sizes, SHA-256 hashes, page counts,
+   expected-count verdict. The Drive fetch is an agent-side contract: the
+   scripts import local paths; your agent fetches the cloud binaries into
+   the job dir first.
 2. **Preflight the pack** — page inventory with content classes and content
    regions (a pasted bitmap schedule under a vector header is flagged for
    vision reading), duplicate pages, revision conflicts, tolerant sheet
@@ -25,9 +28,12 @@ Give your AI agent a set of plans and it will:
    with verified units (DWG: convert first with the free ODA File
    Converter); calibrated image-space measurement for decent rasters.
 6. **Audit and deliver** — coverage ledger reconciling every room/type/
-   assembly (measured | package_excluded | superseded | unresolved),
-   overlay PNGs, an independent-audit receipt, a PIECE BoQ and an ASSEMBLY
-   BoQ from the same records (never summed).
+   assembly (measured | package_excluded | included_scope | superseded |
+   unresolved), overlay PNGs, an independent-audit receipt, a PIECE BoQ and
+   an ASSEMBLY BoQ from ONE resolved quantity model (project total, both
+   BoQ views and the CSV grand total cannot disagree), and — with a rate
+   profile — an assembly-EA estimate (`estimate.md` / `.json` / `.pdf`):
+   EA × exact rate, blank while any in-scope amount is unknown.
 
 The skill **runs to completion** and reports once at the end. Anything
 unresolvable stays **BLANK** (never zero) behind a named CALLOUT; the run
@@ -79,29 +85,31 @@ git clone https://github.com/keshflp/countertop-takeoff-skill.git
   github.com/keshflp/countertop-takeoff-skill"* — a good agent will clone
   the repo and follow `SKILL.md` on its own.
 
-## Keep the working machine on (always-on target machine)
+## Host interfaces (where the takeoff runs)
 
-The takeoff runs on the machine where the agent desktop app is signed in —
-it must stay awake for the whole job. One-time setup on that machine:
+The takeoff runs on a machine that can reach your plan files. Pick ONE
+interface and keep it awake for the whole job:
 
-1. **Agent desktop app**: install it, sign in, and enable auto-start with
-   the session so a job can run unattended.
-2. **Settings → Connections → Keep this PC awake** — turn it on while
-   working; the app holds the machine awake for running tasks.
-3. **Windows power settings** (Settings → System → Power):
-   **Sleep: Never** (when plugged in), **Close lid: Do nothing**,
-   **Hibernate: off**. A machine that sleeps mid-job stalls the takeoff.
-4. **Phone pairing**: in the desktop app, open Connections and pair your
-   phone via the QR code. The phone chat app can then launch, steer, and
-   approve local agent tasks from the job site.
-5. **chatgpt.com in a browser reaches the cloud workspace only** — it
-   cannot reach this local machine. Local takeoffs are launched/steered
-   from the desktop app or the paired phone.
+- **Desktop app = the local host.** Install the agent desktop app, sign in,
+  and enable auto-start with the session so a job can run unattended. The
+  machine must stay awake (power settings: Sleep Never when plugged in) —
+  a machine that sleeps mid-job stalls the takeoff.
+- **Phone = steering.** Pair your phone to the desktop host via the app's
+  remote-pairing QR code; from the job site you can launch, steer, and
+  approve local tasks. The phone steers; the desktop machine runs.
+- **Web (browser chat) = cloud workspace.** A cloud workspace does not see
+  this local machine or its files/profile — for this workflow the files and
+  the skill folder must be transferred into the workspace (upload the plan
+  set and the skill) before the takeoff runs there.
+- **CLI = an alternative local host.** No desktop app? Run the same skill
+  from an agent CLI on the machine (Windows: PowerShell + uv, no admin
+  rights, no system Python needed).
 
 ## Usage
 
-Put the project files anywhere (or drag them into the chat / share a Drive
-folder), open your agent, and say:
+Put the project files anywhere (drag them into the chat, share a Drive
+link for YOUR AGENT to fetch, or point at a folder), open your agent, and
+say:
 
 > Here's a project — do the countertop takeoff. Plans are in
 > `C:\Jobs\Riverside\plans\`. I need total SF by unit type and a CSV.
@@ -115,7 +123,9 @@ The agent runs to completion and reports once: a markdown report (scope
 ledger, schedule evidence, calibration spans with actual factors, CALLOUTS,
 coverage ledger, both BoQ views), `takeoff.csv` + `pieces.csv` +
 `assemblies.csv`, `results.json` (the full evidence package), overlay PNGs,
-and the independent-audit receipt.
+the independent-audit receipt — and, when you hand it a rate profile
+(`examples/example.rate-profile.json` shows the schema), `estimate.md` /
+`estimate.json` / `estimate.pdf` pricing each assembly EA × exact rate.
 
 ### Does it actually work?
 
@@ -129,14 +139,21 @@ the areas exactly:
   ADA variant, split/fractional dimension text, a REV B duplicate sheet,
   and a searchable raster scan — plus thirteen refusal/degradation
   mutations verified.
-- Hotel fixture (V3): every page rotated 270°, a bitmap room schedule under
-  a vector header read via crop-hash evidence, room-tag reconciliation
-  (an omitted room is caught as a coverage callout), three viewports with
-  three scales on one sheet, a wrong duplicate title block, sheets missing
-  from the drawing index, cross-sheet section→length joins, GR guestroom
-  FF&E excluded as a package and reported separately, one legible scan
-  measured through the image route (~24 SF) and one unusable scan left
-  blank — **~147 SF measured** with every deviation disclosed.
+- Hotel fixture (V3, re-proven under V4): every page rotated 270°, a bitmap
+  room schedule under a vector header read via crop-hash evidence, room-tag
+  reconciliation (an omitted room is caught as a coverage callout), three
+  viewports with three scales on one sheet, a wrong duplicate title block,
+  sheets missing from the drawing index, cross-sheet section→length joins,
+  GR guestroom FF&E excluded as a package and reported separately, one
+  legible scan measured through the image route (~24 SF) and one unusable
+  scan left blank — **~147 SF measured**, project total == both BoQ views
+  == report == CSVs, every deviation disclosed.
+- V4: a MIXED job (repeated + enumerated + public + excluded scope with
+  included ADA variants) totals identically in every view; a schedule cell
+  edited 3→30 over a retained "3" quote is caught; an edited image result
+  number over unchanged pixels is rejected; CAD measures 25.00 SF exactly
+  at three unit encodings (in/ft-mm/m) with MINSERT arrays expanded and
+  bulge arcs within a disclosed 0.5% area tolerance.
 
 Reproduce:
 
@@ -149,6 +166,7 @@ uv run scripts\measure.py examples\fixture.jobs.json --report build\report.md --
 uv run scripts\audit_pack.py build\results.json --pack build\audit_pack
 uv run examples\tests_v2.py     # 47 checks (V2 exactness + behavior)
 uv run examples\tests_v3.py     # 34 checks (V3 hotel traps, routes, intake)
+uv run examples\tests_v4.py     # V4 checks (resolved model, evidence binding, degradation, CAD, estimate)
 ```
 
 ### Without uv (pip users)
@@ -163,7 +181,12 @@ py countertop-takeoff\scripts\index_pdf.py plans.pdf
 - **Do not auto-scrape planroom websites.** Download plans manually, per
   the planroom vendor's terms of service. The skill contains no scraping.
 - **Confidentiality**: plan sets are the client's/GC's property. Measured
-  quantities are for your own bid. Both fixtures are 100% synthetic.
+  quantities are for your own bid. Both fixtures are 100% synthetic. The
+  scripts and fixtures keep everything on the machine where the agent runs —
+  but the AGENT ITSELF may send page excerpts (crops, quoted schedule rows)
+  to your model provider when it reads the plans with vision; that transfer
+  is the agent host's, not this skill's. Check your provider's data terms
+  before pointing it at client drawings.
 - **Verify before you bid.** The skill is a measuring tool with guardrails
   — evidence-backed counts, coverage ledger, CALLOUTS, an independent
   audit — not a stamp.
@@ -179,9 +202,9 @@ countertop-takeoff skill from GitHub"*).
 |---|---|
 | V1 | Square footage per unit type, schedule multiplication, QA report + CSV |
 | V2 | Pack preflight, scope ledger, evidence-backed schedule, per-viewport calibration, selected-boundary measurement, audit pack |
-| V3 (this repo) | Multiple sources (PDF/DXF/raster), bitmap-schedule transcription, room-tag reconciliation, graduated degradation with CALLOUTS + coverage ledger, assemblies/pieces with edges/splash/cutouts, dual BoQ views, package rules, intake manifest, hotel-grade field traps |
-| V4 | Cutout pricing (sinks, ranges); slab yield and seam planning |
-| V5 | Pricing (SF × material price matrix), quotes and QuickBooks invoices |
+| V3 | Multiple sources (PDF/DXF/raster), bitmap-schedule transcription, room-tag reconciliation, graduated degradation with CALLOUTS + coverage ledger, assemblies/pieces with edges/splash/cutouts, dual BoQ views, package rules, intake manifest, hotel-grade field traps |
+| V4 (this repo) | ONE resolved quantity model (project total == both BoQ views == report == CSVs; included variants subtracted, never re-added), quantities bound to evidence (numeric correspondence, tag-derived reconciliation, recomputed image route, mandatory overlay), consistent local degradation (three stops only), CAD correctness (metres, INSUNITS, MINSERT, layer-0, bulge arcs ≤0.5%), assembly-EA estimate (estimate.md/json/pdf, rate × EA), intake collisions + structured metadata |
+| V5 | Quote documents + QuickBooks export on top of the EA estimate |
 | V6 | Shop-drawing PDFs generated from the measured polygons |
 
 ## Repo layout
@@ -208,14 +231,21 @@ countertop-takeoff/            <- the skill folder (this is what you install)
   scripts/audit.py             <- completeness/reconciliation/BoQ audit
   scripts/report_out.py        <- report/CSV/evidence-JSON writers
   scripts/audit_pack.py        <- overlay PNGs + audit receipt
+  scripts/estimate.py          <- assembly-EA estimate (rate x EA; md/json/pdf)
   scripts/requirements.txt     <- pinned: pymupdf, shapely, ezdxf
   examples/make_fixture.py     <- fixtures (--case original|messy|hotel)
   examples/make_hotel_jobs.py  <- canonical V3 hotel job-spec builder
+  examples/example.profile.json          <- identity profile (SF workflow)
+  examples/example.rate-profile.json     <- rate profile (v2 pricing schema)
   examples/tests_v2.py         <- V2 acceptance suite (47 checks)
   examples/tests_v3.py         <- V3 acceptance suite (34 checks)
+  examples/tests_v4.py         <- V4 acceptance suite (resolved model,
+                                  evidence binding, degradation, CAD,
+                                  estimate, intake)
 README.md                      <- this file
 LICENSE                        <- MIT
 ```
 
-MIT licensed. No client data leaves the machine, no planroom scraping, no
-guessed scales.
+MIT licensed. The scripts keep every byte on the machine where the agent
+runs (agent-hosted vision may send page excerpts to your model provider —
+see Legal notes), no planroom scraping, no guessed scales.

@@ -2,7 +2,7 @@
 # requires-python = ">=3.9"
 # dependencies = ["pymupdf==2.1"]
 # ///
-"""Step 0 intake (P0.7): one job directory + a manifest of resolved inputs.
+"""Step 0 intake (P0.7, repaired per P1.2): one job directory + manifest.
 
 Resolves the requested sources into ONE auto-created job directory on the
 target machine and writes an INTAKE MANIFEST: requested vs resolved paths,
@@ -11,20 +11,35 @@ and an expected-count verdict. Unavailable inputs are recorded as
 `unavailable` entries (disclosed callouts downstream) - the job completes
 with what arrived and names what did not.
 
+V4 repairs (P1.2):
+  - COLLISION-SAFE destinations: two sources with the same basename land on
+    distinct files (name.pdf, name-2.pdf, ...); every entry records BOTH
+    the requested name and the actual destination, so a collision can never
+    silently overwrite evidence
+  - STRUCTURED per-source metadata: pass --entry JSON (one object per
+    source: requested/local_path/name/cloud_id/cloud_revision/kind/note) -
+    no positional pairing of flags; the positional --source/--name/--cloud-*
+    flags still work for quick runs
+  - the DRIVE FETCH IS AN AGENT-SIDE CONTRACT: this script imports LOCAL
+    paths only. The host agent fetches Drive/OneDrive/attachment binaries
+    into the job dir FIRST (or supplies structured entries with their cloud
+    ids); scripts never talk to Drive themselves.
+
 Input kinds the agent handles BEFORE calling this script:
   - local paths: passed straight through (copied into the job dir)
   - chat-dragged attachments: the harness saved them to temp files; pass
-    the temp path and the ORIGINAL name via --name
-  - Google Drive names/links: the Drive plugin fetches ORIGINAL binaries;
-    the agent fetches the file to the job dir first, then passes the local
-    path (record cloud id/revision with --cloud-id/--cloud-rev)
+    the temp path and the ORIGINAL name via --name or --entry
+  - Google Drive names/links: the agent fetches the ORIGINAL binary to the
+    job dir first, then passes the local path (record cloud id/revision via
+    --entry or --cloud-id/--cloud-rev)
   - OneDrive personal: same pattern via its local sync folder
 
 Usage:
-    uv run scripts/intake.py --job-dir jobs/riverside --expect 2 \
-        --source plans.pdf --cloud-id drv_1 --cloud-rev 3 \
-        --source addendum.pdf \
-        --name plans.pdf --source C:/temp/att1
+    uv run scripts/intake.py --job-dir jobs/riverside --expect 2
+        --entry {"requested": "plans.pdf", "local_path": "p.pdf",
+                 "cloud_id": "drv_1", "cloud_revision": "3",
+                 "kind": "google_drive"}
+        --source addendum.pdf
 """
 
 import argparse
@@ -57,11 +72,45 @@ def pdf_page_count(path):
         return None
 
 
+def collision_free_dest(src_dir, original, taken):
+    """P1.2: a destination that never collides - 'plans.pdf',
+    'plans-2.pdf', 'plans-3.pdf', ... for repeat basenames."""
+    base = original.replace("\\", "/").rstrip("/").split("/")[-1] or "source"
+    stem, ext = os.path.splitext(base)
+    candidate = base
+    n = 2
+    while os.path.normcase(os.path.join(src_dir, candidate)) in taken:
+        candidate = f"{stem}-{n}{ext}"
+        n += 1
+    return os.path.join(src_dir, candidate)
+
+
+def require_entry(e):
+    if not isinstance(e, dict) or not e.get("requested"):
+        print("ERROR: --entry JSON needs at least {'requested': ...}",
+              file=sys.stderr)
+        raise SystemExit(2)
+
+
+def classify_kind(e):
+    """Best-effort intake kind for structured metadata."""
+    requested = str(e.get("requested") or "").lower()
+    if e.get("cloud_id") or requested.startswith("drive") \
+            or requested.startswith("http"):
+        return e.get("kind") or "cloud"
+    return e.get("kind") or "local"
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--job-dir", required=True,
                     help="job directory (auto-created; sources land in"
                          " <job-dir>/sources)")
+    ap.add_argument("--entry", action="append", default=[],
+                    help="structured per-source metadata JSON (P1.2: no"
+                         " positional pairing): {requested, local_path?,"
+                         " name?, cloud_id?, cloud_revision?, kind?, note?};"
+                         " repeat for every source")
     ap.add_argument("--source", action="append", default=[],
                     help="requested source: a local path, or a name/URL not"
                          " yet fetched (recorded as unavailable)")
@@ -77,23 +126,54 @@ def main(argv=None):
                          " in the manifest verdict")
     args = ap.parse_args(argv)
 
+    # normalize BOTH input shapes into structured entry dicts (P1.2)
+    entries_in = []
+    for raw in args.entry:
+        try:
+            e = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            print(f"ERROR: --entry is not valid JSON ({exc}): {raw[:80]}",
+                  file=sys.stderr)
+            return 2
+        require_entry(e)
+        entries_in.append(e)
+    for i, requested in enumerate(args.source):
+        entries_in.append({
+            "requested": requested,
+            "name": args.name[i] if i < len(args.name) else None,
+            "cloud_id": args.cloud_id[i] if i < len(args.cloud_id) else None,
+            "cloud_revision": (args.cloud_rev[i]
+                               if i < len(args.cloud_rev) else None),
+        })
+
     src_dir = os.path.join(args.job_dir, "sources")
     os.makedirs(src_dir, exist_ok=True)
     entries = []
-    for i, requested in enumerate(args.source):
-        original = args.name[i] if i < len(args.name) else \
-            os.path.basename(requested.replace("\\", "/").rstrip("/"))
-        cloud_id = args.cloud_id[i] if i < len(args.cloud_id) else None
-        cloud_rev = args.cloud_rev[i] if i < len(args.cloud_rev) else None
-        entry = {"requested": requested, "name": original,
-                 "cloud_id": cloud_id, "cloud_revision": cloud_rev,
+    taken = set()
+    for i, e in enumerate(entries_in):
+        requested = e["requested"]
+        local_path = e.get("local_path") or requested
+        original = (e.get("name") or os.path.basename(
+            requested.replace("\\", "/").rstrip("/"))) or "source"
+        entry = {"entry_index": i,
+                 "requested": requested,
+                 "name": original,
+                 "kind": classify_kind(e),
+                 "cloud_id": e.get("cloud_id"),
+                 "cloud_revision": e.get("cloud_revision"),
                  "resolved_path": None, "status": None, "size_bytes": None,
                  "sha256": None, "page_count": None}
-        if os.path.isfile(requested):
-            dest = os.path.join(src_dir, original)
-            if os.path.abspath(requested) != os.path.abspath(dest):
-                shutil.copy2(requested, dest)
+        if e.get("note"):
+            entry["note"] = e["note"]
+        # P1.2: collision-safe destination - repeated basenames never
+        # overwrite each other
+        dest = collision_free_dest(src_dir, original, taken)
+        taken.add(os.path.normcase(dest))
+        if os.path.isfile(local_path):
+            if os.path.abspath(local_path) != os.path.abspath(dest):
+                shutil.copy2(local_path, dest)
             entry["resolved_path"] = dest
+            entry["destination_name"] = os.path.basename(dest)
             entry["status"] = "resolved"
             entry["size_bytes"] = os.path.getsize(dest)
             entry["sha256"] = file_sha256(dest)
@@ -101,11 +181,11 @@ def main(argv=None):
                 entry["page_count"] = pdf_page_count(dest)
         else:
             entry["status"] = "unavailable"
-            entry["note"] = ("not found locally - fetch Drive/OneDrive/"
-                             "attachment binaries to the job dir first,"
-                             " then re-run intake with the local path;"
-                             " the job proceeds without it and discloses"
-                             " the gap as a callout")
+            entry["note"] = e.get("note") or (
+                "not found locally - fetch Drive/OneDrive/attachment"
+                " binaries to the job dir first, then re-run intake with the"
+                " local path; the job proceeds without it and discloses the"
+                " gap as a callout")
         entries.append(entry)
 
     resolved = [e for e in entries if e["status"] == "resolved"]
@@ -131,10 +211,14 @@ def main(argv=None):
     for e in entries:
         if e["status"] == "resolved":
             pages = f", {e['page_count']} pages" if e["page_count"] else ""
+            renamed = ("" if e.get("destination_name") == e["name"]
+                       else " (collision-safe dest:"
+                            f" {e.get('destination_name')})")
             print(f"  resolved: {e['name']} ({e['size_bytes']} bytes"
-                  f"{pages}) sha256 {e['sha256'][:16]}...")
+                  f"{pages}) sha256 {e['sha256'][:16]}...{renamed}")
         else:
-            print(f"  UNAVAILABLE: {e['requested']} - {e['note'][:90]}")
+            note = (e.get("note") or "")[:90]
+            print(f"  UNAVAILABLE: {e['requested']} - {note}")
     print(f"  verdict: {verdict}")
     return 0
 
