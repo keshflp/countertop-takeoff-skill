@@ -115,10 +115,12 @@ def measure_all_regions(spec, pages_by_no, calibrations, snap, audit_obj,
             if r.get("status") == "unresolved":
                 print(f"UNRESOLVED {rid} (image route):"
                       f" {r['unresolved_reason'][:100]}")
-                audit_obj.add_callout(
-                    f"region {rid}", r["unresolved_reason"],
-                    blank_fields=r["blank_fields"], pages=[pno],
-                    source_id=sid)
+                if not r.get("_callout_done"):
+                    r["_callout_done"] = True
+                    audit_obj.add_callout(
+                        f"region {rid}", r["unresolved_reason"],
+                        blank_fields=r["blank_fields"], pages=[pno],
+                        source_id=sid)
             else:
                 print(f"measured {rid} (image route): {r['area_sf']:.2f} SF"
                       f" at {r['factor_px_per_ft']} px/ft")
@@ -141,7 +143,8 @@ def measure_all_regions(spec, pages_by_no, calibrations, snap, audit_obj,
             r = unresolved_result(region, sid, str(exc))
             print(f"UNRESOLVED {rid}: {exc}")
         results.append(r)
-        if r.get("status") == "unresolved":
+        if r.get("status") == "unresolved" and not r.get("_callout_done"):
+            r["_callout_done"] = True
             audit_obj.add_callout(
                 f"region {rid}", r["unresolved_reason"],
                 blank_fields=r["blank_fields"], pages=[pno], source_id=sid)
@@ -300,6 +303,7 @@ def run_pipeline(args):
     unit_total = audit_mod.reconcile_totals(sched, audit_obj)
     audit_mod.audit_schedule_evidence(spec, geometry_map, audit_obj)
     audit_mod.audit_room_reconciliation(spec, audit_obj)
+    audit_mod.audit_room_coverage(spec, audit_obj)
     audit_mod.audit_region_checks(spec, results, calibrations, audit_obj,
                                   args.recheck_tolerance)
     types, total = audit_mod.aggregate_types(spec, results, audit_obj)

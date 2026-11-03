@@ -180,12 +180,13 @@ def page_schedule(doc):
 
 
 # ------------------------------------------------ floor plan helper
-ROOM_W = 160   # 8'-10"? no: 160 pt at 18 = 8.89 ft... rooms are 8' deep
+ROOM_W = 180   # 10' room width at 18 pt/ft
 ROOM_H = 144   # 8' at 18 pt/ft
 CTR_A_W = 108  # 6' counter
 CTR_B_W = 144  # 8' counter
 CTR_GR_W = 72  # 4' counter
 CTR_H = 45     # 2.5' counter depth
+GR_CTR_H = 36  # GR counter depth (4'x2')
 
 
 def room_with_counter(p, x0, y0, tag, ctag, ctr_w, ctr_h=CTR_H,
@@ -217,15 +218,16 @@ def page_floor1(doc):
     # row 1: rooms 101, 102 (contiguous party walls: 60..380)
     ctr101 = room_with_counter(p, 60, 150, "101", "TYPE A", CTR_A_W,
                                ctr_label="COUNTER")
-    ctr102 = room_with_counter(p, 220, 150, "102", "TYPE A", CTR_A_W,
+    ctr102 = room_with_counter(p, 240, 150, "102", "TYPE A", CTR_A_W,
                                ctr_label="COUNTER")
     # row 2: rooms 103, 104 (104 = GR)
     ctr103 = room_with_counter(p, 60, 340, "103", "TYPE A", CTR_A_W,
                                ctr_label="COUNTER")
-    ctr104 = room_with_counter(p, 220, 340, "104", "TYPE GR", CTR_GR_W,
+    ctr104 = room_with_counter(p, 240, 340, "104", "TYPE GR", CTR_GR_W,
+                               ctr_h=GR_CTR_H,
                                ctr_label="GR CTR")
     # dimensions: three UNIQUE lengths calibrate this sheet
-    dimension(p, (60, 118), (380, 118), '20\'-0"', 220, 112)      # 320 pt
+    dimension(p, (60, 118), (420, 118), '20\'-0"', 240, 112)      # 360 pt
     dimension(p, (36, 150), (36, 294), '8\'-0"', 30, 224)         # 144 pt
     dimension(p, (60, 470), (168, 470), '6\'-0"', 114, 464)       # 108 pt
     rotated(p)
@@ -243,19 +245,20 @@ def page_floor2(doc):
     # row 1: rooms 201, 202, 203 (A) - contiguous 60..540
     ctr201 = room_with_counter(p, 60, 150, "201", "TYPE A", CTR_A_W,
                                ctr_label="COUNTER")
-    ctr202 = room_with_counter(p, 220, 150, "202", "TYPE A", CTR_A_W,
+    ctr202 = room_with_counter(p, 240, 150, "202", "TYPE A", CTR_A_W,
                                ctr_label="COUNTER")
-    ctr203 = room_with_counter(p, 380, 150, "203", "TYPE A", CTR_A_W,
+    ctr203 = room_with_counter(p, 420, 150, "203", "TYPE A", CTR_A_W,
                                ctr_label="COUNTER")
     # row 2: 204, 205 (B), 206 (GR)
     ctr204 = room_with_counter(p, 60, 340, "204", "TYPE B", CTR_B_W,
                                ctr_label="COUNTER")
-    ctr205 = room_with_counter(p, 220, 340, "205", "TYPE B", CTR_B_W,
+    ctr205 = room_with_counter(p, 240, 340, "205", "TYPE B", CTR_B_W,
                                ctr_label="COUNTER")
-    ctr206 = room_with_counter(p, 380, 340, "206", "TYPE GR", CTR_GR_W,
+    ctr206 = room_with_counter(p, 420, 340, "206", "TYPE GR", CTR_GR_W,
+                               ctr_h=GR_CTR_H,
                                ctr_label="GR CTR")
     # dimensions: three UNIQUE lengths
-    dimension(p, (60, 118), (540, 118), '26\'-8"', 300, 112)      # 480 pt
+    dimension(p, (60, 118), (600, 118), '30\'-0"', 330, 112)      # 540 pt
     dimension(p, (588, 340), (588, 484), '8\'-0"', 596, 414)      # 144 pt
     dimension(p, (60, 524), (168, 524), '6\'-0"', 114, 518)       # 108 pt
     rotated(p)
@@ -281,13 +284,13 @@ def page_enlargement(doc):
     dimension(p, (90, 152), (126, 152), '4\'-0"', 108, 146)   # 36 pt @9
     dimension(p, (134, 170), (134, 188), '2\'-0"', 142, 182)  # 18 pt @9
     # --- edge detail viewport (36 pt/ft): slab thickness 1.5" + splash 4"
-    slab = [(300, 170), (382, 170), (382, 175), (300, 175)]   # 82x5 pt
+    slab = [(300, 170), (381, 170), (381, 174.5), (300, 174.5)]  # 81x4.5 pt
     polygon(p, slab, width=1.0)
     splash = [(300, 158), (303.5, 158), (303.5, 170), (300, 170)]
     polygon(p, splash, width=1.0)                             # 3.5x12 pt
     text_centered(p, 341, 190, "EDGE DETAIL", size=8)
-    dimension(p, (300, 205), (382, 205), '2\'-3"', 341, 199)  # 82 pt @36
-    dimension(p, (392, 170), (392, 175), None, 0, 0)
+    dimension(p, (300, 205), (381, 205), '2\'-3"', 340, 199)  # 81 pt @36
+    dimension(p, (392, 170), (392, 174.5), None, 0, 0)
     text_left(p, 398, 175, '1 1/2"', size=8)
     # --- key map viewport (4.5 pt/ft): 10'x10' floor blob
     key = [(460, 160), (505, 160), (505, 205), (460, 205)]    # 45 pt @4.5
@@ -405,9 +408,9 @@ def page_clubroom(doc):
     text_centered(p, 306, 128, "PROJECT: HARBORVIEW HOTEL"
                   " (SYNTHETIC HOTEL FIXTURE)", size=8)
     text_centered(p, 306, 143, "SCANS - NOT VECTOR LINWORK", size=8)
-    p.insert_image(pymupdf.Rect(40, 160, 300, 400),
+    p.insert_image(pymupdf.Rect(40, 160, 380, 382),
                    pixmap=_clubroom_scan_pixmap())
-    text_centered(p, 170, 418, "CLUBROOM COUNTER ELEVATION (LEGIBLE SCAN)", size=8)
+    text_centered(p, 210, 418, "CLUBROOM COUNTER ELEVATION (LEGIBLE SCAN)", size=8)
     p.insert_image(pymupdf.Rect(330, 160, 560, 400),
                    pixmap=_lowres_blob_pixmap())
     text_centered(p, 445, 418, "BAR COUNTER (LOW-RES SCAN - UNUSABLE)", size=8)

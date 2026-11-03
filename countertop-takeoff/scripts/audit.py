@@ -268,12 +268,15 @@ def audit_schedule(spec, results, audit):
                       f" {v['count']}, included_in_parent_total"
                       f" {v['included_in_parent_total']},"
                       f" measured separately (no double-count)")
+    piece_regions = {p.get("region_id") for p in spec.get("_pieces") or []}
     extras = [r for r in base if sched is not None
               and r["variant"] is None
-              and r["type"] not in {t["type"] for t in sched["types"]}]
+              and r["type"] not in {t["type"] for t in sched["types"]}
+              and r["region_id"] not in piece_regions]
     if extras:
         audit.add("unplanned types", "fail",
-                  "regions reference types outside the schedule: "
+                  "regions reference types outside the schedule (and no"
+                  " declared piece covers them): "
                   f"{sorted({r['type'] for r in extras})}")
     return sched
 
@@ -703,6 +706,44 @@ def audit_dual_boq(assembly_rows, piece_rows, audit):
     return piece_total
 
 
+def audit_room_coverage(spec, audit):
+    """P0.7: every inventoried room must reconcile to the coverage ledger.
+    A room present in the plan-tag inventory but covered by NO assembly is
+    an omitted-room callout (its quantities stay blank) - this is the
+    guard that turns 'the plans show 6 rooms, the job measured 5' into a
+    named disclosure instead of silence."""
+    sched = spec.get("schedule") or {}
+    inv = sched.get("room_inventory")
+    if not inv or not (spec.get("_assemblies") or []):
+        return
+    asm_rooms = set()
+    asm_types = set()
+    for a in spec["_assemblies"]:
+        if a.get("room"):
+            asm_rooms.add(a["room"])
+        else:
+            asm_types.add(a["type"])
+    covered = set()
+    for r in inv.get("rooms") or []:
+        if r["room"] in asm_rooms or r["type"] in asm_types:
+            covered.add(r["room"])
+    missing = sorted({r["room"] for r in (inv.get("rooms") or [])
+                      if r["room"] not in covered})
+    if missing:
+        audit.add_callout(
+            "room coverage",
+            f"inventoried room(s) {missing} are covered by NO assembly -"
+            " omitted from this pass; their quantities stay blank (never"
+            " defaulted, never silently dropped)",
+            blank_fields=["sf", "edge_lf", "splash_lf"],
+            pages=sorted({r["page"] for r in (inv.get("rooms") or [])
+                          if r["room"] in missing}))
+    else:
+        audit.add("room coverage", "pass",
+                  f"all {len(asm_rooms) or len(inv.get('rooms') or [])}"
+                  " inventoried room(s) reconcile to assemblies")
+
+
 def build_coverage_ledger(spec, results, audit, results_by_id=None):
     """Reconcile EVERY inventoried item to exactly one ledger state:
     measured | package_excluded | superseded | unresolved (P0.1).
@@ -858,10 +899,13 @@ def audit_region_checks(spec, results, calibrations, audit,
         key = (r.get("source_id"), r["page"], r["viewport"])
         cal = calibrations.get(key)
         if r.get("status") == "unresolved":
-            audit.add_callout(
-                f"region {r['region_id']}", r.get("unresolved_reason",
-                "unresolved"), blank_fields=r.get("blank_fields",
-                ["area_sf"]), pages=[r["page"]], source_id=r.get("source_id"))
+            if not r.get("_callout_done"):
+                r["_callout_done"] = True
+                audit.add_callout(
+                    f"region {r['region_id']}", r.get("unresolved_reason",
+                    "unresolved"), blank_fields=r.get("blank_fields",
+                    ["area_sf"]), pages=[r["page"]],
+                    source_id=r.get("source_id"))
             continue
         if r.get("route") == "image":
             if not r.get("expected_range_ok"):
@@ -963,6 +1007,33 @@ def aggregate_types(spec, results, audit):
             "totals", f"{len(unresolved)} region(s) unresolved"
             f" ({[r['region_id'] for r in unresolved]}) - excluded from"
             " extensions; their quantities stay blank")
+    # V3: when the spec declares individually-enumerated assemblies, every
+    # measured instance counts ONCE (no schedule multiplication - the
+    # schedule counts cross-validate the room inventory instead). Package
+    # exclusions still remove their regions from the main total.
+    enumerated = bool(spec.get("_assemblies")) and all(
+        a["quantity_basis"]["mode"] == "enumerated"
+        for a in spec["_assemblies"])
+    if enumerated:
+        excluded = spec.get("_excluded_packages") or set()
+        asm_by_id = {a["assembly_id"]: a for a in spec["_assemblies"]}
+        excluded_regions = {
+            p.get("region_id") for p in spec.get("_pieces") or []
+            if (asm_by_id.get(p.get("assembly_id")) or {}).get("package")
+            in excluded}
+        total = round(sum(
+            r["area_sf"] or 0.0 for r in base
+            if r["region_id"] not in excluded_regions), 2)
+        exc_sf = round(sum(r["area_sf"] or 0.0 for r in base
+                           if r["region_id"] in excluded_regions), 2)
+        audit.add("totals", "pass",
+                  f"individually enumerated assemblies: {len(base)} measured"
+                  f" instance(s) sum to {total:.2f} SF"
+                  + (f" (+ {exc_sf:.2f} SF in excluded packages, reported"
+                     " separately)" if exc_sf else "")
+                  + " - schedule counts cross-validate the inventory and do"
+                    " NOT multiply here")
+        return [], total
     if not base:
         audit.add("measured scope", "fail",
                   "no measurable regions completed - nothing to total"

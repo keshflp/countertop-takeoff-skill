@@ -370,7 +370,15 @@ def validate_schedule(spec):
         pos_int(t.get("count"), f"schedule type {name} count")
         require(isinstance(t.get("row_text"), str) and t["row_text"].strip(),
                 f"type {name}: row_text must quote the schedule row")
-        word_boxes(t.get("word_boxes"), f"type {name} word_boxes")
+        ev_kind = (sched.get("evidence") or {}).get("kind", "text")
+        if ev_kind == "text":
+            word_boxes(t.get("word_boxes"), f"type {name} word_boxes")
+        else:
+            # image evidence: the crop + cells carry the proof; word boxes
+            # are optional (the header text on the page is not the table)
+            boxes = t.get("word_boxes") or []
+            for i, b in enumerate(boxes):
+                box(b, f"type {name} word_boxes[{i}]")
         for r in t.get("rows", []) or []:
             pos_int(r.get("count"), f"type {name} row count")
             require(isinstance(r.get("floor"), str) and r["floor"],
@@ -502,6 +510,8 @@ def validate_regions(spec, sched):
         for k in ("assembly", "material", "piece"):
             require(k not in r or isinstance(r[k], str),
                     f"{rid}: {k} must be a string")
+    pieces = spec.get("pieces") or []
+    piece_regions = {p.get("region_id") for p in pieces}
     for r in regions:
         rid = r["region_id"]
         kind = r.get("kind", "base")
@@ -511,9 +521,13 @@ def validate_regions(spec, sched):
         require(rtype, f"{rid}: region needs a 'type'")
         if kind == "base" and sched is not None:
             names = {t["type"] for t in sched["types"]}
-            require(rtype in names,
-                    f"{rid}: type {rtype!r} is not in the approved schedule"
-                    " - unplanned scope must go through scope planning first")
+            if rtype not in names and rid not in piece_regions:
+                require(False,
+                        f"{rid}: type {rtype!r} is not in the approved"
+                        " schedule and no declared piece covers it -"
+                        " unplanned scope must go through scope planning"
+                        " first (or declare an out-of-series assembly +"
+                        " piece for it)")
         if kind == "recheck":
             require(r.get("of") in ids,
                     f"{rid}: recheck 'of' must reference a base region_id")
