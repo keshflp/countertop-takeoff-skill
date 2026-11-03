@@ -79,7 +79,8 @@ def collision_free_dest(src_dir, original, taken):
     stem, ext = os.path.splitext(base)
     candidate = base
     n = 2
-    while os.path.normcase(os.path.join(src_dir, candidate)) in taken:
+    while os.path.normcase(os.path.abspath(os.path.join(src_dir, candidate))) \
+            in taken:
         candidate = f"{stem}-{n}{ext}"
         n += 1
     return os.path.join(src_dir, candidate)
@@ -99,6 +100,75 @@ def classify_kind(e):
             or requested.startswith("http"):
         return e.get("kind") or "cloud"
     return e.get("kind") or "local"
+
+
+def pre_existing_destinations(src_dir):
+    """P0.1: files ALREADY sitting in the sources directory are collisions
+    too - a retry must never overwrite an earlier intake's copy."""
+    taken = set()
+    if os.path.isdir(src_dir):
+        for name in os.listdir(src_dir):
+            p = os.path.join(src_dir, name)
+            if os.path.isfile(p):
+                taken.add(os.path.normcase(os.path.abspath(p)))
+    return taken
+
+
+def intake_one_source(e, i, src_dir, taken):
+    """Resolve ONE source entry. Copy/hash/page-count failures are RETAINED
+    as a per-source `error` entry (P0.1) instead of escaping before the
+    manifest is written - one bad source never discards the manifest."""
+    requested = e["requested"]
+    local_path = e.get("local_path") or requested
+    original = (e.get("name") or os.path.basename(
+        requested.replace("\\", "/").rstrip("/"))) or "source"
+    entry = {"entry_index": i,
+             "requested": requested,
+             "name": original,
+             "kind": classify_kind(e),
+             "cloud_id": e.get("cloud_id"),
+             "cloud_revision": e.get("cloud_revision"),
+             "resolved_path": None, "status": None, "size_bytes": None,
+             "sha256": None, "page_count": None}
+    if e.get("note"):
+        entry["note"] = e["note"]
+    # P0.1: collision-safe destination - repeated basenames AND pre-existing
+    # files never overwrite each other
+    pre_existing = os.path.normcase(os.path.abspath(os.path.join(
+        src_dir, original))) in taken
+    dest = collision_free_dest(src_dir, original, taken)
+    taken.add(os.path.normcase(os.path.abspath(dest)))
+    try:
+        if os.path.isfile(local_path):
+            if os.path.abspath(local_path) != os.path.abspath(dest):
+                shutil.copy2(local_path, dest)
+            entry["resolved_path"] = dest
+            entry["destination_name"] = os.path.basename(dest)
+            entry["status"] = "resolved"
+            entry["size_bytes"] = os.path.getsize(dest)
+            entry["sha256"] = file_sha256(dest)
+            if dest.lower().endswith(".pdf"):
+                entry["page_count"] = pdf_page_count(dest)
+            if pre_existing:
+                entry["note"] = (e.get("note") or "") + (
+                    " destination basename already held an earlier intake"
+                    " copy - it was preserved untouched; this copy landed on"
+                    f" {entry['destination_name']}").strip()
+        else:
+            entry["status"] = "unavailable"
+            entry["note"] = e.get("note") or (
+                "not found locally - fetch Drive/OneDrive/attachment"
+                " binaries to the job dir first, then re-run intake with the"
+                " local path; the job proceeds without it and discloses the"
+                " gap as a callout")
+    except Exception as exc:  # noqa: BLE001 - per-source, retained
+        entry["status"] = "error"
+        entry["error"] = f"{type(exc).__name__}: {exc}"
+        entry["note"] = ((e.get("note") or "") + " intake FAILED for this"
+                         " source (retained in the manifest; the manifest is"
+                         " still written) - fix the source and re-run"
+                         " intake").strip()
+    return entry
 
 
 def main(argv=None):
@@ -149,52 +219,24 @@ def main(argv=None):
     src_dir = os.path.join(args.job_dir, "sources")
     os.makedirs(src_dir, exist_ok=True)
     entries = []
-    taken = set()
+    taken = pre_existing_destinations(src_dir)
     for i, e in enumerate(entries_in):
-        requested = e["requested"]
-        local_path = e.get("local_path") or requested
-        original = (e.get("name") or os.path.basename(
-            requested.replace("\\", "/").rstrip("/"))) or "source"
-        entry = {"entry_index": i,
-                 "requested": requested,
-                 "name": original,
-                 "kind": classify_kind(e),
-                 "cloud_id": e.get("cloud_id"),
-                 "cloud_revision": e.get("cloud_revision"),
-                 "resolved_path": None, "status": None, "size_bytes": None,
-                 "sha256": None, "page_count": None}
-        if e.get("note"):
-            entry["note"] = e["note"]
-        # P1.2: collision-safe destination - repeated basenames never
-        # overwrite each other
-        dest = collision_free_dest(src_dir, original, taken)
-        taken.add(os.path.normcase(dest))
-        if os.path.isfile(local_path):
-            if os.path.abspath(local_path) != os.path.abspath(dest):
-                shutil.copy2(local_path, dest)
-            entry["resolved_path"] = dest
-            entry["destination_name"] = os.path.basename(dest)
-            entry["status"] = "resolved"
-            entry["size_bytes"] = os.path.getsize(dest)
-            entry["sha256"] = file_sha256(dest)
-            if dest.lower().endswith(".pdf"):
-                entry["page_count"] = pdf_page_count(dest)
-        else:
-            entry["status"] = "unavailable"
-            entry["note"] = e.get("note") or (
-                "not found locally - fetch Drive/OneDrive/attachment"
-                " binaries to the job dir first, then re-run intake with the"
-                " local path; the job proceeds without it and discloses the"
-                " gap as a callout")
-        entries.append(entry)
+        entries.append(intake_one_source(e, i, src_dir, taken))
 
     resolved = [e for e in entries if e["status"] == "resolved"]
+    errors = [e for e in entries if e["status"] == "error"]
     verdict = "ok"
+    if errors:
+        verdict = (f"source_errors: {len(errors)} source(s) failed during"
+                   " intake (retained in the manifest; re-run intake for"
+                   " them)")
     if args.expect is not None and len(resolved) != args.expect:
-        verdict = ("expected_count_mismatch: requested"
-                   f" {len(entries)}, resolved {len(resolved)},"
-                   f" expected {args.expect} - the mismatch is disclosed"
-                   " and travels into the takeoff callouts")
+        if errors:
+            verdict += " + "
+        verdict += ("expected_count_mismatch: requested"
+                    f" {len(entries)}, resolved {len(resolved)},"
+                    f" expected {args.expect} - the mismatch is disclosed"
+                    " and travels into the takeoff callouts")
     manifest = {
         "schema": "countertop-takeoff/v3 intake",
         "job_dir": args.job_dir,
@@ -219,6 +261,8 @@ def main(argv=None):
         else:
             note = (e.get("note") or "")[:90]
             print(f"  UNAVAILABLE: {e['requested']} - {note}")
+    for e in errors:
+        print(f"  ERROR: {e['requested']} - {e.get('error', '')[:90]}")
     print(f"  verdict: {verdict}")
     return 0
 
