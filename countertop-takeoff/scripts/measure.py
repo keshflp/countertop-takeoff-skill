@@ -134,10 +134,16 @@ def measure_all_regions(spec, pages_by_no, calibrations, snap, audit_obj,
             results.append(unresolved_result(region, sid, reason))
             print(f"UNRESOLVED {rid}: {reason}")
             continue
+        # P0.4: the snap grid is a PDF-POINT concept. For CAD sources the
+        # geometry lives in DRAWING UNITS, so the snap tolerance scales with
+        # the verified units-per-foot (0.05 units/18 reference scale).
+        snap_eff = snap
+        if cal.get("units") is not None:
+            snap_eff = max(1e-9, snap * cal["factor_pt_per_ft"] / 18.0)
         try:
             r = regions_mod.measure_region(
                 region, pages_by_no[(sid, pno)], cal["factor_pt_per_ft"],
-                spec["policy"]["gross_area"], snap,
+                spec["policy"]["gross_area"], snap_eff,
                 viewport_box=cal.get("viewport_box"))
         except regions_mod.RegionError as exc:
             r = unresolved_result(region, sid, str(exc))

@@ -10,8 +10,9 @@ escalation - see references/cad-context.md (documentation only, never a
 runtime dependency).
 
 V4 correctness fixes (P0.4):
-  - metre conversion FIXED: 1 m = 1/0.3048 ft (was 3.048 - a 25 SF
-    rectangle computed 0.25 SF)
+  - metre conversion FIXED: 0.3048 drawing units per real foot (was 3.048
+    - a 25 SF rectangle computed 0.25 SF); miles/yards/km had the same
+    ft-per-unit vs units-per-ft inversion and are corrected too
   - $INSUNITS table corrected: 8 = MICROINCHES (not microns); mils, miles,
     km, microns, decimeters, US survey feet added
   - MINSERT rectangular arrays are EXPANDED row x col (ezdxf's
@@ -63,20 +64,22 @@ ARC_AREA_TOL = 0.005      # max chord-approximation area error per curve (0.5%)
 ARC_MIN_SEGMENTS = 8      # never fewer than 8 chords per curve
 ARC_MAX_SEGMENTS = 4096   # subdivision cap (degenerate arcs)
 MINSERT_CAP = 10000       # max expanded cells per MINSERT array
-# $INSUNITS -> drawing units per REAL FOOT. 8 is MICROINCHES (1e-6 in),
-# NOT microns; 13 is microns. 6 (metres) is 1/0.3048 ft per m - the V3
-# value 3.048 was decimetres per foot and made every metric file 10x off.
+# $INSUNITS -> drawing units per REAL FOOT (units-per-ft semantics: the
+# factor divides drawing lengths to get feet). 8 is MICROINCHES (1e-6 in),
+# NOT microns; 13 is microns. 6 (metres) is 0.3048 m per ft - the V3 value
+# 3.048 was decimetres per foot and made every metric file 10x off; miles,
+# yards and km had the same inversion in early V4 and are corrected here.
 INSUNITS_PER_FT = {
     1: 12.0,                    # inches
     2: 1.0,                     # feet
-    3: 5280.0,                  # miles
+    3: 1.0 / 5280.0,            # miles (1 ft = 1/5280 mile)
     4: 304.8,                   # millimeters
     5: 30.48,                   # centimeters
-    6: 1.0 / 0.3048,            # meters  (3.280839895... ft per m)
-    7: 1000.0 / 0.3048,         # kilometers
+    6: 0.3048,                  # meters  (1 ft = 0.3048 m)
+    7: 0.0003048,               # kilometers
     8: 12_000_000.0,            # MICROINCHES (12 in x 1e6)
     9: 12_000.0,                # mils (0.001 in)
-    10: 36.0,                   # yards
+    10: 1.0 / 3.0,              # yards (1 ft = 1/3 yd)
     13: 304_800.0,              # microns
     14: 3.048,                  # decimeters
     20: 1200.0 / 3937.0,        # US survey feet
@@ -86,7 +89,7 @@ INSUNITS_NAMES = {1: "in", 2: "ft", 3: "mile", 4: "mm", 5: "cm", 6: "m",
                   13: "micron", 14: "dm",
                   20: "us_survey_ft"}
 DECLARED_PER_FT = {"in": 12.0, "ft": 1.0, "mm": 304.8, "cm": 30.48,
-                   "m": 1.0 / 0.3048}
+                   "m": 0.3048}
 UNSUPPORTED_OPS = {"HATCH", "DIMENSION", "LEADER", "MLINE", "3DSOLID",
                    "REGION", "BODY", "IMAGE", "WIPEOUT", "OLE2FRAME"}
 

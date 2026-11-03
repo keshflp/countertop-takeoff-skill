@@ -195,11 +195,18 @@ def calibrate_entry(entry, page):
     factor = statistics.median(factors)
     spread_pct = (max(factors) - min(factors)) / factor * 100.0
     if spread_pct > WARN_SPREAD_PCT:
-        raise CalibrationError(
+        err = CalibrationError(
             f"page {entry.get('page')} viewport {viewport!r}: span factors"
             f" disagree by {spread_pct:.2f}% (limit {WARN_SPREAD_PCT}%):"
             f" {[round(f, 4) for f in factors]}. Wrong segment picked? Two"
             " viewports mixed? Investigate - do not average.")
+        # P0.2: override contradictions are disclosed EVEN when the entry
+        # fails the spread check (they may be the CAUSE of the disagreement)
+        if overrides:
+            err.overrides = overrides
+            err.args = (str(err) + " | "
+                        + " ".join(o["warning"] for o in overrides),)
+        raise err
     return {
         "page": entry.get("page"), "viewport": viewport,
         "source_id": entry.get("source_id"),
