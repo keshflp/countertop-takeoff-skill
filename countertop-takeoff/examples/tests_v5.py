@@ -173,7 +173,7 @@ def callout_text(res):
 def publish_safety_tests(rate_profile):
     # (1) `--json results.json --estimate-profile` must NOT overwrite the
     #     evidence package with the estimate (V5 regression)
-    spec = orig_spec()
+    spec = mixed_v5_spec()
     jobs = os.path.join(BUILD, "v5_alias.jobs.json")
     res = os.path.join(BUILD, "v5_alias.json")
     json.dump(spec, open(jobs, "w", encoding="utf-8"), indent=1)
@@ -332,6 +332,179 @@ def identity_tests():
           str(res["totals"]["project_sf"]))
 
 
+HOTEL_ALLMATCH_PROFILE = {
+    "profile_version": "2", "company": "V5 Shop", "currency": "USD",
+    "terms": ["Net 30 from invoice date.",
+              "Prices valid for 30 days."],
+    "rates": [
+        {"item_code": "V5-A", "match": {"assembly_kind": "A",
+                                        "finish_tag": "PL",
+                                        "width_in": 72, "depth_in": 25.5},
+         "uom": "EA", "unit_price": 485.00, "currency": "USD"},
+        {"item_code": "V5-B", "match": {"assembly_kind": "B",
+                                        "finish_tag": "ST",
+                                        "width_in": 96, "depth_in": 25.5},
+         "uom": "EA", "unit_price": 918.335, "currency": "USD"},
+        {"item_code": "V5-CLUB", "match": {"assembly_kind": "CLUB",
+                                           "package": "public_BOH"},
+         "uom": "EA", "unit_price": 742.10, "currency": "USD"},
+    ],
+}
+
+
+# -------------------------------- P0.3 estimates inherit completeness
+def estimate_scope_tests():
+    prof_path = os.path.join(BUILD, "v5_hotel_rates.json")
+    json.dump(HOTEL_ALLMATCH_PROFILE, open(prof_path, "w",
+                                           encoding="utf-8"), indent=1)
+    hotel_res = os.path.join(BUILD, "v5_hotel.results.json")
+    rc, res, err = run_measure(json.load(open(HOTEL_JOBS,
+                                              encoding="utf-8")),
+                               "v5_hotel",
+                               jobs_path=os.path.join(BUILD, "hotel",
+                                                      "v5_base.jobs.json"))
+    check("estimate-scope: hotel run completes with callouts",
+          rc == 0 and res.get("run_status") == "complete_with_callouts",
+          f"rc={rc} err={err[:120]}")
+
+    # (1) the hotel omitted-room case: room 203 has NO assembly -> priced
+    #     lines + subtotal survive, grand total BLANK, callout names 203
+    payload = estimate_mod.build_estimate(
+        hotel_res, prof_path,
+        out_md=os.path.join(BUILD, "v5_est_203.md"),
+        out_json=os.path.join(BUILD, "v5_est_203.json"),
+        out_pdf=os.path.join(BUILD, "v5_est_203.pdf"))
+    check("estimate-scope: hotel omitted room 203 -> grand total BLANK with"
+          " priced lines surviving",
+          payload["grand_total"] is None
+          and payload["priced_subtotal"] > 0
+          and all(l["line_total"] is not None for l in payload["lines"]),
+          f"grand={payload['grand_total']}"
+          f" subtotal={payload['priced_subtotal']}")
+    check("estimate-scope: the callout NAMES the omitted room",
+          any("203" in c["scope"] + " " + c["reason"]
+              and "UNKNOWN" in c["reason"]
+              for c in payload["callouts"])
+          and any("203" in (u.get("item") or "")
+                  for u in payload["unknown_scope"]),
+          str(payload["callouts"][-1]))
+    check("estimate-scope: scope_complete flag is False on the payload",
+          payload["scope_complete"] is False)
+
+    # (2) a stopped result refuses to be priced
+    stopped = json.load(open(hotel_res, encoding="utf-8"))
+    stopped["run_status"] = "stopped"
+    spath = os.path.join(BUILD, "v5_stopped_results.json")
+    json.dump(stopped, open(spath, "w", encoding="utf-8"))
+    try:
+        estimate_mod.build_estimate(spath, prof_path,
+                                    out_json=os.path.join(
+                                        BUILD, "v5_no.json"))
+        refused = "no SystemExit"
+    except SystemExit as exc:
+        refused = str(exc)
+    check("estimate-scope: a stopped result NEVER gets priced",
+          "stopped" in str(refused) and not os.path.exists(
+              os.path.join(BUILD, "v5_no.json")), str(refused)[:110])
+
+    # (3) missing assembly_boq refuses - never silently prices 0.00
+    noboq = json.load(open(hotel_res, encoding="utf-8"))
+    del noboq["assembly_boq"]
+    np = os.path.join(BUILD, "v5_noboq_results.json")
+    json.dump(noboq, open(np, "w", encoding="utf-8"))
+    try:
+        estimate_mod.build_estimate(np, prof_path,
+                                    out_json=os.path.join(
+                                        BUILD, "v5_no2.json"))
+        refused2 = "no SystemExit"
+    except SystemExit as exc:
+        refused2 = str(exc)
+    check("estimate-scope: missing assembly_boq refuses (never prices"
+          " 0.00)",
+          "assembly_boq" in str(refused2)
+          and not os.path.exists(os.path.join(BUILD, "v5_no2.json")),
+          str(refused2)[:110])
+    empty = json.load(open(hotel_res, encoding="utf-8"))
+    empty["assembly_boq"] = []
+    ep = os.path.join(BUILD, "v5_emptyboq_results.json")
+    json.dump(empty, open(ep, "w", encoding="utf-8"))
+    try:
+        estimate_mod.build_estimate(ep, prof_path)
+        refused3 = False
+    except SystemExit as exc:
+        refused3 = True
+    check("estimate-scope: an EMPTY assembly_boq refuses too",
+          refused3 is True, str(refused3))
+
+    # (4) malformed numeric input: fractional + negative EA refuse with
+    #     useful diagnostics
+    for bad_ea, label in ((2.5, "fractional"), (-2, "negative")):
+        bad = json.load(open(hotel_res, encoding="utf-8"))
+        bad["assembly_boq"][0]["ea"] = bad_ea
+        bp = os.path.join(BUILD, f"v5_badea_{label}.json")
+        json.dump(bad, open(bp, "w", encoding="utf-8"))
+        try:
+            estimate_mod.build_estimate(bp, prof_path)
+            got = False
+        except SystemExit as exc:
+            got = "malformed EA" in str(exc) and label in str(exc)
+        check(f"estimate-scope: {label} EA refuses with a diagnostic",
+              got, label)
+
+    # (5) ONE effective currency: profile currency absent + USD/EUR mix
+    mixed_prof = {"profile_version": "2", "company": "Mix",
+                  "rates": [
+                      {"item_code": "U", "match": {"assembly_kind": "A"},
+                       "uom": "EA", "unit_price": 1, "currency": "USD"},
+                      {"item_code": "E", "match": {"assembly_kind": "B"},
+                       "uom": "EA", "unit_price": 1, "currency": "EUR"}]}
+    mp = os.path.join(BUILD, "v5_mixcur.json")
+    json.dump(mixed_prof, open(mp, "w", encoding="utf-8"))
+    try:
+        estimate_mod.load_profile(mp)
+        refused_cur = False
+    except SystemExit as exc:
+        refused_cur = "mixed currencies" in str(exc) \
+            and "USD" in str(exc) and "EUR" in str(exc)
+    check("estimate-scope: USD+EUR mixing refuses even without a profile"
+          " currency",
+          refused_cur is True, "no refusal")
+    ok_prof = {"profile_version": "2", "company": "Eu",
+               "rates": [
+                   {"item_code": "E1", "match": {"assembly_kind": "A"},
+                    "uom": "EA", "unit_price": 1, "currency": "EUR"},
+                   {"item_code": "E2", "match": {"assembly_kind": "B"},
+                    "uom": "EA", "unit_price": 2, "currency": "EUR"}]}
+    op = os.path.join(BUILD, "v5_eur.json")
+    json.dump(ok_prof, open(op, "w", encoding="utf-8"))
+    _, _, cur = estimate_mod.load_profile(op)
+    check("estimate-scope: a consistent rate-declared currency resolves"
+          " (EUR without profile currency)",
+          cur == "EUR", str(cur))
+
+    # (6) '$1,234.56' rates parse exactly; garbage refuses clearly
+    cur_prof = {"profile_version": "2", "company": "Cur",
+                "currency": "USD",
+                "rates": [{"item_code": "C1",
+                           "match": {"assembly_kind": "CLUB"},
+                           "uom": "EA", "unit_price": "$1,234.56",
+                           "currency": "USD"}]}
+    cp = os.path.join(BUILD, "v5_curstr.json")
+    json.dump(cur_prof, open(cp, "w", encoding="utf-8"))
+    _, rates_c, _ = estimate_mod.load_profile(cp)
+    from decimal import Decimal
+    got = estimate_mod.rate_amount(rates_c[0], "unit_price")
+    check("estimate-scope: '$1,234.56' parses to exactly 1234.56",
+          got == Decimal("1234.56"), str(got))
+    try:
+        estimate_mod.parse_money("twelve"); parse_ok = False
+    except SystemExit as exc:
+        parse_ok = "not a parseable amount" in str(exc) \
+            and "Decimal" not in str(exc)
+    check("estimate-scope: unparseable amount -> clear error, no raw"
+          " Decimal traceback", parse_ok)
+
+
 def main():
     global ORIG_PDFS, ORIG_GEO
     shutil.rmtree(BUILD, ignore_errors=True)
@@ -343,6 +516,7 @@ def main():
     intake_tests_v5()
     publish_safety_tests(rate_profile)
     identity_tests()
+    estimate_scope_tests()
     print()
     failed = [r for r in RESULTS if not r[1]]
     for name, ok, detail in RESULTS:

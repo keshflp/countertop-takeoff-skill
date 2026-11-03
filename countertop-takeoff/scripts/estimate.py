@@ -251,9 +251,58 @@ def find_rate(rates, assembly):
 
 
 # ---------------------------------------------------------------- building
+def validate_results_payload(results, path):
+    """P0.3: the estimate inherits scope completeness - it prices ONLY a
+    results payload whose run actually completed and that carries the
+    assembly BoQ. A `stopped` result never gets a priced grand total; a
+    result missing `assembly_boq` must not silently price as 0.00."""
+    if not isinstance(results, dict):
+        raise SystemExit(f"ERROR: {path} is not a results JSON object")
+    status = results.get("run_status") or results.get("status")
+    if status in ("stopped", "failed"):
+        raise SystemExit(
+            f"ERROR: refusing to price {path}: the source run is {status!r}"
+            " - stopped runs have no quotable quantities (resolve the named"
+            " stops, re-measure, then estimate)")
+    if status not in ("complete", "complete_with_callouts"):
+        raise SystemExit(
+            f"ERROR: refusing to price {path}: run status is {status!r}"
+            " (expected complete / complete_with_callouts) - re-run"
+            " measure.py with --json to produce a priceable evidence"
+            " package")
+    boq = results.get("assembly_boq")
+    if not isinstance(boq, list) or not boq:
+        raise SystemExit(
+            f"ERROR: refusing to price {path}: no assembly_boq - the V4/V5"
+            " estimate prices assembly EA x exact rate; re-run measure.py on"
+            " a job spec that declares assemblies (an empty assembly list"
+            " must not silently price as 0.00)")
+    return boq
+
+
+def unknown_scope_from_ledger(results):
+    """P0.3: in-scope assemblies that were OMITTED (the hotel's room-203
+    case) are represented as UNKNOWN amounts - read from the coverage
+    ledger the measure run wrote (rooms covered by NO assembly)."""
+    out = []
+    for e in results.get("coverage_ledger") or []:
+        if e.get("kind") == "room" and e.get("state") == "unresolved" \
+                and "covered by NO assembly" in str(e.get("detail", "")):
+            out.append({"item": e.get("item"), "detail": e.get("detail"),
+                        "source": e.get("source") or {}})
+    return out
+
+
 def build_lines(results, rates):
-    """One estimate line per in-scope assembly. Returns (lines, callouts,
-    exclusions). Blank amounts stay None - never zero."""
+    """One estimate line per in-scope assembly; PLUS unknown-scope entries
+    for omitted in-scope work (priced lines and the subtotal survive; the
+    grand total goes BLANK). Returns (lines, callouts, exclusions,
+    unknown_scope). Blank amounts stay None - never zero.
+
+    P0.3: a malformed quantity (negative or fractional EA) refuses with a
+    useful diagnostic naming the assembly - never a silent or garbage line.
+    A LEGITIMATE derived EA of zero prices a real 0.00 line (no callout).
+    """
     lines = []
     callouts = []
     exclusions = []
@@ -268,6 +317,17 @@ def build_lines(results, rates):
             })
             continue
         qty = a.get("ea")
+        if qty is not None:
+            bad_qty = (isinstance(qty, bool)
+                       or not isinstance(qty, (int, float))
+                       or qty < 0
+                       or (isinstance(qty, float) and not qty.is_integer()))
+            if bad_qty:
+                raise SystemExit(
+                    f"ERROR: assembly {aid} has a malformed EA {qty!r} in the"
+                    " results - EA must be a non-negative whole count (a"
+                    " fractional or negative quantity is not priceable;"
+                    " re-measure)")
         rate, why = find_rate(rates, a)
         line_callouts = []
         if qty is None:
@@ -276,10 +336,11 @@ def build_lines(results, rates):
                 " amount blank")
         if rate is None:
             line_callouts.append(why)
-        unit_price = D(rate["unit_price"]) if rate is not None else None
+        unit_price = rate_amount(rate, "unit_price") \
+            if rate is not None else None
         if qty is not None and unit_price is not None:
             line_total = cents(D(qty) * unit_price)
-            arithmetic = (f"{qty} EA x {money(unit_price)} ="
+            arithmetic = (f"{qty} EA x {fmt_rate(unit_price)} ="
                           f" {money(line_total)} (ROUND_HALF_UP to cents)")
         else:
             line_total = None
@@ -295,9 +356,12 @@ def build_lines(results, rates):
                    else "")
                 + (f", {a.get('handing')}" if a.get("handing") else "")),
             "assembly_ids": [aid],
+            "package": a.get("package"),
             "qty_ea": qty,
             "unit_price": (float(unit_price) if unit_price is not None
                            else None),
+            "unit_price_exact": (str(unit_price)
+                                 if unit_price is not None else None),
             "line_total": (float(line_total) if line_total is not None
                            else None),
             "rate_reference": {
@@ -313,17 +377,35 @@ def build_lines(results, rates):
         for c in line_callouts:
             callouts.append({"scope": f"estimate {aid}", "reason": c,
                              "blank_fields": ["amount"]})
-    return lines, callouts, exclusions
+    unknown_scope = unknown_scope_from_ledger(results)
+    for u in unknown_scope:
+        callouts.append({
+            "scope": f"estimate scope {u['item']}",
+            "reason": f"{u['detail']} - its amount is UNKNOWN (no assembly"
+                      " record exists to price); the grand total is withheld",
+            "blank_fields": ["amount"],
+        })
+    return lines, callouts, exclusions, unknown_scope
 
 
-def summarize(lines):
+def fmt_rate(d):
+    """Exact rate display (P1.2): a cents-precise rate renders as money;
+    a finer exact rate (55.555) renders EXACTLY - never silently rounded
+    to 55.56."""
+    if d == d.quantize(Decimal("0.01")):
+        return money(d)
+    return str(d.normalize())
+
+
+def summarize(lines, unknown_scope=()):
     """Priced subtotal + grand total (BLANK when ANY in-scope amount is
-    unknown - never a guessed number)."""
+    unknown - never a guessed number). Omitted in-scope scope (P0.3) also
+    blanks the grand total while the priced lines survive."""
     priced = [l for l in lines if l["line_total"] is not None]
     subtotal = cents(sum(D(l["line_total"]) for l in priced)) if priced \
         else Decimal("0.00")
     unknown = [l for l in lines if l["line_total"] is None]
-    grand = None if unknown else subtotal
+    grand = None if (unknown or unknown_scope) else subtotal
     return subtotal, grand, [l["assembly_ids"][0] for l in unknown]
 
 
@@ -341,8 +423,8 @@ def estimate_markdown(payload):
     lines.append("|-----------|-------------|-------:|-----------:|------:|")
     for l in payload["lines"]:
         qty_s = str(l["qty_ea"]) if l["qty_ea"] is not None else BLANK
-        unit_s = money(D(l["unit_price"])) if l["unit_price"] is not None \
-            else BLANK
+        unit_s = fmt_rate(D(l["unit_price"])) \
+            if l["unit_price"] is not None else BLANK
         total_s = money(D(l["line_total"])) if l["line_total"] is not None \
             else BLANK
         code_s = l["item_code"] or BLANK
@@ -352,7 +434,9 @@ def estimate_markdown(payload):
     lines.append("")
     lines.append(f"**Priced subtotal: {money(payload['priced_subtotal'])}"
                  f" {payload['currency']}**"
-                 " (sum of lines with known amounts only)")
+                 " (sum of lines with known amounts only"
+                 + ("" if payload.get("scope_complete")
+                    else "; the scope is INCOMPLETE - see CALLOUTS") + ")")
     if payload["exclusions"]:
         lines += ["", "## Exclusions (not priced in this estimate)", ""]
         for e in payload["exclusions"]:
@@ -477,11 +561,12 @@ def build_estimate(results_path, profile_path, out_md=None, out_json=None,
                    out_pdf=None):
     reject_aliases(results_path, profile_path, out_md, out_json, out_pdf)
     results = json.load(open(results_path, encoding="utf-8"))
+    validate_results_payload(results, results_path)
     profile, rates, currency = load_profile(profile_path)
-    lines, callouts, exclusions = build_lines(results, rates)
-    subtotal, grand, unknown = summarize(lines)
+    lines, callouts, exclusions, unknown_scope = build_lines(results, rates)
+    subtotal, grand, unknown = summarize(lines, unknown_scope)
     payload = {
-        "schema": "countertop-takeoff/v4 estimate",
+        "schema": "countertop-takeoff/v5 estimate",
         "company": profile.get("company", "(unnamed shop)"),
         "currency": currency or "(unspecified)",
         "generated_utc": datetime.now(timezone.utc).isoformat(
@@ -491,17 +576,20 @@ def build_estimate(results_path, profile_path, out_md=None, out_json=None,
         "profile_path": profile_path,
         "profile_sha256": sha256_file(profile_path),
         "source_run_status": results.get("run_status"),
+        "scope_complete": (grand is not None),
         "lines": lines,
         "priced_subtotal": float(subtotal),
         "grand_total": (float(grand) if grand is not None else None),
         "unknown_amounts": unknown,
+        "unknown_scope": unknown_scope,
         "exclusions": exclusions,
         "callouts": callouts,
         "arithmetic": {
             "per_line": "qty_ea x unit_price (Decimal exact)",
             "rounding": "ROUND_HALF_UP to whole cents at each line total",
             "grand_total": "sum of priced lines; BLANK while any in-scope"
-                           " amount is unknown",
+                           " amount is unknown (blank lines AND omitted"
+                           " in-scope scope)",
             "currency_rule": "single currency enforced; profile and rate"
                              " currencies must agree",
         },
