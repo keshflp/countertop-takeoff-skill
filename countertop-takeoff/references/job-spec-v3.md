@@ -120,3 +120,10 @@ schedule|detail|other, "note"?}}}`
 - Piece extensions (SF, edge LF, splash, cutouts) are multiplied by the
   SAME resolved assembly EA; the piece BoQ and the assembly BoQ are two
   views of the same resolved records — never summed with each other.
+- V5: pieces may declare LEGITIMATE reuse of one measured region across
+  assemblies via the optional spec key `piece_geometry_reuse:
+  [{"region_id": ..., "pieces": [...], "reason": ...}]` (validated at
+  load; an explicitly DECLARED reuse is a non-defect). An UNDECLARED
+  second geometry piece on the same region is a repeated geometry claim:
+  it keeps its identity but its extension is withheld blank behind a
+  callout.

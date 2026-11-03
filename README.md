@@ -30,16 +30,22 @@ Give your AI agent a set of plans and it will:
 6. **Audit and deliver** — coverage ledger reconciling every room/type/
    assembly (measured | package_excluded | included_scope | superseded |
    unresolved), overlay PNGs, an independent-audit receipt, a PIECE BoQ and
-   an ASSEMBLY BoQ from ONE resolved quantity model (project total, both
-   BoQ views and the CSV grand total cannot disagree), and — with a rate
-   profile — an assembly-EA estimate (`estimate.md` / `.json` / `.pdf`):
-   EA × exact rate, blank while any in-scope amount is unknown.
+   an ASSEMBLY BoQ from ONE resolved quantity model (for jobs that declare
+   assemblies the run asserts: project total == both BoQ views == the CSV
+   grand total; the audit fails the run if they ever disagree), and — with
+   a rate profile — an assembly-EA estimate (`estimate.md` / `.json` /
+   `.pdf`): EA × exact rate, blank while any in-scope amount is unknown —
+   plus a proposal-lite PDF/BoQ quote document built from that corrected
+   estimate.
 
 The skill **runs to completion** and reports once at the end. Anything
 unresolvable stays **BLANK** (never zero) behind a named CALLOUT; the run
 status is `complete`, `complete_with_callouts`, or `stopped` (exit codes
-0 / 0 / 2). Exactly three things stop a job: no valid calibration anywhere,
-no schedule and no repeatable pattern, or a source-file integrity mismatch.
+0 / 0 / 2). Exactly three kinds of DATA failure stop a job: no valid
+calibration anywhere, no schedule and no repeatable pattern, or a
+source-file integrity mismatch. A MALFORMED job spec (schema violations,
+bad hashes, invalid evidence structure) also refuses to run — that is
+spec validation, not a takeoff stop.
 
 ## Who it's for
 
@@ -64,9 +70,15 @@ no Python install needed — uv provisions Python for the skill's scripts.
 
 ### Step 2 — get the skill folder
 
+This README ships inside the skill repo. If you are reading it after a
+to-org transfer, replace `ORG-URL-PLACEHOLDER` below with the repository
+URL your organization publishes at transfer time (the transferor should
+substitute their own repo URL, or publish the repo under the new org and
+update this line before handing over).
+
 ```powershell
 cd $env:USERPROFILE\Downloads
-git clone https://github.com/keshflp/countertop-takeoff-skill.git
+git clone ORG-URL-PLACEHOLDER
 ```
 
 (No git? Click **Code → Download ZIP** on the GitHub page and unzip.)
@@ -81,9 +93,9 @@ git clone https://github.com/keshflp/countertop-takeoff-skill.git
 - **Any other agent**: copy the `countertop-takeoff\` folder into the
   skills directory your agent documents — or skip copying and just tell the
   agent where the folder is.
-- **Zero-step option**: tell your agent *"Install the skill from
-  github.com/keshflp/countertop-takeoff-skill"* — a good agent will clone
-  the repo and follow `SKILL.md` on its own.
+- **Zero-step option**: tell your agent *"Install the countertop-takeoff
+  skill from <the repository URL your organization published>"* — a good
+  agent will clone the repo and follow `SKILL.md` on its own.
 
 ## Host interfaces (where the takeoff runs)
 
@@ -116,8 +128,9 @@ say:
 
 or just:
 
-> Install the skill from github.com/keshflp/countertop-takeoff-skill, then
-> do the countertop takeoff on the PDFs in this folder.
+> Install the countertop-takeoff skill from the repo URL your organization
+> published (see Step 2), then do the countertop takeoff on the PDFs in
+> this folder.
 
 The agent runs to completion and reports once: a markdown report (scope
 ledger, schedule evidence, calibration spans with actual factors, CALLOUTS,
@@ -193,8 +206,21 @@ py countertop-takeoff\scripts\index_pdf.py plans.pdf
 
 ## Updating
 
-`git pull` inside the cloned repo (or just tell your agent: *"update the
-countertop-takeoff skill from GitHub"*).
+Two situations, two workflows:
+
+- **Cloned repo (recommended).** You installed by cloning. Update with
+  ```powershell
+  git pull --ff-only
+  ```
+  inside the cloned repo — `--ff-only` refuses a tangled history instead
+  of silently merging local edits; if it stops, your local changes need a
+  branch of their own. Or just tell your agent: *"update the
+  countertop-takeoff skill from its repository with `git pull --ff-only`"*.
+- **Separately-copied skill folder.** You copied `countertop-takeoff\`
+  into an agent skills directory. A copy does NOT update itself: re-clone
+  or re-download the repo, then re-copy the folder (and re-do any local
+  edits you made). Prefer the clone workflow so `git pull --ff-only`
+  keeps you current.
 
 ## Roadmap
 
@@ -203,19 +229,20 @@ countertop-takeoff skill from GitHub"*).
 | V1 | Square footage per unit type, schedule multiplication, QA report + CSV |
 | V2 | Pack preflight, scope ledger, evidence-backed schedule, per-viewport calibration, selected-boundary measurement, audit pack |
 | V3 | Multiple sources (PDF/DXF/raster), bitmap-schedule transcription, room-tag reconciliation, graduated degradation with CALLOUTS + coverage ledger, assemblies/pieces with edges/splash/cutouts, dual BoQ views, package rules, intake manifest, hotel-grade field traps |
-| V4 (this repo) | ONE resolved quantity model (project total == both BoQ views == report == CSVs; included variants subtracted, never re-added), quantities bound to evidence (numeric correspondence, tag-derived reconciliation, recomputed image route, mandatory overlay), consistent local degradation (three stops only), CAD correctness (metres, INSUNITS, MINSERT, layer-0, bulge arcs ≤0.5%), assembly-EA estimate (estimate.md/json/pdf, rate × EA), intake collisions + structured metadata |
-| V5 | Quote documents + QuickBooks export on top of the EA estimate |
-| V6 | Shop-drawing PDFs generated from the measured polygons |
+| V4 | ONE resolved quantity model (project total == both BoQ views == report == CSVs; included variants subtracted, never re-added), quantities bound to evidence (numeric correspondence, tag-derived reconciliation, recomputed image route, mandatory overlay), consistent local degradation (three stops only), CAD correctness (metres, INSUNITS, MINSERT, layer-0, bulge arcs ≤0.5%), assembly-EA estimate (estimate.md/json/pdf, rate × EA), intake collisions + structured metadata |
+| V5 (this repo) | Publish safety (de-aliased estimate paths, stale-artifact quarantine + stopped diagnostics), evidence identity repairs (row_text descriptive-only, reciprocal piece/assembly membership, repeated-geometry withholding, declared reuse, uncertain included variants), estimate scope inheritance (stopped/missing-BoQ refusal, omitted scope = unknown amounts, one currency), consistent uncertainty (zero EA, named edge blanks, strict-pair reconciliation, completeness flags, blank-not-zero type totals), audit-pack + estimate-PDF repairs, proposal-lite quote document (json/md/pdf), QuickBooks mapping groundwork (docs only) |
+| V6 | Exploratory only: drawing outputs derived from the measured polygons — scope undecided, not promised |
 
 ## Repo layout
 
 ```
 countertop-takeoff/            <- the skill folder (this is what you install)
-  SKILL.md                     <- the V3 workflow your agent follows
+  SKILL.md                     <- the V5 workflow your agent follows
   references/job-spec-v3.md    <- the V3 job-spec (evidence document) schema
   references/method.md         <- preflight, calibration, boundaries, audit
   references/output-format.md  <- exact report/CSV/JSON/pack formats
   references/company-profile.md<- profile schema + package defaults
+  references/quickbooks-mapping.md <- QB import groundwork (docs only)
   references/cad-context.md    <- CAD landscape + optional escalations
   scripts/preflight_lib.py     <- shared page stats/fingerprints/classes
   scripts/index_pdf.py         <- pack preflight + page inventory
@@ -232,6 +259,7 @@ countertop-takeoff/            <- the skill folder (this is what you install)
   scripts/report_out.py        <- report/CSV/evidence-JSON writers
   scripts/audit_pack.py        <- overlay PNGs + audit receipt
   scripts/estimate.py          <- assembly-EA estimate (rate x EA; md/json/pdf)
+  scripts/proposal.py          <- proposal-lite quote document (json/md/pdf)
   scripts/requirements.txt     <- pinned: pymupdf, shapely, ezdxf
   examples/make_fixture.py     <- fixtures (--case original|messy|hotel)
   examples/make_hotel_jobs.py  <- canonical V3 hotel job-spec builder
@@ -242,6 +270,9 @@ countertop-takeoff/            <- the skill folder (this is what you install)
   examples/tests_v4.py         <- V4 acceptance suite (resolved model,
                                   evidence binding, degradation, CAD,
                                   estimate, intake)
+  examples/tests_v5.py         <- V5 acceptance suite (publish safety,
+                                  identity, estimate scope, uncertainty,
+                                  audit-pack/PDF repairs, proposal)
 README.md                      <- this file
 LICENSE                        <- MIT
 ```

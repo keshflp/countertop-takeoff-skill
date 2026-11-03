@@ -9,10 +9,12 @@ shared method)
 
 - ONE RESOLVED QUANTITY MODEL: every deliverable total (project, type
   rows, assembly BoQ, piece BoQ, CSV grand total) derives from the same
-  resolved records and cannot disagree; the run reconciles the views
-  against each other (not by regrouping extensions). Included variants
-  (e.g. ADA inside a parent type) are SUBTRACTED from parent counts;
-  package scope applies once per assembly in every aggregation branch.
+  resolved records; for jobs that declare assemblies the run ASSERTS the
+  views agree — it reconciles them against each other over the SAME known
+  contributions (not by regrouping extensions), and a disagreement fails
+  the run. Included variants (e.g. ADA inside a parent type) are
+  SUBTRACTED from parent counts; package scope applies once per assembly
+  in every aggregation branch.
 - EVIDENCE BINDING: schedule counts must correspond NUMERICALLY to the
   quoted evidence ("3" never supports 30; image-evidence counts cite
   `count_cells`); room reconciliation derives counts from the deduped tag
@@ -21,7 +23,8 @@ shared method)
   pixels is rejected), requires the crop bound to (source, page, bbox,
   zoom) and the overlay proof; `real_ft` overrides contradicting readable
   labels become callouts.
-- CONSISTENT DEGRADATION: only the three stops stop a job. Image-range
+- CONSISTENT DEGRADATION: only the three DATA stops stop a job (a
+  malformed job spec refuses separately, before any measuring). Image-range
   breaches, overlaps, duplicate boundaries, unplanned regions, and failed
   rechecks degrade LOCALLY — the affected records are withheld blank
   (numeric quantities NULLED; the measured value kept aside as
@@ -58,7 +61,9 @@ V2-established method)
   boxes bound spans and region seeds.
 - Graduated degradation: recoverable failures resolve to UNRESOLVED
   records with BLANK quantities + callouts; run status is complete /
-  complete_with_callouts / stopped; exactly three stops (see SKILL.md).
+  complete_with_callouts / stopped; exactly three DATA stops (see
+  SKILL.md — malformed job specs refuse separately as spec-validation
+  errors, they are not one of the three).
 - Routes in order: vector PDF -> supplied DXF with verified units
   ($INSUNITS; unitless refuses without an explicit --units declaration,
   recorded operator-verified) -> calibrated image-space measurement

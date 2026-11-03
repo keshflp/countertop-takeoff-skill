@@ -999,6 +999,55 @@ def proposal_tests():
           refused2, "no refusal")
 
 
+# ------------------------------------------------ P1.4 docs alignment
+def docs_tests():
+    root = os.path.dirname(SKILL)                       # repo root
+    sk = os.path.join(root, "countertop-takeoff")       # skill folder
+    readme = open(os.path.join(root, "README.md"),
+                  encoding="utf-8").read()
+    qb_path = os.path.join(sk, "references", "quickbooks-mapping.md")
+    qb = open(qb_path, encoding="utf-8").read() if os.path.exists(qb_path) \
+        else ""
+    check("docs: quickbooks-mapping.md exists with the US importer"
+          " constraints and the no-integration statement",
+          bool(qb) and "1000 rows" in qb and "100 invoices" in qb
+          and "real account" in qb
+          and "NO QuickBooks API/MCP integration" in qb
+          and "sales-tax" in qb,
+          f"exists={os.path.exists(qb_path)}")
+    check("docs: README install examples carry NO hardcoded personal repo"
+          " URL (org placeholder at transfer time)",
+          "keshflp" not in readme and "ORG-URL-PLACEHOLDER" in readme
+          and "--ff-only" in readme,
+          "")
+    check("docs: README explains clone-update vs separately-copied-skill",
+          "Separately-copied skill folder" in readme
+          and "does NOT update itself" in readme, "")
+    check("docs: README roadmap promises no shop drawings and marks V6"
+          " exploratory",
+          "not promised" in readme and "Exploratory" in readme
+          and "Shop-drawing PDFs generated" not in readme, "")
+    check("docs: README qualifies the three DATA stops + spec refusal and"
+          " scopes the equal-total claim to assembly jobs",
+          "three kinds of DATA failure" in readme
+          and "spec validation" in readme
+          and "for jobs that declare" in readme, "")
+    cp = open(os.path.join(sk, "references", "company-profile.md"),
+              encoding="utf-8").read()
+    check("docs: company-profile.md aligns required_components with the"
+          " implementation (recorded, NOT enforced)",
+          "NOT enforced" in cp and "Recorded + echoed" in cp, "")
+    method = open(os.path.join(sk, "references", "method.md"),
+                  encoding="utf-8").read()
+    check("docs: method.md scopes the three-stop + equal-total claims"
+          " correctly",
+          "three DATA stops" in method and "ASSERTS the" in method, "")
+    check("docs: job-spec-v3.md documents piece_geometry_reuse",
+          "piece_geometry_reuse" in open(os.path.join(
+              sk, "references", "job-spec-v3.md"),
+              encoding="utf-8").read(), "")
+
+
 def main():
     global ORIG_PDFS, ORIG_GEO
     shutil.rmtree(BUILD, ignore_errors=True)
@@ -1015,6 +1064,7 @@ def main():
     audit_pack_tests()
     estimate_pdf_tests()
     proposal_tests()
+    docs_tests()
     print()
     failed = [r for r in RESULTS if not r[1]]
     for name, ok, detail in RESULTS:
