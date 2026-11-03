@@ -164,6 +164,11 @@ def run_pipeline(args):
                 "no gross-area policy: set policy.gross_area in the job spec"
                 " or gross_net_policy in the company profile - never guessed")
     spec_schema.resolve_materials(spec, profile)
+    # Package scope rules: company-profile defaults, job policy override.
+    spec["_excluded_packages"] = spec_schema.excluded_packages(spec, profile)
+    if spec["_excluded_packages"]:
+        print(f"packages   : excluded by rule ="
+              f" {sorted(spec['_excluded_packages'])} (reported separately)")
     geometry_map = load_geometry_map(spec, base_dir)
     default_source = spec_schema.default_source_id(spec)
     pages_by_no = {}
@@ -231,7 +236,13 @@ def finish(spec, geometry_map, calibrations, types, total, audit_obj, results,
         profile_summary = {k: profile.get(k) for k in (
             "profile_version", "company", "gross_net_policy",
             "required_components", "approved_assumptions")}
-    ledger = audit_mod.build_coverage_ledger(spec, results, audit_obj)
+    ledger = audit_mod.build_coverage_ledger(
+        spec, results, audit_obj,
+        results_by_id={r["region_id"]: r for r in results})
+    assembly_rows = audit_mod.build_assembly_boq(spec, audit_obj)
+    piece_rows = audit_mod.build_piece_boq(
+        spec, {r["region_id"]: r for r in results}, assembly_rows, audit_obj)
+    audit_mod.audit_dual_boq(assembly_rows, piece_rows, audit_obj)
     # Run status is one of: complete | complete_with_callouts | stopped.
     # Callouts/warnings degrade locally; remaining FAIL items are stops.
     run_status = ("stopped" if audit_obj.failed else
@@ -240,7 +251,7 @@ def finish(spec, geometry_map, calibrations, types, total, audit_obj, results,
                    else "complete"))
     report = report_out.build_report(spec, calibrations, types, total,
                                      audit_obj, review_status, run_status,
-                                     ledger)
+                                     ledger, assembly_rows, piece_rows)
     print()
     print(report)
     if args.report:
@@ -251,6 +262,8 @@ def finish(spec, geometry_map, calibrations, types, total, audit_obj, results,
         review_status, settings, unit_total, coverage_ledger=ledger)
     payload["run_status"] = run_status
     payload["status"] = run_status
+    payload["assembly_boq"] = assembly_rows
+    payload["piece_boq"] = piece_rows
     if profile_summary:
         payload["profile"] = profile_summary
     if args.json_path:
@@ -266,6 +279,13 @@ def finish(spec, geometry_map, calibrations, types, total, audit_obj, results,
     if args.csv_path:
         total_csv = report_out.write_csv(args.csv_path, spec, types, results)
         print(f"wrote {args.csv_path} (extended total {total_csv:.2f} SF)")
+    if args.piece_csv and piece_rows:
+        report_out.write_piece_csv(args.piece_csv, piece_rows)
+        print(f"wrote {args.piece_csv} (piece BoQ: {len(piece_rows)} row(s))")
+    if args.assembly_csv and assembly_rows:
+        report_out.write_assembly_csv(args.assembly_csv, assembly_rows)
+        print(f"wrote {args.assembly_csv} (assembly BoQ:"
+              f" {len(assembly_rows)} row(s))")
     return 0
 
 
@@ -275,6 +295,12 @@ def parse_args(argv=None):
     ap.add_argument("--report", help="write markdown report here")
     ap.add_argument("--csv", dest="csv_path", help="write base-rows CSV here"
                     " (only when no required check failed)")
+    ap.add_argument("--piece-csv", dest="piece_csv",
+                    help="write the PIECE BoQ CSV (dims, SF, edge LF, splash,"
+                    " cutouts, extensions)")
+    ap.add_argument("--assembly-csv", dest="assembly_csv",
+                    help="write the ASSEMBLY BoQ CSV (inch descriptions, EA x"
+                    " validated count)")
     ap.add_argument("--json", dest="json_path",
                     help="write full evidence JSON here")
     ap.add_argument("--snap", type=float, default=0.05,

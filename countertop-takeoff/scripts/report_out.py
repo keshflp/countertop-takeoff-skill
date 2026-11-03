@@ -206,6 +206,82 @@ def callout_lines(audit):
     return lines
 
 
+def _fmt(v, nd=2):
+    """Blank-aware formatter: unknown quantities render as a blank marker,
+    never as zero."""
+    if v is None:
+        return "__blank__"
+    if isinstance(v, float):
+        return f"{v:.{nd}f}"
+    return str(v)
+
+
+def assembly_boq_lines(assembly_rows, excluded_packages):
+    if not assembly_rows:
+        return []
+    lines = ["", "## ASSEMBLY BoQ", "",
+             "One row per assembly; EA comes from the validated quantity"
+             " basis. **This view is never summed with the PIECE BoQ below**"
+             " - they describe the same records.", "",
+             "| assembly | room/type/variant | package | finish | W x D x H"
+             " (in) | hand | EA | basis | state |",
+             "|----------|-------------------|---------|--------|-----------"
+             "----|------|---:|-------|-------|"]
+    for r in assembly_rows:
+        dims = " x ".join(_fmt(r.get(k)) for k in
+                           ("width_in", "depth_in", "height_in"))
+        lines.append(
+            f"| {r['assembly_id']} | {r.get('room') or '-'}/{r['type']}"
+            f"/{r.get('variant') or '-'} | {r['package']}"
+            f" | {r.get('finish_tag') or '-'} | {dims}"
+            f" | {r.get('handing') or '-'} | {_fmt(r.get('ea'))}"
+            f" | {r['basis'][:40]} | {r['state']} |")
+    if excluded_packages:
+        lines += ["", f"Excluded packages ({', '.join(sorted(excluded_packages))})"
+                  " are listed above with state `package_excluded` and are"
+                  " reported separately - excluded from main totals."]
+    return lines
+
+
+def piece_boq_lines(piece_rows):
+    if not piece_rows:
+        return []
+    lines = ["", "## PIECE BoQ", "",
+             "Per piece: inch dims, SF, edge LF by profile, splash LF/SF,"
+             " cutout EA, extensions at the SAME validated counts. **Never"
+             " summed with the ASSEMBLY BoQ.**", "",
+             "| piece | assembly | dims (in) | SF | edge LF by profile |"
+             " splash LF/SF | cutouts EA | EA | ext SF | finish |",
+             "|-------|----------|-----------|---:|--------------------|"
+             "--------------|------------|---:|-------:|--------|"]
+    finishes = {}
+    for r in piece_rows:
+        d = r.get("dims_in") or {}
+        dims = " x ".join(_fmt(d.get(k)) for k in
+                           ("width", "depth", "height")) if d else \
+            "(geometry route)"
+        edges = ", ".join(f"{k}={v:.2f}" for k, v in
+                          (r.get("edge_lf_by_profile") or {}).items()) or "-"
+        splash = (f"{_fmt(r.get('splash_lf'))}/{_fmt(r.get('splash_sf'))}"
+                  if (r.get("splash_lf") or r.get("splash_sf")) else "-")
+        cuts = ", ".join(f"{k}={v}" for k, v in
+                         (r.get("cutouts_ea") or {}).items()) or "-"
+        lines.append(
+            f"| {r['piece_id']} | {r['assembly_id']} | {dims}"
+            f" | {_fmt(r.get('sf'))} | {edges} | {splash} | {cuts}"
+            f" | {_fmt(r.get('count'))} | {_fmt(r.get('extension_sf'))}"
+            f" | {r.get('finish_tag') or '-'} |")
+        tag = r.get("finish_tag")
+        if tag:
+            finishes.setdefault(tag, 0)
+            finishes[tag] += 1
+    for tag, n in sorted(finishes.items()):
+        lines.append("")
+        lines.append(f"Finish group **{tag}** ({n} piece(s)): brand/color TBD"
+                     " - verify in the FF&E manual before ordering.")
+    return lines
+
+
 def ledger_lines(ledger):
     lines = ["", "## Coverage ledger", "",
              "Every inventoried item reconciles to exactly one state:",
@@ -222,7 +298,8 @@ def ledger_lines(ledger):
 
 
 def build_report(spec, calibrations, types, total, audit, review_status,
-                 run_status="complete", ledger=None):
+                 run_status="complete", ledger=None, assembly_rows=None,
+                 piece_rows=None):
     lines = ["# Countertop Takeoff Report (V3)", ""]
     lines.append(f"- source(s): {sources_line(spec)}")
     lines.append(f"- generated: {runtime_versions()['generated_utc']}")
@@ -240,6 +317,9 @@ def build_report(spec, calibrations, types, total, audit, review_status,
     lines += callout_lines(audit)
     if ledger is not None:
         lines += ledger_lines(ledger)
+    lines += assembly_boq_lines(assembly_rows or [],
+                                spec.get("_excluded_packages") or set())
+    lines += piece_boq_lines(piece_rows or [])
     lines += audit_lines(audit, review_status)
     lines += ["", status_line(run_status, audit), ""]
     return "\n".join(lines) + "\n"
@@ -310,6 +390,65 @@ def write_csv(path, spec, types, results):
         w.writerow(CSV_COLUMNS)
         w.writerows(rows)
     return total
+
+
+PIECE_CSV_COLUMNS = ["piece_id", "assembly_id", "room", "type", "package",
+                     "finish_tag", "route", "width_in", "depth_in",
+                     "height_in", "sf", "edge_lf_by_profile", "splash_lf",
+                     "splash_sf", "cutouts_ea", "count", "extension_sf",
+                     "state", "source_pages"]
+
+ASSEMBLY_CSV_COLUMNS = ["assembly_id", "room", "type", "variant", "package",
+                        "finish_tag", "width_in", "depth_in", "height_in",
+                        "handing", "ea", "basis", "state"]
+
+
+def _num(v):
+    return "" if v is None else (f"{v:.4f}" if isinstance(v, float) else v)
+
+
+def write_piece_csv(path, piece_rows):
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(PIECE_CSV_COLUMNS)
+        for r in piece_rows:
+            d_ = r.get("dims_in") or {}
+            links = r.get("source_links") or {}
+            pages = sorted({l.get("page") for l in links.values()
+                            if l.get("page")})
+            w.writerow([
+                r["piece_id"], r["assembly_id"], r.get("room") or "",
+                r.get("type") or "", r.get("package") or "",
+                r.get("finish_tag") or "", r["route"],
+                _num(d_.get("width")), _num(d_.get("depth")),
+                _num(d_.get("height")), _num(r.get("sf")),
+                json.dumps(r.get("edge_lf_by_profile") or {}, sort_keys=True),
+                _num(r.get("splash_lf")), _num(r.get("splash_sf")),
+                json.dumps(r.get("cutouts_ea") or {}, sort_keys=True),
+                _num(r.get("count")), _num(r.get("extension_sf")),
+                r["state"], ";".join(str(p) for p in pages)])
+    return len(piece_rows)
+
+
+def write_assembly_csv(path, assembly_rows):
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(ASSEMBLY_CSV_COLUMNS)
+        for r in assembly_rows:
+            w.writerow([
+                r["assembly_id"], r.get("room") or "", r["type"],
+                r.get("variant") or "", r["package"],
+                r.get("finish_tag") or "", _num(r.get("width_in")),
+                _num(r.get("depth_in")), _num(r.get("height_in")),
+                r.get("handing") or "", _num(r.get("ea")), r["basis"],
+                r["state"]])
+    return len(assembly_rows)
 
 
 def quarantine_stale_export(path, when_utc):
