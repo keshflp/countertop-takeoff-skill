@@ -85,6 +85,18 @@ def run_pipeline(args):
             spec["source"].get("pdf"), str):
         spec["source"]["pdf"] = resolve_path(spec["source"]["pdf"], base_dir)
     parsed = spec_schema.validate_spec(spec)
+    profile = spec_schema.validate_profile(spec, base_dir)
+    if not spec["policy"].get("gross_area"):
+        if profile and profile.get("gross_net_policy"):
+            spec["policy"]["gross_area"] = profile["gross_net_policy"]
+            print(f"policy     : inherited from profile"
+                  f" ({spec['policy']['gross_area']})")
+        else:
+            raise TakeoffError(
+                "no gross-area policy: set policy.gross_area in the job spec"
+                " or gross_net_policy in the company profile - v2 never"
+                " guesses")
+    spec_schema.resolve_materials(spec, profile)
     geometry = load_json(spec["geometry"])
     print(f"jobs spec  : {args.jobs}")
     print(f"source     : {spec['source']['pdf']}")
@@ -117,14 +129,19 @@ def run_pipeline(args):
                                   args.recheck_tolerance)
     types, total = audit_mod.aggregate_types(spec, results, audit_obj)
     return finish(spec, geometry, calibrations, types, total, audit_obj,
-                  results, unit_total, args)
+                  results, unit_total, args, profile)
 
 
 def finish(spec, geometry, calibrations, types, total, audit_obj, results,
-           unit_total, args):
+           unit_total, args, profile):
     review_status = REVIEW_PENDING
     settings = {"snap_pt": args.snap,
                 "recheck_tolerance_pct": args.recheck_tolerance}
+    profile_summary = None
+    if profile:
+        profile_summary = {k: profile.get(k) for k in (
+            "profile_version", "company", "gross_net_policy",
+            "required_components", "approved_assumptions")}
     report = report_out.build_report(spec, calibrations, types, total,
                                      audit_obj, review_status)
     print()
@@ -136,6 +153,8 @@ def finish(spec, geometry, calibrations, types, total, audit_obj, results,
         payload = report_out.build_results(
             spec, geometry, calibrations, types, total, audit_obj, results,
             review_status, settings, unit_total)
+        if profile_summary:
+            payload["profile"] = profile_summary
         report_out.write_json(args.json_path, payload)
         print(f"wrote {args.json_path}")
     if audit_obj.failed:

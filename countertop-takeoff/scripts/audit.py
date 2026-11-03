@@ -347,6 +347,8 @@ def aggregate_types(spec, results, audit):
         sf_unit = round(sum(r["area_sf"] for r in std), 4)
         ext = sf_unit * std_units
         rows = [{"room_type": name, "variant": None, "region_id": r["region_id"],
+                 "assembly": r.get("assembly"),
+                 "material_canonical": r.get("material_canonical"),
                  "sf": r["area_sf"], "count": std_units,
                  "extended_sf": round(r["area_sf"] * std_units, 2),
                  "regions": [r]} for r in std]
@@ -358,8 +360,10 @@ def aggregate_types(spec, results, audit):
             vsf = round(sum(r["area_sf"] for r in vr), 4)
             ext += vsf * v["count"]
             rows += [{"room_type": name, "variant": v["name"],
-                      "region_id": r["region_id"], "sf": r["area_sf"],
-                      "count": v["count"],
+                      "region_id": r["region_id"],
+                      "assembly": r.get("assembly"),
+                      "material_canonical": r.get("material_canonical"),
+                      "sf": r["area_sf"], "count": v["count"],
                       "extended_sf": round(r["area_sf"] * v["count"], 2),
                       "regions": [r]} for r in vr]
         types.append({"room_type": name, "schedule_count": t["count"],
@@ -367,7 +371,7 @@ def aggregate_types(spec, results, audit):
                       "extended_sf": round(ext, 2), "rows": rows})
         total += ext
     total = round(total, 2)
-    units = sum(t["schedule_count"] for t in sched["types"]) + sum(
+    units = sum(t["count"] for t in sched["types"]) + sum(
         v["count"] for v in sched.get("variants", [])
         if not v["included_in_parent_total"])
     audit.add("totals", "pass",

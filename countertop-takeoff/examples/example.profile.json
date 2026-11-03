@@ -1,0 +1,23 @@
+{
+  "profile_version": "1",
+  "company": "Example Counter Tops LLC",
+  "material_aliases": {
+    "plastic-laminate": "postformed-laminate",
+    "laminate": "postformed-laminate",
+    "post-formed plastic laminate": "postformed-laminate",
+    "cultured marble": "cultured-marble",
+    "quartz": "engineered-stone",
+    "granite": "natural-stone"
+  },
+  "gross_net_policy": "gross",
+  "required_components": ["counter", "vanity"],
+  "report_preferences": {
+    "group_by": "assembly",
+    "show_edge_lf": false
+  },
+  "approved_assumptions": [
+    "Areas measured from drawn geometry; plan/spec conflicts recorded as declarations.",
+    "Cutouts subtracted only when declared (net policy) - see method.md section 5.",
+    "Material identity is bookkeeping only; SF is the active quantity."
+  ]
+}

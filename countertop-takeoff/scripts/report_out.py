@@ -130,14 +130,18 @@ def takeoff_lines(spec, types, total):
             title += (f" - schedule count {t['schedule_count']}"
                       f" ({t['std_units']} standard unit(s) + variants)")
         lines += [title, "",
-                  "| region | variant | sheet (page, viewport) | SF | count"
-                  " | extended SF | factor pt/ft |",
-                  "|--------|---------|------------------------|---:|---:"
+                  "| region | variant | assembly/material | sheet (page, viewport) | SF |"
+                  " count | extended SF | factor pt/ft |",
+                  "|--------|---------|-------------------|------------------------|---:|---:"
                   "|-----------:|-------------:|"]
         for row in t["rows"]:
             r = row["regions"][0]
+            ident = row.get("assembly") or "-"
+            if row.get("material_canonical"):
+                ident += f" / {row['material_canonical']}"
             lines.append(
                 f"| {row['region_id']} | {row['variant'] or '-'} "
+                f"| {ident} "
                 f"| {r['sheet']} ({r['page']}, {r['viewport']}) "
                 f"| {row['sf']:.2f} | {row['count']} "
                 f"| {row['extended_sf']:.2f} "

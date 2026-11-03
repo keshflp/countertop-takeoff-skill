@@ -47,7 +47,9 @@ Every numeric field is checked finite; every count is a positive integer.
 Structural violations raise SpecError (hard stop, exit 2).
 """
 
+import json
 import math
+import os
 import re
 
 SCHEMA_TAG = "countertop-takeoff/v2"
@@ -126,8 +128,13 @@ def validate_mode_and_policy(spec):
     require(mode in MODES, f"mode must be one of {sorted(MODES)}"
             " - the takeoff refuses to infer it")
     policy = spec.get("policy")
-    require(isinstance(policy, dict) and policy.get("gross_area") in GROSS_POLICIES,
-            f"policy.gross_area must be one of {sorted(GROSS_POLICIES)}"
+    require(isinstance(policy, dict),
+            "'policy' object is required (gross_area may come from the"
+            " company profile, but the block must exist)")
+    ga = policy.get("gross_area")
+    require(ga is None or ga in GROSS_POLICIES,
+            f"policy.gross_area must be one of {sorted(GROSS_POLICIES)} or"
+            " omitted to inherit the profile default"
             " - v1 silently subtracted inner loops; v2 requires an explicit"
             " policy")
     decls = policy.get("declarations", [])
@@ -136,6 +143,64 @@ def validate_mode_and_policy(spec):
         require(isinstance(d, dict) and isinstance(d.get("kind"), str)
                 and isinstance(d.get("detail"), str) and d["detail"],
                 f"policy.declarations[{i}] needs kind + detail")
+
+
+PROFILE_KEYS = {"profile_version", "company", "material_aliases",
+                "gross_net_policy", "required_components",
+                "report_preferences", "approved_assumptions"}
+
+
+def validate_profile(spec, base_dir):
+    """Load + structurally validate the optional company profile."""
+    path = spec.get("profile")
+    if not path:
+        return None
+    require(isinstance(path, str) and path,
+            "'profile' must name a profile JSON file")
+    full = path if os.path.exists(path) else os.path.join(base_dir, path)
+    require(os.path.exists(full), f"profile file not found: {path}")
+    with open(full, "r", encoding="utf-8") as f:
+        profile = json.load(f)
+    require(isinstance(profile, dict), "profile must be a JSON object")
+    unknown = set(profile) - PROFILE_KEYS
+    require(not unknown,
+            f"profile has unknown keys {sorted(unknown)} - a typo must not"
+            " pass silently (see references/company-profile.md)")
+    aliases = profile.get("material_aliases", {})
+    require(isinstance(aliases, dict), "material_aliases must be an object")
+    for k, v in aliases.items():
+        require(isinstance(k, str) and isinstance(v, str) and v,
+                "material_aliases must map strings to canonical names")
+    gnp = profile.get("gross_net_policy")
+    require(gnp is None or gnp in GROSS_POLICIES,
+            f"profile gross_net_policy must be one of {sorted(GROSS_POLICIES)}")
+    for k in ("required_components", "approved_assumptions"):
+        v = profile.get(k, [])
+        require(isinstance(v, list) and all(isinstance(x, str) for x in v),
+                f"profile {k} must be a list of strings")
+    require(isinstance(profile.get("report_preferences", {}), dict),
+            "report_preferences must be an object")
+    return profile
+
+
+def resolve_materials(spec, profile):
+    """Resolve region materials via the profile aliases (identity only,
+    SF stays the active quantity)."""
+    if not profile:
+        return
+    aliases = profile.get("material_aliases", {})
+    canonical = set(aliases.values())
+    for r in spec["regions"]:
+        mat = r.get("material")
+        if not mat:
+            continue
+        canon = aliases.get(mat)
+        if canon is None:
+            require(mat in canonical,
+                    f"region {r['region_id']}: material {mat!r} resolves via"
+                    " neither the profile aliases nor its canonical names")
+            canon = mat
+        r["material_canonical"] = canon
 
 
 def validate_scope(spec):
@@ -276,6 +341,11 @@ def validate_regions(spec, sched):
         ids.add(rid)
     for r in regions:
         rid = r["region_id"]
+        for k in ("assembly", "material"):
+            require(k not in r or isinstance(r[k], str),
+                    f"{rid}: {k} must be a string (identity only in V2)")
+    for r in regions:
+        rid = r["region_id"]
         kind = r.get("kind", "base")
         require(kind in REGION_KINDS, f"{rid}: kind must be one of"
                 f" {sorted(REGION_KINDS)}")
@@ -315,7 +385,9 @@ def validate_regions(spec, sched):
 
 
 def validate_spec(spec):
-    """Validate everything structural. Returns {scope, schedule, regions}."""
+    """Validate everything structural EXCEPT the optional profile (which the
+    pipeline loads with the job file's folder for relative paths).
+    Returns {scope, schedule, regions}."""
     validate_source(spec)
     validate_mode_and_policy(spec)
     scope = validate_scope(spec)

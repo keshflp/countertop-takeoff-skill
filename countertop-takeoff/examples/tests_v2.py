@@ -293,6 +293,7 @@ def main():
     geo = {"orig": os.path.join(BUILD, "orig.geometry.json"),
            "messy": os.path.join(BUILD, "messy.geometry.json")}
     positives(pdfs, geo)
+    profile_tests(pdfs, geo)
     negative_tests(pdfs, geo)
     print()
     failed = [r for r in RESULTS if not r[1]]
@@ -403,6 +404,50 @@ def positives(pdfs, geo):
     check("receipt: recorded + review status updates",
           after["review_status"] == "independent_audit_approved"
           and after["review"]["reviewer"] == "fresh-agent: test")
+
+
+def profile_tests(pdfs, geo):
+    """P1 groundwork: company profile validation + material identity."""
+    prof_path = os.path.join(BUILD, "profile.json")
+    with open(prof_path, "w", encoding="utf-8") as f:
+        json.dump({"profile_version": "1", "company": "Test Shop",
+                   "material_aliases": {"laminate": "postformed-laminate"},
+                   "gross_net_policy": "gross",
+                   "required_components": ["counter", "vanity"],
+                   "approved_assumptions": ["drawn geometry is truth"]}, f)
+    spec = spec_original(pdfs, geo)
+    spec["profile"] = prof_path
+    spec["regions"][0]["material"] = "laminate"
+    spec["regions"][0]["assembly"] = "kitchen-run"
+    rc, res, err = run_measure(spec, "t_prof")
+    check("profile: valid profile passes", rc == 0, err[:120])
+    rk = next(r for r in res["regions"] if r["region_id"] == "A:kitchen")
+    check("profile: material resolved to canonical",
+          rk.get("material_canonical") == "postformed-laminate",
+          str(rk.get("material_canonical")))
+    check("profile: profile summary in results",
+          res.get("profile", {}).get("company") == "Test Shop")
+    # policy inherited from profile
+    spec2 = spec_original(pdfs, geo)
+    del spec2["policy"]["gross_area"]
+    spec2["profile"] = prof_path
+    rc2, res2, err2 = run_measure(spec2, "t_prof2")
+    check("profile: gross policy inherited", rc2 == 0, err2[:120])
+    # unresolved material refuses
+    spec3 = spec_original(pdfs, geo)
+    spec3["profile"] = prof_path
+    spec3["regions"][0]["material"] = "mystery-stone"
+    rc3, _, err3 = run_measure(spec3, "t_prof3")
+    check("profile: unresolved material refuses",
+          rc3 == 2 and "mystery-stone" in err3, err3[:140])
+    # unknown profile key refuses
+    with open(prof_path, "w", encoding="utf-8") as f:
+        json.dump({"profile_version": "1", "pricing": True}, f)
+    spec4 = spec_original(pdfs, geo)
+    spec4["profile"] = prof_path
+    rc4, _, err4 = run_measure(spec4, "t_prof4")
+    check("profile: unknown key refuses", rc4 == 2 and "pricing" in err4,
+          err4[:140])
 
 
 # ---------------------------------------------------------------- negative

@@ -174,6 +174,8 @@ def measure_region(region, page, factor, policy, snap_tol=SNAP_DEFAULT):
         "variant": region.get("variant"), "page": region["page"],
         "viewport": region.get("viewport") or "main",
         "sheet": region.get("sheet") or page.get("sheet") or "?",
+        "assembly": region.get("assembly"),
+        "material_canonical": region.get("material_canonical"),
         "boundary_seg_ids": region["boundary"]["seg_ids"],
         "cutouts": [c for c in region.get("cutouts", []) or []],
         "seed": list(region["seed"]),
