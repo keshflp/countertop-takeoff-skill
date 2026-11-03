@@ -227,6 +227,10 @@ def build_image_routes(pdf, workdir):
     bar: deliberately unusable low-res blob (zoom 0.15, 91.8x60 px into
     (330,160)-(560,400)) -> ~20 px/ft -> below the usable threshold ->
     BLANK + callout (partial completion proof).
+
+    V4 (P0.2): every measurement records its crop PROVENANCE (source_id,
+    page, crop_bbox, render_zoom - the crop binds to source/page/transform)
+    and renders its OVERLAY PROOF (mandatory for route acceptance).
     """
     sys.path.insert(0, os.path.join(SKILL, "scripts"))
     import image_measure
@@ -260,6 +264,11 @@ def build_image_routes(pdf, workdir):
     club = image_measure.measure_from_points(anchors, pts)
     club["crop"] = crop
     club["crop_sha256"] = hashlib.sha256(open(crop, "rb").read()).hexdigest()
+    club["provenance"] = {"source_id": "plans", "page": 9,
+                          "crop_bbox": box, "render_zoom": zoom}
+    club_overlay = os.path.join(workdir, "clubroom_overlay.png")
+    image_measure.render_overlay(crop, club, club_overlay)
+    club["overlay"] = club_overlay
     club_path = os.path.join(workdir, "clubroom_measure.json")
     json.dump(club, open(club_path, "w"), indent=1)
 
@@ -281,6 +290,11 @@ def build_image_routes(pdf, workdir):
     bar = image_measure.measure_from_points(bar_anchors, bar_pts)
     bar["crop"] = bar_crop
     bar["crop_sha256"] = hashlib.sha256(open(bar_crop, "rb").read()).hexdigest()
+    bar["provenance"] = {"source_id": "plans", "page": 9,
+                         "crop_bbox": bbox, "render_zoom": 3.0}
+    bar_overlay = os.path.join(workdir, "bar_overlay.png")
+    image_measure.render_overlay(bar_crop, bar, bar_overlay)
+    bar["overlay"] = bar_overlay
     bar_path = os.path.join(workdir, "bar_measure.json")
     json.dump(bar, open(bar_path, "w"), indent=1)
     return club_path, bar_path
@@ -357,64 +371,6 @@ def main(argv=None):
           f" {len(spec['assemblies'])} assembly(ies),"
           f" {len(spec['pieces'])} piece(s)")
     return 0
-    spec = {
-        "schema": "countertop-takeoff/v3",
-        "intake_manifest": None,
-        "sources": [{"source_id": "plans", "path": args.pdf,
-                     "sha256": sha, "kind": "pdf"}],
-        "geometry": args.geometry,
-        "mode": "repeated_types",
-        "policy": {"gross_area": "gross", "packages": {"exclude": ["FFE"]},
-                   "declarations": [
-                       {"kind": "scope_omission",
-                        "detail": "room 203 (TYPE A, floor 2) intentionally"
-                                  " omitted from this pass - its 15 SF stays"
-                                  " blank behind a coverage callout"},
-                       {"kind": "do_not_scale",
-                        "detail": "shop drawings carry DO NOT SCALE"
-                                  " DRAWINGS; all piece dims are STATED"
-                                  " dimensions from A-450/A-504"}]},
-        "profile": None,
-        "sheet_index": {"source_id": "plans", "page": 1,
-                        "lists": ["A-300", "A-301", "A-302", "A-303",
-                                  "A-304", "A-305", "A-306", "A-450",
-                                  "A-504", "A-511"]},
-        "schedule": {
-            "page": 2, "sheet": "A-301", "source_id": "plans",
-            "evidence": dict(ev, crop_image=rel(ev["crop_image"])),
-            "types": [
-                {"type": "A", "count": 6, "row_text": "bitmap TOTAL row:"
-                 " TYPE A 6 (floor 1: 3, floor 2: 3)",
-                 "word_boxes": []},
-                {"type": "B", "count": 2, "row_text": "bitmap TOTAL row:"
-                 " TYPE B 2 (floor 2: 2)",
-                 "word_boxes": []},
-                {"type": "GR", "count": 2, "row_text": "bitmap TOTAL row:"
-                 " TYPE GR 2 (excluded package, reported separately)",
-                 "word_boxes": []}],
-            "variants": [],
-            "stated_totals": {"per_floor": {"1": 4, "2": 6}, "project": 10},
-            "room_inventory": {
-                "rooms": [
-                    {"room": "101", "type": "A", "page": 3},
-                    {"room": "102", "type": "A", "page": 3},
-                    {"room": "103", "type": "A", "page": 3},
-                    {"room": "104", "type": "GR", "page": 3},
-                    {"room": "201", "type": "A", "page": 4},
-                    {"room": "202", "type": "A", "page": 4},
-                    {"room": "203", "type": "A", "page": 4},
-                    {"room": "204", "type": "B", "page": 4},
-                    {"room": "205", "type": "B", "page": 4},
-                    {"room": "206", "type": "GR", "page": 4}],
-                "per_type_counts": {"A": 6, "B": 2, "GR": 2},
-                "dedupe_notes": [
-                    "room 204 appears on the floor 2 plan AND enlarged on"
-                    " A-304 - same room, counted once",
-                    "room tags read from word-level TYPE tags on A-302/A-303"],
-                "count_resolutions": {}},
-        },
-    }
-    return spec
 
 
 def empty_spec(args, sha, ev, rel):
@@ -444,12 +400,18 @@ def empty_spec(args, sha, ev, rel):
             "evidence": dict(ev, crop_image=rel(ev["crop_image"])),
             "types": [
                 {"type": "A", "count": 6, "row_text": "bitmap TOTAL row:"
-                 " TYPE A 6 (floor 1: 3, floor 2: 3)", "word_boxes": []},
+                 " TYPE A 6 (floor 1: 3, floor 2: 3)", "word_boxes": [],
+                 "count_cells": [{"row": 1, "col": "TYPE A"},
+                                 {"row": 2, "col": "TYPE A"}]},
                 {"type": "B", "count": 2, "row_text": "bitmap TOTAL row:"
-                 " TYPE B 2 (floor 2: 2)", "word_boxes": []},
+                 " TYPE B 2 (floor 2: 2)", "word_boxes": [],
+                 "count_cells": [{"row": 1, "col": "TYPE B"},
+                                 {"row": 2, "col": "TYPE B"}]},
                 {"type": "GR", "count": 2, "row_text": "bitmap TOTAL row:"
                  " TYPE GR 2 (excluded package, reported separately)",
-                 "word_boxes": []}],
+                 "word_boxes": [],
+                 "count_cells": [{"row": 1, "col": "TYPE GR"},
+                                 {"row": 2, "col": "TYPE GR"}]}],
             "variants": [],
             "stated_totals": {"per_floor": {"1": 4, "2": 6}, "project": 10},
             "room_inventory": {
@@ -472,8 +434,6 @@ def empty_spec(args, sha, ev, rel):
                 "count_resolutions": {}},
         },
     }
-
-
 
 
 def _vp_span(pages, disp, page_no, x1, y1, x2, y2, labels, real_ft=None):

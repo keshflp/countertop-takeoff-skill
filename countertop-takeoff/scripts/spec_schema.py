@@ -385,6 +385,14 @@ def validate_schedule(spec):
                     f"type {name}: each row needs a floor label")
             require(isinstance(r.get("row_text"), str) and r["row_text"],
                     f"type {name}: each row needs row_text")
+        for i, ref in enumerate(t.get("count_cells") or []):
+            # P0.2 (image evidence): row/col pointers binding the count to
+            # transcribed cells so the VALUE is checked against the crop
+            require(isinstance(ref, dict) and isinstance(ref.get("row"), int)
+                    and not isinstance(ref["row"], bool)
+                    and isinstance(ref.get("col"), str) and ref["col"].strip(),
+                    f"type {name}: count_cells[{i}] must be {{row: int,"
+                    " col: str}} pointing at a transcribed evidence cell")
     variants = sched.get("variants", [])
     require(isinstance(variants, list), "schedule.variants must be a list")
     for v in variants:

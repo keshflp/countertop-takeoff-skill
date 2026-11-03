@@ -117,6 +117,7 @@ def calibrate_entry(entry, page):
     vp_box = entry.get("viewport_box")
     if vp_box is not None:
         require_viewport_box(vp_box, entry)
+    overrides = []
     spans_spec = entry.get("spans")
     if not isinstance(spans_spec, list) or len(spans_spec) < MIN_SPANS:
         raise CalibrationError(
@@ -169,11 +170,25 @@ def calibrate_entry(entry, page):
                 f"span {i} ({text!r}): dimension segments fall OUTSIDE the"
                 f" viewport_box {vp_box} - a span must calibrate the"
                 " viewport it is declared in")
+        # P0.2: an explicit real_ft override that CONTRADICTS the readable
+        # label is disclosed as a callout, never applied silently
+        override_warning = None
+        if source == "explicit" and parsed is not None \
+                and abs(real_ft - parsed) / parsed > 0.01:
+            override_warning = (
+                f"real_ft override {real_ft} contradicts the readable label"
+                f" {text!r} (= {parsed:.4f} ft) - confirm the override or"
+                " fix the selection")
+            overrides.append({"span": i, "label": text,
+                              "real_ft": real_ft, "parsed_ft": parsed,
+                              "warning": override_warning})
         spans.append({
             "label": text, "real_ft": round(real_ft, 6),
             "real_ft_source": source, "word_ids": label_ids,
             "seg_ids": ids, "length_pt": round(length, 4),
             "pt_per_ft": round(length / real_ft, 6),
+            "parsed_ft": (round(parsed, 6) if parsed is not None else None),
+            "override_warning": override_warning,
         })
     _require_span_independence(spans, entry, viewport)
     factors = [s["pt_per_ft"] for s in spans]
@@ -191,6 +206,7 @@ def calibrate_entry(entry, page):
         "viewport_box": vp_box,
         "spans": spans, "factor_pt_per_ft": round(factor, 6),
         "spread_pct": round(spread_pct, 3),
+        "overrides": overrides,
         "status": ("pass" if spread_pct <= PASS_SPREAD_PCT else "warning"),
     }
 

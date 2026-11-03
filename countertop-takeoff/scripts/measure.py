@@ -295,6 +295,13 @@ def run_pipeline(args):
                 f"source {key[0]!r} page {key[1]} viewport {key[2]!r}: spread"
                 f" {cal['spread_pct']:.2f}% in the documented 2-5% band -"
                 " explain it to the reviewer")
+        for ov in cal.get("overrides") or []:
+            # P0.2: real_ft overrides that contradict readable labels are
+            # disclosed, never applied silently
+            audit_obj.add_callout(
+                f"calibration override {key[0]!r} p{key[1]} {key[2]!r}",
+                ov.get("warning", ""), blank_fields=[],
+                pages=[key[1]], source_id=key[0])
     results = measure_all_regions(spec, pages_by_no, calibrations, args.snap,
                                   audit_obj, base_dir)
     audit_mod.audit_planned_vs_completed(spec, results, pages_by_no,

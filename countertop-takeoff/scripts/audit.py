@@ -18,6 +18,7 @@ V3 changes (graduated degradation + tolerant identity):
 """
 
 import os
+import re
 import statistics
 
 import preflight_lib as pl
@@ -26,6 +27,55 @@ from regions import check_duplicate_boundaries, check_overlaps
 from spec_schema import SpecError, TakeoffError
 
 RECHECK_TOLERANCE_PCT = 2.0
+_NUM_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _count_supported_by_evidence(count, box_texts, rows=None, row_text=""):
+    """Numeric correspondence, not word existence (P0.2): the count VALUE
+    must be supported by the quoted evidence. A word box containing '3'
+    must not support a count of 30. Accepted shapes:
+      - the count appears as an exact NUMBER token in the quoted box texts
+        or the quoted row text; or
+      - every quoted box text is a PURE integer and they SUM to the count
+        (floor cells quoted per floor, e.g. '5'+'5' -> 10); or
+      - the type declares floor rows and EVERY row's count appears as a
+        number token in its own quoted text (and the rows sum to the
+        count, which validate_schedule_consistency enforces separately).
+    Returns (ok, reason)."""
+    texts = [str(t) for t in (box_texts or []) if str(t).strip()]
+    if row_text:
+        texts.append(str(row_text))
+    tokens = [m.group(0) for t in texts
+              for m in _NUM_TOKEN_RE.finditer(t)]
+    for tok in tokens:
+        try:
+            if float(tok) == float(count):
+                return True, f"count {count} appears as a quoted number"
+        except (ValueError, OverflowError):
+            continue
+    box_only = [str(t).strip() for t in (box_texts or []) if str(t).strip()]
+    if box_only and all(re.fullmatch(r"\d+", t) for t in box_only):
+        total = sum(int(t) for t in box_only)
+        if total == int(count):
+            return True, (f"count {count} equals the sum of the quoted"
+                          f" row values {box_only}")
+    if rows:
+        joined = " ".join(texts)
+        row_tokens = {m.group(0) for m in _NUM_TOKEN_RE.finditer(joined)}
+        supported_rows = []
+        for r in rows:
+            rtxt = str(r.get("row_text") or "")
+            rtoks = {m.group(0) for m in _NUM_TOKEN_RE.finditer(rtxt)} \
+                | row_tokens
+            hit = any(float(tok) == float(r["count"]) for tok in rtoks)
+            supported_rows.append(hit)
+        if all(supported_rows) and sum(r["count"] for r in rows) == int(count):
+            return True, (f"count {count} equals the quoted floor rows"
+                          f" {[r['count'] for r in rows]}, each value quoted"
+                          " in the evidence")
+    return False, (f"quoted evidence {[t[:20] for t in texts]} does not"
+                   f" contain the count {count} (numeric correspondence"
+                   " required)")
 
 
 def validate_source_and_geometry(spec, geometry_map):
@@ -966,16 +1016,37 @@ def audit_schedule_evidence(spec, geometry_map, audit):
                     f"evidence boxes {missing} do not reference actual words"
                     f" on source {sid!r} page {sched['page']} - the count is"
                     " unsupported and stays blank (fix the quote or re-read)")
+                continue
+            ok, why = _count_supported_by_evidence(
+                t["count"], [b.get("t") for b in boxes],
+                rows=t.get("rows") or [], row_text=t.get("row_text"))
+            if not ok:
+                # P0.2: a quoted word box containing '3' must not support a
+                # count of 30 - numeric correspondence, not word existence
+                _withhold_type(audit, sched, t["type"], why)
         for v in sched.get("variants", []):
             boxes = v.get("word_boxes") or []
             missing = [b.get("t") for b in boxes
                        if not any(_box_matches_word(b, w) for w in words)]
             if missing:
+                v["_evidence_ok"] = False
                 audit.add_callout(
                     f"variant evidence {v['name']}",
                     f"evidence boxes {missing} do not reference actual words"
                     f" on page {sched['page']} - re-read the variant row",
                     blank_fields=["count"], pages=[sched.get("page")])
+                continue
+            ok, why = _count_supported_by_evidence(
+                v["count"], [b.get("t") for b in boxes],
+                rows=v.get("rows") or [], row_text=v.get("row_text"))
+            if not ok:
+                # P0.2: invalid variant evidence -> its SF extension is
+                # withheld, not silently added
+                v["_evidence_ok"] = False
+                audit.add_callout(
+                    f"variant evidence {v['name']}", why,
+                    blank_fields=["count", "extended_sf"],
+                    pages=[sched.get("page")])
     else:  # image evidence
         problems = []
         if page is None:
@@ -1005,6 +1076,40 @@ def audit_schedule_evidence(spec, geometry_map, audit):
                       f"crop hash verified on source {sid!r} page"
                       f" {sched['page']} ({len(ev.get('cells') or [])} cells"
                       " transcribed by vision)")
+            # P0.2: the count VALUE must be supported by the TRANSCRIBED
+            # cells (count_cells); an edited count over verified pixels is
+            # still caught
+            cell_index = {}
+            for c in ev.get("cells") or []:
+                cell_index[(c.get("row"), c.get("col"))] = \
+                    str(c.get("text", "")).strip()
+            for t in sched["types"]:
+                refs = t.get("count_cells") or []
+                if not refs:
+                    _withhold_type(
+                        audit, sched, t["type"],
+                        "image-evidence count has NO count_cells pointing at"
+                        " the transcribed cell(s) that prove it - record"
+                        " count_cells (row/col of the transcribed cells) so"
+                        " the number is bound to the crop")
+                    continue
+                vals = []
+                bad_refs = []
+                for ref in refs:
+                    key = (ref.get("row"), ref.get("col"))
+                    if key not in cell_index:
+                        bad_refs.append(key)
+                        continue
+                    vals.append(cell_index[key])
+                if bad_refs:
+                    _withhold_type(
+                        audit, sched, t["type"],
+                        f"count_cells {bad_refs} do not match any transcribed"
+                        " cell - fix the references or re-transcribe")
+                    continue
+                ok, why = _count_supported_by_evidence(t["count"], vals)
+                if not ok:
+                    _withhold_type(audit, sched, t["type"], why)
 
 
 def _withhold_all(audit, sched, sid, reason):
@@ -1036,12 +1141,17 @@ def _render_crop_hash(spec, sid, page_no, ev):
 
 
 def audit_room_reconciliation(spec, audit):
-    """P0.3 cross-validation: schedule cells vs plan-derived room-tag
-    counts. The real trap this catches: a schedule cell edited from 3 to 30
-    passed silently when nothing checked the plan tags. An unexplained
-    mismatch withholds the affected extension (callout) unless the agent
-    recorded an explicit count_resolution with its own evidence.
-    NEVER default a missing count to 1."""
+    """P0.2 cross-validation, rebuilt on the DEDUPED TAG RECORDS: the
+    plan-derived per-type count is computed from room_inventory.rooms[],
+    NOT taken from the supplied per_type_counts. This catches two traps:
+      - a schedule cell edited from 3 to 30 while the plans show 6 (the
+        classic invention trap), and
+      - an INVENTORY edited to match the edit (per_type_counts changed to
+        30 while the recorded tags still show 6 - the supplied count
+        contradicting the tag records withholds the type too).
+    An unexplained mismatch withholds the affected extension (callout)
+    unless the agent recorded an explicit count_resolution with its own
+    evidence. NEVER default a missing count to 1."""
     sched = spec.get("schedule")
     inv = (sched or {}).get("room_inventory")
     if not sched:
@@ -1053,11 +1163,13 @@ def audit_room_reconciliation(spec, audit):
                   " room_inventory.per_type_counts to arm the 3->30 invention"
                   " guard")
         return
-    ptc = inv.get("per_type_counts") or {}
-    resolutions = inv.get("count_resolutions") or {}
     rooms = inv.get("rooms") or []
+    supplied = inv.get("per_type_counts") or {}
+    resolutions = inv.get("count_resolutions") or {}
+    derived = {}
+    for r in rooms:
+        derived[r["type"]] = derived.get(r["type"], 0) + 1
     seen_types = {t["type"] for t in sched["types"]}
-    # inventory tags pointing at types the schedule never declares
     stray = sorted({r["type"] for r in rooms if r["type"] not in seen_types})
     if stray:
         audit.add_callout(
@@ -1067,33 +1179,49 @@ def audit_room_reconciliation(spec, audit):
             blank_fields=["count"], pages=[sched.get("page")])
     for t in sched["types"]:
         name = t["type"]
-        want = ptc.get(name)
-        if want is None:
+        got = derived.get(name)
+        supplied_ct = supplied.get(name)
+        if got is None and supplied_ct is None:
             audit.add_callout(
                 f"room reconciliation type {name}",
                 "no plan-derived count recorded for this type - the schedule"
-                " cell is used as-is; record room_inventory.per_type_counts"
-                " for cross-validation",
+                " cell is used as-is; record room_inventory.rooms[] tags for"
+                " cross-validation",
                 blank_fields=[], pages=[sched.get("page")])
             continue
-        if want == t["count"]:
+        if got is not None and supplied_ct is not None \
+                and supplied_ct != got:
+            _withhold_type(
+                audit, sched, name,
+                f"room_inventory.per_type_counts says {supplied_ct} but the"
+                f" recorded room tags show {got} for type {name} - the"
+                " supplied count contradicts the tag records it claims to"
+                " summarize (edited inventory?); reconcile the tags first -"
+                " the extension is withheld")
+            continue
+        plan_ct = got if got is not None else supplied_ct
+        if got is None:
+            audit.add_callout(
+                f"room reconciliation type {name}",
+                f"no room tags recorded for this type; the supplied"
+                f" per_type_counts value {supplied_ct} is used UNVERIFIED",
+                blank_fields=[], pages=[sched.get("page")])
+        if plan_ct == t["count"]:
             audit.add("room reconciliation", "pass",
                       f"type {name}: schedule cell {t['count']} == plan-derived"
-                      f" tag count {want} ({len([r for r in rooms
-                                                if r['type'] == name])}"
-                      " tagged room(s))")
+                      f" tag count {plan_ct} ({got or 0} tagged room(s))")
             continue
         res = resolutions.get(name)
         if res and res.get("count") == t["count"]:
             audit.add("room reconciliation", "pass",
                       f"type {name}: schedule {t['count']} != plan tags"
-                      f" {want}, RESOLVED by recorded evidence:"
+                      f" {plan_ct}, RESOLVED by recorded evidence:"
                       f" {res.get('basis', '')[:90]}")
         else:
             _withhold_type(
                 audit, sched, name,
                 f"schedule cell {t['count']} disagrees with the plan-derived"
-                f" room-tag count {want} and no valid count_resolution"
+                f" room-tag count {plan_ct} and no valid count_resolution"
                 " exists - the extension is withheld (blank) until the"
                 " disagreement is resolved from evidence")
 

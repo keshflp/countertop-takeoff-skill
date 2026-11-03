@@ -28,6 +28,7 @@ import os
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
+from image_measure import measure_from_points
 from spec_schema import TakeoffError, finite
 
 SEED_MARGIN_PT = 0.01          # seed must sit this far inside the shell
@@ -42,10 +43,18 @@ class RegionError(TakeoffError):
 def measure_region_image(region, base_dir):
     """P0.6 route 3: ingest an image_measure.py result for one region.
 
-    Verifies the recorded crop hash against the actual crop file on disk
-    (integrity: proves WHICH pixels were measured) and returns the region
-    record. Unusable rasters (warnings on the measurement) stay BLANK with
-    the warnings carried into the record for callouts - never guessed.
+    V4 acceptance rules (P0.2) - ALL must hold before an area is accepted:
+      1. the crop file exists and its sha256 matches the recorded hash
+         (integrity: proves WHICH pixels were measured)
+      2. the crop is BOUND to (source_id, page, crop_bbox, render_zoom) and
+         that binding matches the region's own source/page
+      3. the recorded selections (anchors + boundary points) are present
+         and the area is RECOMPUTED from them; a recorded result number
+         that does not reproduce from unchanged selections is REJECTED
+         (edited result numbers over unchanged pixels never pass)
+      4. the OVERLAY PROOF exists on disk (mandatory for route acceptance)
+    Unusable rasters (any warning on the recomputation) stay BLANK with the
+    warnings carried into the record for callouts - never guessed.
     """
     rid = region["region_id"]
     base = {
@@ -82,18 +91,77 @@ def measure_region_image(region, base_dir):
         warnings.insert(0, "crop hash mismatch - the measurement does not"
                         " prove which pixels it read; re-render and"
                         " re-measure")
-    if m.get("area_sf") is None or warnings:
+    # ---- P0.2: crop must bind to (source, page, transform) -----------
+    prov = m.get("provenance") or {}
+    if not prov.get("source_id") or not prov.get("page") \
+            or not prov.get("crop_bbox") or not prov.get("render_zoom"):
+        warnings.insert(0, "image measurement is NOT bound to (source, page,"
+                        " transform): provenance (source_id, page, crop_bbox,"
+                        " render_zoom) missing - re-run image_measure.py with"
+                        " --source-id/--page/--crop-bbox/--render-zoom")
+    else:
+        if prov["source_id"] != region.get("source_id") \
+                or int(prov["page"]) != int(region["page"]):
+            warnings.insert(0, f"crop provenance mismatch: measurement claims"
+                            f" source {prov['source_id']!r} page"
+                            f" {prov['page']} but the region is on"
+                            f" {region.get('source_id')!r} page"
+                            f" {region['page']}")
+    # ---- P0.2: overlay proof is REQUIRED for acceptance ---------------
+    overlay = m.get("overlay")
+    if overlay and not os.path.isabs(overlay) and not os.path.exists(overlay):
+        overlay = os.path.join(base_dir, overlay)
+    if not overlay or not os.path.exists(overlay):
+        warnings.insert(0, "overlay proof missing - the image route is not"
+                        " accepted without the anchor/boundary overlay"
+                        " rendered by image_measure.py")
+    # ---- P0.2: RECOMPUTE from the recorded selections -----------------
+    selections = m.get("selections") or {}
+    re_anchors = selections.get("anchors") or m.get("anchors") or []
+    re_points = selections.get("points")
+    if re_points is None:
+        poly = m.get("polygon_px") or []
+        re_points = [{"name": f"p{i + 1}", "px": list(p)}
+                     for i, p in enumerate(poly)]
+    recomputed = None
+    recomputed_scale = None
+    if re_anchors and re_points:
+        sel = measure_from_points(re_anchors, re_points)
+        recomputed = sel.get("area_sf")
+        recomputed_scale = sel.get("px_per_ft")
+        for w in sel.get("warnings") or []:
+            if w not in warnings:
+                warnings.append(f"recomputed selections: {w}")
+    else:
+        warnings.append("recorded selections missing - the result cannot be"
+                        " recomputed from unchanged pixels; re-measure")
+    recorded = m.get("area_sf")
+    if recomputed is not None and recorded is not None \
+            and abs(recomputed - recorded) > max(0.01, 0.002 * recorded):
+        warnings.insert(0, f"RECORDED RESULT REJECTED: area_sf {recorded} does"
+                        f" not reproduce from the recorded selections"
+                        f" (recomputed {recomputed}) - an edited result number"
+                        " over unchanged pixels is never accepted")
+    area = recomputed if recomputed is not None else None
+    if area is None or warnings:
         return dict(base, status="unresolved",
                     unresolved_reason="; ".join(warnings)
                     or "image measurement unusable",
                     blank_fields=["area_sf"], area_sf=None,
-                    factor_px_per_ft=m.get("px_per_ft"),
-                    image_quality=m.get("quality"), expected_range_ok=False)
-    area = m["area_sf"]
+                    measured_area_sf=area,
+                    factor_px_per_ft=(recomputed_scale or m.get("px_per_ft")),
+                    image_quality=m.get("quality"), expected_range_ok=False,
+                    crop_sha256=m.get("crop_sha256"),
+                    provenance=prov or None,
+                    overlay=overlay if (overlay and os.path.exists(overlay))
+                    else None)
     return dict(base, status="measured", area_sf=area,
-                factor_px_per_ft=m.get("px_per_ft"),
-                image_quality=m.get("quality"), image_warnings=warnings,
+                recorded_area_sf=recorded,
+                factor_px_per_ft=(recomputed_scale or m.get("px_per_ft")),
+                image_quality=m.get("quality"),
+                image_warnings=[w for w in warnings if w],
                 crop_sha256=m.get("crop_sha256"),
+                provenance=prov or None, overlay=overlay,
                 expected_range_ok=ok(area),
                 polygon=[[float(x), float(y)] for x, y in
                          (m.get("polygon_px") or [])])

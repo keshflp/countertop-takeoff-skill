@@ -64,6 +64,13 @@ def measure_from_points(anchors, points):
     anchors: [{"label", "p1", "p2", "real_ft"?}] ; points: [{"name", "px"}]
     Returns the result dict (area_sf blank on any refusal-quality problem,
     with the reason in warnings - callers decide stop vs callout).
+
+    V4 (P0.2): anchors must be INDEPENDENT - duplicate endpoints or the
+    same real_ft quoted twice collapse to one measurement (duplicating a
+    span never satisfies the two-anchor rule); an explicit real_ft that
+    contradicts its readable label is disclosed as a warning. The raw
+    selections are recorded so measure.py can RECOMPUTE the area from
+    them (an edited result number over unchanged pixels is rejected).
     """
     warnings = []
     if len(anchors) < 2:
@@ -72,6 +79,8 @@ def measure_from_points(anchors, points):
     if len(points) < 3:
         warnings.append("fewer than 3 boundary points - no polygon")
     scales = []
+    seen_endpoints = {}
+    seen_fts = {}
     for i, a in enumerate(anchors):
         real_ft = a.get("real_ft")
         parsed = cal_mod.parse_dim_text(a.get("label") or "")
@@ -81,6 +90,30 @@ def measure_from_points(anchors, points):
             warnings.append(f"anchor {i} label {a.get('label')!r} is not a"
                             " parseable dimension")
             continue
+        # P0.2: a real_ft override contradicting the readable label is
+        # disclosed, never applied silently
+        if a.get("real_ft") is not None and parsed is not None \
+                and abs(a["real_ft"] - parsed) / parsed > 0.01:
+            warnings.append(
+                f"anchor {i} real_ft override {a['real_ft']} contradicts the"
+                f" readable label {a.get('label')!r} (= {parsed:.4f} ft) -"
+                " confirm the override or fix the selection")
+        key = (round(float(a["p1"][0]), 1), round(float(a["p1"][1]), 1),
+               round(float(a["p2"][0]), 1), round(float(a["p2"][1]), 1))
+        if key in seen_endpoints:
+            warnings.append(
+                f"anchors {seen_endpoints[key]} and {i} share the SAME"
+                " endpoints - duplicate anchors are NOT independent"
+                " evidence; pick a different labeled dimension")
+            continue
+        if round(float(real_ft), 4) in seen_fts:
+            warnings.append(
+                f"anchors {seen_fts[round(float(real_ft), 4)]} and {i} both"
+                f" measure {real_ft} ft - same-length anchors do not"
+                " cross-check a scale; pick a different labeled dimension")
+            continue
+        seen_endpoints[key] = i
+        seen_fts[round(float(real_ft), 4)] = i
         length_px = _dist(a["p1"], a["p2"])
         if length_px < 8:
             warnings.append(f"anchor {i} is only {length_px:.1f} px - too"
@@ -115,6 +148,9 @@ def measure_from_points(anchors, points):
         area_sf = round(polygon_area(poly) / px_per_ft ** 2, 4)
     return {
         "anchors": scales,
+        "selections": {"anchors": anchors, "points": points},
+        "anchor_independence": {"usable_anchors": len(scales),
+                                "declared_anchors": len(anchors)},
         "px_per_ft": px_per_ft,
         "anchor_spread_pct": round(spread, 3) if spread is not None else None,
         "polygon_px": poly,
@@ -163,7 +199,17 @@ def main(argv=None):
     ap.add_argument("--anchors", required=True, help="anchors JSON")
     ap.add_argument("--points", required=True, help="boundary points JSON")
     ap.add_argument("--out", required=True, help="result JSON")
-    ap.add_argument("--overlay", default=None, help="overlay proof PNG")
+    ap.add_argument("--overlay", default=None, help="overlay proof PNG"
+                    " (REQUIRED for route acceptance in measure.py)")
+    ap.add_argument("--source-id", default=None,
+                    help="source_id the crop was rendered from (P0.2 crop"
+                         " binding: source, page, transform)")
+    ap.add_argument("--page", type=int, default=None,
+                    help="1-based page the crop was rendered from")
+    ap.add_argument("--crop-bbox", default=None,
+                    help="crop bbox in displayed points: x0,y0,x1,y1")
+    ap.add_argument("--render-zoom", type=float, default=None,
+                    help="zoom used to render the crop (transform record)")
     args = ap.parse_args(argv)
     if not os.path.exists(args.crop):
         print(f"ERROR: crop {args.crop} not found", file=sys.stderr)
@@ -174,6 +220,14 @@ def main(argv=None):
     result["crop"] = args.crop
     result["crop_sha256"] = hashlib.sha256(
         open(args.crop, "rb").read()).hexdigest()
+    # P0.2: the crop binds to (source, page, transform) - recorded here and
+    # verified by measure.py before any image-route area is accepted
+    provenance = {"source_id": args.source_id, "page": args.page,
+                  "crop_bbox": ([float(v) for v in
+                                 args.crop_bbox.split(",")]
+                                if args.crop_bbox else None),
+                  "render_zoom": args.render_zoom}
+    result["provenance"] = provenance
     if args.overlay:
         render_overlay(args.crop, result, args.overlay)
         result["overlay"] = args.overlay
