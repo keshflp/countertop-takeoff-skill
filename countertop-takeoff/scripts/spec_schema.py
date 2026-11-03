@@ -185,7 +185,10 @@ def validate_mode_and_policy(spec):
 
 PROFILE_KEYS = {"profile_version", "company", "material_aliases",
                 "gross_net_policy", "required_components",
-                "report_preferences", "approved_assumptions"}
+                "report_preferences", "approved_assumptions",
+                "package_defaults"}
+PACKAGES = {"millwork", "FFE", "public_BOH"}
+HANDINGS = {"LH", "RH"}
 
 
 def validate_profile(spec, base_dir):
@@ -212,6 +215,15 @@ def validate_profile(spec, base_dir):
     gnp = profile.get("gross_net_policy")
     require(gnp is None or gnp in GROSS_POLICIES,
             f"profile gross_net_policy must be one of {sorted(GROSS_POLICIES)}")
+    pd = profile.get("package_defaults")
+    if pd is not None:
+        require(isinstance(pd, dict), "profile package_defaults must be an"
+                " object")
+        excl = pd.get("exclude")
+        require(excl is None or (isinstance(excl, list)
+                                 and all(p in PACKAGES for p in excl)),
+                f"profile package_defaults.exclude must list packages from"
+                f" {sorted(PACKAGES)}")
     for k in ("required_components", "approved_assumptions"):
         v = profile.get(k, [])
         require(isinstance(v, list) and all(isinstance(x, str) for x in v),
@@ -536,6 +548,174 @@ def validate_regions(spec, sched):
     return regions
 
 
+def validate_source_link(link, what):
+    """Property-specific provenance: length from the plan/elevation, depth/
+    thickness/material/profile from the section/spec sheet (the real set
+    joins A504 sections to A450/A452 lengths)."""
+    require(isinstance(link, dict), f"{what} must be an object")
+    pos_int(link.get("page"), f"{what}.page")
+    require(link.get("kind") in {"plan", "elevation", "section", "spec",
+                                "schedule", "detail", "other"},
+            f"{what}.kind must be one of plan|elevation|section|spec|"
+            "schedule|detail|other")
+    if link.get("note") is not None:
+        require(isinstance(link["note"], str), f"{what}.note must be a"
+                " string")
+
+
+def validate_assemblies(spec):
+    """V3 assemblies[]: one record per room-instance prototype with its
+    package, finish tag, dimensions, handing, and quantity basis."""
+    asms = spec.get("assemblies")
+    if asms is None:
+        spec["_assemblies"] = []
+        return []
+    require(isinstance(asms, list), "assemblies must be a list")
+    known_sources = set(source_ids(spec))
+    ids = set()
+    for i, a in enumerate(asms):
+        require(isinstance(a, dict), f"assemblies[{i}] must be an object")
+        aid = a.get("assembly_id")
+        require(isinstance(aid, str) and aid.strip(),
+                f"assemblies[{i}].assembly_id must be a non-empty string")
+        require(aid not in ids, f"duplicate assembly_id {aid!r}")
+        ids.add(aid)
+        require(isinstance(a.get("type"), str) and a["type"],
+                f"assembly {aid}: type is required")
+        require(a.get("package") in PACKAGES,
+                f"assembly {aid}: package must be one of {sorted(PACKAGES)}")
+        if a.get("finish_tag") is not None:
+            require(isinstance(a["finish_tag"], str) and a["finish_tag"],
+                    f"assembly {aid}: finish_tag must be a string (ST/PL/W)"
+                    " when present")
+        if a.get("handing") is not None:
+            require(a["handing"] in HANDINGS,
+                    f"assembly {aid}: handing must be LH or RH when present")
+        for k in ("width_in", "depth_in", "height_in"):
+            v = a.get(k)
+            require(v is None or (finite(v) and v > 0),
+                    f"assembly {aid}: {k} must be a positive number or null"
+                    " (unknown stays blank, never 0)")
+        qb = a.get("quantity_basis")
+        require(isinstance(qb, dict)
+                and qb.get("mode") in {"room_type_count", "enumerated"},
+                f"assembly {aid}: quantity_basis.mode must be"
+                " 'room_type_count' or 'enumerated'")
+        if qb["mode"] == "room_type_count":
+            require(isinstance(qb.get("type"), str) and qb["type"],
+                    f"assembly {aid}: room_type_count basis needs the type")
+        pieces = a.get("pieces")
+        require(isinstance(pieces, list),
+                f"assembly {aid}: pieces must list piece_id strings")
+        srcs = a.get("sources") or []
+        require(isinstance(srcs, list), f"assembly {aid}: sources must be a"
+                " list")
+        for j, s in enumerate(srcs):
+            require(isinstance(s, dict), f"assembly {aid} sources[{j}]")
+            sid = s.get("source_id") or default_source_id(spec)
+            require(sid in known_sources,
+                    f"assembly {aid}: sources[{j}] source_id {sid!r} is not"
+                    " declared")
+            s["source_id"] = sid
+            pos_int(s.get("page"), f"assembly {aid} sources[{j}].page")
+    spec["_assemblies"] = asms
+    return asms
+
+
+def validate_pieces(spec, region_ids):
+    """V3 pieces[]: geometry (measured region) or dimensioned construction;
+    edge/splash/cutout runs; blank dims stay blank (never zero)."""
+    pieces = spec.get("pieces")
+    if pieces is None:
+        spec["_pieces"] = []
+        return []
+    require(isinstance(pieces, list), "pieces must be a list")
+    asm_ids = {a["assembly_id"] for a in spec["_assemblies"]}
+    ids = set()
+    for i, p in enumerate(pieces):
+        require(isinstance(p, dict), f"pieces[{i}] must be an object")
+        pid = p.get("piece_id")
+        require(isinstance(pid, str) and pid.strip(),
+                f"pieces[{i}].piece_id must be a non-empty string")
+        require(pid not in ids, f"duplicate piece_id {pid!r}")
+        ids.add(pid)
+        require(p.get("assembly_id") in asm_ids,
+                f"piece {pid}: assembly_id must reference a declared"
+                " assembly")
+        route = p.get("route")
+        require(route in {"geometry", "stated"},
+                f"piece {pid}: route must be 'geometry' or 'stated'")
+        if route == "geometry":
+            require(p.get("region_id") in region_ids,
+                    f"piece {pid}: region_id must reference a region in"
+                    " spec.regions")
+        else:
+            dims = p.get("dims_in")
+            require(isinstance(dims, dict),
+                    f"piece {pid}: stated route needs dims_in")
+            for k in ("width", "depth", "thickness", "height"):
+                v = dims.get(k)
+                require(v is None or (finite(v) and v > 0),
+                        f"piece {pid}: dims_in.{k} must be positive or null"
+                        " (unknown stays blank, never 0)")
+        for run in p.get("edge_runs") or []:
+            require(isinstance(run, dict), f"piece {pid}: edge_runs entries")
+            require(isinstance(run.get("profile"), str) and run["profile"],
+                    f"piece {pid}: edge run needs a profile")
+            require(isinstance(run.get("exposure"), str)
+                    and run["exposure"],
+                    f"piece {pid}: edge run needs an exposure (front/side/)")
+            v = run.get("length_in")
+            require(v is None or (finite(v) and v > 0),
+                    f"piece {pid}: edge run length_in must be positive or"
+                    " null (blank when unmeasurable)")
+            if run.get("source") is not None:
+                validate_source_link(run["source"], f"piece {pid} edge run"
+                                     " source")
+        for run in p.get("splash_runs") or []:
+            require(isinstance(run, dict), f"piece {pid}: splash_runs entries")
+            for k in ("height_in", "length_in", "returns_in"):
+                v = run.get(k)
+                require(v is None or (finite(v) and v > 0),
+                        f"piece {pid}: splash {k} must be positive or null")
+            if run.get("handing") is not None:
+                require(run["handing"] in HANDINGS,
+                        f"piece {pid}: splash handing must be LH or RH")
+            if run.get("source") is not None:
+                validate_source_link(run["source"], f"piece {pid} splash run"
+                                     " source")
+        for c in p.get("cutouts") or []:
+            require(isinstance(c, dict) and isinstance(c.get("kind"), str)
+                    and c["kind"], f"piece {pid}: cutouts need a kind")
+            pos_int(c.get("ea"), f"piece {pid}: cutout ea")
+            if c.get("source") is not None:
+                validate_source_link(c["source"], f"piece {pid} cutout"
+                                     " source")
+        links = p.get("source_links") or {}
+        require(isinstance(links, dict), f"piece {pid}: source_links must be"
+                " an object")
+        for prop, link in links.items():
+            validate_source_link(link, f"piece {pid} source_links.{prop}")
+    spec["_pieces"] = pieces
+    return pieces
+
+
+def excluded_packages(spec, profile):
+    """Package scope rules: company profile defaults, job policy override
+    (GR guestroom FF&E excluded by default in the example profile, reported
+    separately as package_excluded)."""
+    if (spec.get("policy") or {}).get("packages"):
+        excl = spec["policy"]["packages"].get("exclude") or []
+        require(isinstance(excl, list)
+                and all(p in PACKAGES for p in excl),
+                f"policy.packages.exclude must list packages from"
+                f" {sorted(PACKAGES)}")
+        return set(excl)
+    if profile and profile.get("package_defaults"):
+        return set(profile["package_defaults"].get("exclude") or [])
+    return set()
+
+
 def validate_spec(spec):
     """Validate everything structural EXCEPT the optional profile (which the
     pipeline loads with the job file's folder for relative paths).
@@ -551,4 +731,6 @@ def validate_spec(spec):
     spec["_schedule_problems"] = (validate_schedule_consistency(sched)
                                   if sched is not None else [])
     regions = validate_regions(spec, sched)
+    validate_assemblies(spec)
+    validate_pieces(spec, {r["region_id"] for r in regions})
     return {"scope": scope, "schedule": sched, "regions": regions}
