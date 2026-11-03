@@ -244,6 +244,94 @@ def publish_safety_tests(rate_profile):
           len(stale_res) == 1, str(stale_res))
 
 
+def mixed_v5_spec():
+    """The V4 mixed spec (assemblies + included ADA variant), rebuilt here."""
+    import importlib.util
+    spec_mod = importlib.util.spec_from_file_location(
+        "tv5_mixed", os.path.join(HERE, "tests_v4.py"))
+    mod = importlib.util.module_from_spec(spec_mod)
+    spec_mod.loader.exec_module(mod)
+    return mod.mixed_spec()
+
+
+# --------------------------------- P0.2 evidence + quantity identity
+def identity_tests():
+    # (1) 3 -> 30 with an EDITED row_text over the real '3' box: caught
+    spec = orig_spec()
+    spec["schedule"]["types"][0]["count"] = 30
+    spec["schedule"]["types"][0]["row_text"] = \
+        "A | 1 BED / 1 BATH | 30 units total (edited quote)"
+    rc, res, err = run_measure(spec, "v5_p30_text")
+    co = callout_text(res)
+    check("identity: 3->30 with EDITED row_text over the real '3' box is"
+          " caught (row_text is descriptive only)",
+          rc == 0 and "numeric correspondence" in co
+          and "descriptive only" in co
+          and res["totals"]["project_sf"] < 100.0,
+          f"rc={rc} total={res and res['totals']['project_sf']}")
+
+    # (2) repeated geometry claim: a second piece on the same region must
+    #     NOT inflate the total; declared reuse is a non-defect
+    spec = mixed_v5_spec()
+    spec["assemblies"].append(
+        {"assembly_id": "van-enum2", "type": "A", "package": "public_BOH",
+         "quantity_basis": {"mode": "enumerated"}, "pieces": ["p:v2"],
+         "sources": [{"source_id": "plans", "page": 5}]})
+    spec["pieces"].append(
+        {"piece_id": "p:v2", "assembly_id": "van-enum2", "route": "geometry",
+         "region_id": "A:vanity", "finish_tag": "PL", "edge_runs": []})
+    rc, res, err = run_measure(spec, "v5_geomdup")
+    co = callout_text(res)
+    check("identity: repeated geometry claim called out and withheld"
+          " (total stays 802.00)",
+          rc == 0 and abs(res["totals"]["project_sf"] - 802.0) < 0.01
+          and "REPEATED GEOMETRY CLAIM" in co,
+          f"rc={rc} total={res and res['totals']['project_sf']}")
+    pv2 = next(p for p in res["piece_boq"] if p["piece_id"] == "p:v2")
+    check("identity: the duplicate piece keeps identity but its extension is"
+          " blank",
+          pv2["extension_sf"] is None and pv2.get("sf") is not None
+          and "extension_sf" in (pv2.get("blank_fields") or []), str(pv2))
+    # declared reuse: same shape, now with an explicit declaration
+    spec["piece_geometry_reuse"] = [{
+        "region_id": "A:vanity", "pieces": ["p:v", "p:v2"],
+        "reason": "the vanity geometry genuinely serves two enumerated"
+                  " assemblies (declared by the operator)"}]
+    rc, res, err = run_measure(spec, "v5_geomdup_ok")
+    co = callout_text(res)
+    check("identity: explicitly declared piece reuse is a NON-defect"
+          " (802 + 12 = 814.00, no claim callout)",
+          rc == 0 and abs(res["totals"]["project_sf"] - 814.0) < 0.01
+          and "REPEATED GEOMETRY CLAIM" not in co,
+          f"rc={rc} total={res and res['totals']['project_sf']}"
+          f" callouts={co[:140]}")
+
+    # (3) uncertain included-variant evidence withholds the dependent
+    #     standard EA (never restores the parent count)
+    spec = mixed_v5_spec()
+    for v in spec["schedule"]["variants"]:
+        if v["name"] == "ADA":
+            v["word_boxes"] = [{"t": "zzz-not-a-word", "x0": 1, "y0": 1,
+                                "x1": 2, "y1": 2}]
+    rc, res, err = run_measure(spec, "v5_ada_bad")
+    co = callout_text(res)
+    asm = {a["assembly_id"]: a for a in res["assembly_boq"]}
+    check("identity: uncertain included-variant evidence withholds the"
+          " dependent standard EA (never 8->10)",
+          rc == 0 and asm["fl1-a"]["ea"] is None
+          and asm["aada"]["ea"] is None
+          and res["totals"]["project_sf"] != 824.0,
+          f"rc={rc} eas={{k: v['ea'] for k, v in asm.items()}}")
+    check("identity: the withholding names the parent-count restoration"
+          " refusal",
+          "never restored to the full parent count" in co
+          or "cannot be split reliably" in co,
+          co[:200])
+    check("identity: additional-scope pricing survives (partial knowledge)",
+          res["totals"]["project_sf"] > 300.0,
+          str(res["totals"]["project_sf"]))
+
+
 def main():
     global ORIG_PDFS, ORIG_GEO
     shutil.rmtree(BUILD, ignore_errors=True)
@@ -254,6 +342,7 @@ def main():
     rate_profile = os.path.join(HERE, "example.rate-profile.json")
     intake_tests_v5()
     publish_safety_tests(rate_profile)
+    identity_tests()
     print()
     failed = [r for r in RESULTS if not r[1]]
     for name, ok, detail in RESULTS:

@@ -804,7 +804,49 @@ def validate_pieces(spec, region_ids):
         for prop, link in links.items():
             validate_source_link(link, f"piece {pid} source_links.{prop}")
     spec["_pieces"] = pieces
+    validate_piece_geometry_reuse(spec, pieces)
     return pieces
+
+
+def validate_piece_geometry_reuse(spec, pieces):
+    """V5 (P0.2): optional explicit declarations of LEGITIMATE piece reuse
+    across assemblies - `piece_geometry_reuse: [{region_id, pieces[],
+    reason}]`. Every declared piece must be a geometry-route piece bound to
+    the named region; an undeclared duplicate geometry claim is a defect
+    (the audit withholds the duplicate extension)."""
+    reuse = spec.get("piece_geometry_reuse")
+    if reuse is None:
+        return
+    require(isinstance(reuse, list) and reuse,
+            "piece_geometry_reuse must be a non-empty list when present")
+    by_id = {p["piece_id"]: p for p in pieces}
+    for i, d in enumerate(reuse):
+        require(isinstance(d, dict),
+                f"piece_geometry_reuse[{i}] must be an object")
+        rid = d.get("region_id")
+        require(isinstance(rid, str) and rid.strip(),
+                f"piece_geometry_reuse[{i}].region_id must name the measured"
+                " region")
+        pids = d.get("pieces")
+        require(isinstance(pids, list) and pids
+                and all(isinstance(x, str) and x.strip() for x in pids),
+                f"piece_geometry_reuse[{i}] ({rid}): pieces must list the"
+                " piece ids that legitimately share the region")
+        require(len(pids) >= 2,
+                f"piece_geometry_reuse[{i}] ({rid}): reuse needs at least two"
+                " pieces")
+        require(isinstance(d.get("reason"), str) and d["reason"].strip(),
+                f"piece_geometry_reuse[{i}] ({rid}): a non-empty reason is"
+                " required (the auditor reads it)")
+        for pid in pids:
+            p = by_id.get(pid)
+            require(p is not None,
+                    f"piece_geometry_reuse[{i}] ({rid}): piece {pid!r} is not"
+                    " declared in spec.pieces")
+            require(p.get("route") == "geometry"
+                    and p.get("region_id") == rid,
+                    f"piece_geometry_reuse[{i}] ({rid}): piece {pid!r} is not"
+                    f" a geometry piece of region {rid!r}")
 
 
 def excluded_packages(spec, profile):

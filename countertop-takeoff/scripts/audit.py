@@ -30,21 +30,21 @@ RECHECK_TOLERANCE_PCT = 2.0
 _NUM_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?")
 
 
-def _count_supported_by_evidence(count, box_texts, rows=None, row_text=""):
-    """Numeric correspondence, not word existence (P0.2): the count VALUE
-    must be supported by the quoted evidence. A word box containing '3'
-    must not support a count of 30. Accepted shapes:
-      - the count appears as an exact NUMBER token in the quoted box texts
-        or the quoted row text; or
-      - every quoted box text is a PURE integer and they SUM to the count
-        (floor cells quoted per floor, e.g. '5'+'5' -> 10); or
-      - the type declares floor rows and EVERY row's count appears as a
-        number token in its own quoted text (and the rows sum to the
-        count, which validate_schedule_consistency enforces separately).
-    Returns (ok, reason)."""
+def _count_supported_by_evidence(count, box_texts, rows=None):
+    """Numeric correspondence, not word existence (P0.2); V5: counts derive
+    EXCLUSIVELY from the VERIFIED count boxes/cells - `row_text` is a
+    descriptive quote, NEVER evidence (an edited row_text must not rescue a
+    count its boxes do not support). Accepted shapes:
+      - the count appears as an exact NUMBER token in the verified box/cell
+        texts; or
+      - every verified box/cell text is a PURE integer and they SUM to the
+        count (floor cells quoted per floor, e.g. '5'+'5' -> 10); or
+      - the type declares floor rows, EVERY row's count appears among the
+        verified box/cell texts, and the rows sum to the count (which
+        validate_schedule_consistency enforces separately).
+    Returns (ok, reason).
+    """
     texts = [str(t) for t in (box_texts or []) if str(t).strip()]
-    if row_text:
-        texts.append(str(row_text))
     tokens = [m.group(0) for t in texts
               for m in _NUM_TOKEN_RE.finditer(t)]
     for tok in tokens:
@@ -60,22 +60,17 @@ def _count_supported_by_evidence(count, box_texts, rows=None, row_text=""):
             return True, (f"count {count} equals the sum of the quoted"
                           f" row values {box_only}")
     if rows:
-        joined = " ".join(texts)
-        row_tokens = {m.group(0) for m in _NUM_TOKEN_RE.finditer(joined)}
-        supported_rows = []
-        for r in rows:
-            rtxt = str(r.get("row_text") or "")
-            rtoks = {m.group(0) for m in _NUM_TOKEN_RE.finditer(rtxt)} \
-                | row_tokens
-            hit = any(float(tok) == float(r["count"]) for tok in rtoks)
-            supported_rows.append(hit)
-        if all(supported_rows) and sum(r["count"] for r in rows) == int(count):
+        if sum(r["count"] for r in rows) == int(count) and all(
+                any(float(tok) == float(r["count"]) for tok in tokens)
+                for r in rows):
             return True, (f"count {count} equals the quoted floor rows"
-                          f" {[r['count'] for r in rows]}, each value quoted"
-                          " in the evidence")
-    return False, (f"quoted evidence {[t[:20] for t in texts]} does not"
+                          f" {[r['count'] for r in rows]}, each value present"
+                          " among the verified evidence boxes/cells (row_text"
+                          " is descriptive only)")
+    return False, (f"verified evidence {[t[:20] for t in texts]} does not"
                    f" contain the count {count} (numeric correspondence"
-                   " required)")
+                   " required; row_text is descriptive only and never"
+                   " supports a count)")
 
 
 def validate_source_and_geometry(spec, geometry_map):
@@ -634,6 +629,11 @@ def resolve_assembly_ea(spec, a):
     guessed. Type-level withholding poisons standard assemblies AND
     variants that are included in the parent total; an ADDITIONAL variant
     with valid evidence of its own keeps its count.
+
+    V5 (P0.2): when an INCLUDED variant's evidence is withheld, the
+    dependent STANDARD allocation is withheld too - the parent count is
+    NEVER restored for the standard units (that inflated 8 -> 10 and
+    priced 824 SF for scope whose split is unproven).
     """
     qb = a["quantity_basis"]
     if qb["mode"] == "enumerated":
@@ -655,9 +655,17 @@ def resolve_assembly_ea(spec, a):
         if v.get("_evidence_ok") is False:
             return None, "variant count unsupported (evidence withheld)"
         return v["count"], f"variant {vname} count {v['count']} (schedule)"
-    incl = sum(v["count"] for v in sched.get("variants", [])
-               if v["type"] == t["type"] and v["included_in_parent_total"]
-               and v.get("_evidence_ok") is not False)
+    included = [v for v in sched.get("variants", [])
+                if v["type"] == t["type"] and v["included_in_parent_total"]]
+    bad = [v for v in included if v.get("_evidence_ok") is False]
+    if bad:
+        return None, ("included variant(s) "
+                      + ", ".join(v["name"] for v in bad)
+                      + " have withheld evidence - the parent count "
+                        f"{t['count']} cannot be split reliably, so the"
+                        " standard EA is withheld too (never restored to the"
+                        " full parent count)")
+    incl = sum(v["count"] for v in included)
     count = t["count"] - incl
     if count < 0:
         return None, (f"included variant counts exceed the type count"
@@ -695,6 +703,8 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
 
     # ---- bidirectional membership ------------------------------------
     asm_ids = {a["assembly_id"] for a in assemblies}
+    declared_pieces = {a["assembly_id"]: set(a.get("pieces") or [])
+                       for a in assemblies}
     claims = {}
     for p in pieces:
         claims.setdefault(p["assembly_id"], []).append(p["piece_id"])
@@ -723,9 +733,55 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
                 resolved["membership_problems"].append(
                     f"assembly {a['assembly_id']!r} lists piece {pid!r} with"
                     " no piece record")
+    # V5 (P0.2): RECIPROCAL membership - a piece that points at an assembly
+    # the assembly does not list back is a half-claimed record: flagged, and
+    # its extension stays blank until the spec is coherent.
+    for p in pieces:
+        aid = p["assembly_id"]
+        if aid in asm_ids and p["piece_id"] not in declared_pieces[aid]:
+            resolved["membership_problems"].append(
+                f"piece {p['piece_id']!r} names assembly {aid!r} but the"
+                " assembly's pieces list does not include it back (one-sided"
+                " membership) - the extension stays blank")
     for problem in resolved["membership_problems"]:
         audit.add_callout("piece/assembly membership", problem,
                           blank_fields=["extension_sf"])
+
+    # ---- repeated geometry claims (V5, P0.2) --------------------------
+    # Two geometry-route pieces pointing at the SAME measured region claim
+    # the same counter twice (802 -> 1,002 SF with all views 'agreeing').
+    # Undeclared duplicates: only the FIRST piece keeps its extension; the
+    # rest are withheld blank behind a callout. Reuse that the spec
+    # explicitly declares (piece_geometry_reuse[]) is a NON-defect.
+    reuse_decls = {}
+    for d in spec.get("piece_geometry_reuse") or []:
+        reuse_decls.setdefault(d.get("region_id"), set()).update(
+            d.get("pieces") or [])
+    by_region = {}
+    for p in pieces:
+        if p.get("route") == "geometry" and p.get("region_id"):
+            by_region.setdefault(p["region_id"], []).append(p["piece_id"])
+    geometry_withheld = set()
+    for rid, pids in by_region.items():
+        if len(pids) <= 1:
+            continue
+        allowed = reuse_decls.get(rid, set())
+        for pid in pids[1:]:
+            if pid in allowed and pids[0] in allowed:
+                continue  # explicitly declared reuse: legitimate
+            geometry_withheld.add(pid)
+            resolved["membership_problems"].append(
+                f"pieces {pids} both claim region {rid!r} - the same measured"
+                f" geometry cannot be counted twice; piece {pid!r}'s"
+                " extension is withheld (declare piece_geometry_reuse if the"
+                " reuse is real)")
+    for pid in geometry_withheld:
+        audit.add_callout(
+            f"piece {pid}",
+            "REPEATED GEOMETRY CLAIM - another piece already extends this"
+            f" measured region; the duplicate extension is withheld"
+            " (blank, never re-counted)",
+            blank_fields=["extension_sf"])
 
     # ---- measured regions covered by NO piece ------------------------
     if assemblies:
@@ -862,6 +918,12 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
             cutouts[c["kind"]] = cutouts.get(c["kind"], 0) + c["ea"]
         ext = (round(sf * ea, 4)
                if sf is not None and isinstance(ea, (int, float)) else None)
+        extension_withheld = pid in geometry_withheld
+        if extension_withheld and ext is not None:
+            # V5 P0.2: the duplicate geometry claim keeps its identity (SF,
+            # EA) but its extension is WITHHELD - the same counter is never
+            # money/area-counted twice
+            ext = None
         if ext is None:
             blank.append("extension_sf")
         edge_ext = ({k: round(v * ea, 3) for k, v in edges.items()
@@ -902,6 +964,7 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
             "splash_detail": splash_detail,
             "cutouts_ea": cutouts or {},
             "ea": ea, "extension_sf": ext,
+            "extension_withheld": extension_withheld,
             "edge_lf_ext": edge_ext, "splash_lf_ext": splash_lf_ext,
             "splash_sf_ext": splash_sf_ext, "cutouts_ea_ext": cutouts_ext,
             "state": state, "blank_fields": sorted(set(blank)),
@@ -915,6 +978,9 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
         pieces_by_asm.setdefault(prow["assembly_id"], []).append(prow)
     for arow in resolved["assemblies"].values():
         own = pieces_by_asm.get(arow["assembly_id"], [])
+        # V5: pieces with a WITHHELD extension (repeated geometry claim,
+        # one-sided membership) do not extend the assembly either
+        own = [pp for pp in own if not pp.get("extension_withheld")]
         sfs = [pp["sf"] for pp in own]
         if own and all(v is not None for v in sfs):
             arow["sf_per_instance"] = round(sum(sfs), 4)
@@ -1049,10 +1115,11 @@ def audit_schedule_evidence(spec, geometry_map, audit):
                 continue
             ok, why = _count_supported_by_evidence(
                 t["count"], [b.get("t") for b in boxes],
-                rows=t.get("rows") or [], row_text=t.get("row_text"))
+                rows=t.get("rows") or [])
             if not ok:
-                # P0.2: a quoted word box containing '3' must not support a
-                # count of 30 - numeric correspondence, not word existence
+                # P0.2/V5: a quoted word box containing '3' must not support
+                # a count of 30 - numeric correspondence against the VERIFIED
+                # boxes only (editing row_text rescues nothing)
                 _withhold_type(audit, sched, t["type"], why)
         for v in sched.get("variants", []):
             boxes = v.get("word_boxes") or []
@@ -1068,7 +1135,7 @@ def audit_schedule_evidence(spec, geometry_map, audit):
                 continue
             ok, why = _count_supported_by_evidence(
                 v["count"], [b.get("t") for b in boxes],
-                rows=v.get("rows") or [], row_text=v.get("row_text"))
+                rows=v.get("rows") or [])
             if not ok:
                 # P0.2: invalid variant evidence -> its SF extension is
                 # withheld, not silently added
