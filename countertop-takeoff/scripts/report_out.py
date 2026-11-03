@@ -347,10 +347,14 @@ def _csv_rows(spec, types, results):
     for rid, (row, r) in base_by_id.items():
         notes = (f"factor from page {r['page']} viewport {r['viewport']}"
                  f" ({r['gross_area_policy']})")
+        factor = r.get("factor_pt_per_ft")
+        if factor is None:
+            factor = r.get("factor_px_per_ft")
+            notes = f"image route at {factor} px/ft ({r['gross_area_policy']})"
         rows.append([
             "base", row["room_type"], row["variant"] or "", rid, r["sheet"],
             r["page"], r["viewport"], f"{row['sf']:.2f}", row["count"],
-            f"{row['extended_sf']:.2f}", f"{r['factor_pt_per_ft']:.4f}",
+            f"{row['extended_sf']:.2f}", f"{factor:.4f}",
             f"{src} p.{r['page']} ({r['sheet']})", notes])
     for r in results:
         if r["kind"] != "recheck":
@@ -368,7 +372,7 @@ def _csv_rows(spec, types, results):
         rows.append([
             "recheck_of_base", r["type"], r["variant"] or "", r["region_id"],
             r["sheet"], r["page"], r["viewport"], f"{r['area_sf']:.2f}", 0,
-            "", f"{r['factor_pt_per_ft']:.4f}",
+            "", f"{r.get('factor_pt_per_ft') or r.get('factor_px_per_ft') or 0:.4f}",
             f"{src} p.{r['page']} ({r['sheet']})",
             f"QA recheck of {r.get('of')}; never extended"])
     for t in types:

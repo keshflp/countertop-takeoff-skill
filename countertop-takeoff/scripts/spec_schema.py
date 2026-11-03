@@ -524,6 +524,20 @@ def validate_regions(spec, sched):
             require(v in names, f"{rid}: variant {v!r} not declared for type"
                     f" {rtype!r} in the schedule")
         pos_int(r.get("page"), f"{rid}: page")
+        if r.get("route") == "image":
+            # P0.6 route 3: calibrated image-space measurement produced by
+            # scripts/image_measure.py; no vector boundary is selected
+            require(isinstance(r.get("image_measurement"), str)
+                    and r["image_measurement"],
+                    f"{rid}: route 'image' needs image_measurement (path to"
+                    " the image_measure.py result JSON)")
+            rng = r.get("expected_sf_range")
+            require(isinstance(rng, list) and len(rng) == 2
+                    and all(finite(x) for x in rng) and rng[0] < rng[1],
+                    f"{rid}: expected_sf_range [min, max] is required")
+            if r.get("source_id") is None:
+                r["source_id"] = default_source_id(spec)
+            continue
         if r.get("source_id") is not None:
             require(r["source_id"] in source_ids(spec),
                     f"{rid}: source_id {r['source_id']!r} is not a declared"

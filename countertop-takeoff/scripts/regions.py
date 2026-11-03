@@ -20,7 +20,10 @@ V2 rules (all errors are hard stops with explicit messages):
     cross-type overlap warns
 """
 
+import hashlib
+import json
 import math
+import os
 
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
@@ -34,6 +37,66 @@ SNAP_DEFAULT = 0.05            # endpoint snap grid, pt
 
 class RegionError(TakeoffError):
     pass
+
+
+def measure_region_image(region, base_dir):
+    """P0.6 route 3: ingest an image_measure.py result for one region.
+
+    Verifies the recorded crop hash against the actual crop file on disk
+    (integrity: proves WHICH pixels were measured) and returns the region
+    record. Unusable rasters (warnings on the measurement) stay BLANK with
+    the warnings carried into the record for callouts - never guessed.
+    """
+    rid = region["region_id"]
+    base = {
+        "region_id": rid, "kind": region.get("kind", "base"),
+        "of": region.get("of"), "type": region.get("type"),
+        "variant": region.get("variant"), "page": region["page"],
+        "source_id": region.get("source_id"),
+        "viewport": region.get("viewport") or "main",
+        "sheet": region.get("sheet") or "?",
+        "route": "image", "expected_sf_range": region.get("expected_sf_range"),
+    }
+    path = region["image_measurement"]
+    if not os.path.isabs(path) and not os.path.exists(path):
+        path = os.path.join(base_dir, path)
+    rng = region.get("expected_sf_range") or [0, 1]
+    ok = lambda area: bool(area is not None and rng[0] <= area <= rng[1])
+    if not os.path.exists(path):
+        return dict(base, status="unresolved",
+                    unresolved_reason=f"image measurement file missing: {path}",
+                    blank_fields=["area_sf"], area_sf=None,
+                    factor_px_per_ft=None, expected_range_ok=False)
+    m = json.load(open(path, encoding="utf-8"))
+    crop = m.get("crop")
+    if crop and not os.path.isabs(crop) and not os.path.exists(crop):
+        crop = os.path.join(base_dir, crop)
+    crop_ok = True
+    if crop and os.path.exists(crop):
+        got = hashlib.sha256(open(crop, "rb").read()).hexdigest()
+        crop_ok = got == m.get("crop_sha256")
+    else:
+        crop_ok = False
+    warnings = list(m.get("warnings") or [])
+    if not crop_ok:
+        warnings.insert(0, "crop hash mismatch - the measurement does not"
+                        " prove which pixels it read; re-render and"
+                        " re-measure")
+    if m.get("area_sf") is None or warnings:
+        return dict(base, status="unresolved",
+                    unresolved_reason="; ".join(warnings)
+                    or "image measurement unusable",
+                    blank_fields=["area_sf"], area_sf=None,
+                    factor_px_per_ft=m.get("px_per_ft"),
+                    image_quality=m.get("quality"), expected_range_ok=False)
+    area = m["area_sf"]
+    return dict(base, status="measured", area_sf=area,
+                factor_px_per_ft=m.get("px_per_ft"),
+                image_quality=m.get("quality"), image_warnings=warnings,
+                crop_sha256=m.get("crop_sha256"),
+                expected_range_ok=ok(area),
+                polygon=[[float(x), float(y)] for x, y in
+                         (m.get("polygon_px") or [])])
 
 
 def _snap(v, tol):

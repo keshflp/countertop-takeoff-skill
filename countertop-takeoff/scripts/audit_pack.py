@@ -58,6 +58,34 @@ def render_overlay(pdf_path, page_no, region, cal, segments, out_base, zoom):
     pix = base[page_no - 1].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
     base.close()
     pg.insert_image(pymupdf.Rect(0, 0, disp_w, disp_h), pixmap=pix)
+    if region.get("route") == "image":
+        # image-route areas are measured on a rendered CROP (crop-pixel
+        # space), not on the PDF page: point the reviewer at the route's
+        # own overlay proof instead of drawing a shell here.
+        pg.insert_text((10, 20), f"{region['region_id']}  IMAGE ROUTE"
+                       f" {region['area_sf']:.2f} SF at"
+                       f" {region.get('factor_px_per_ft')} px/ft - the"
+                       " overlay proof was rendered by image_measure.py on"
+                       " the crop",
+                       fontname="helv", fontsize=9, color=(0, 0, 0.6))
+        clip = pymupdf.Rect(0, 0, disp_w, disp_h)
+        out = f"{out_base}_full.png"
+        pg.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip).save(out)
+        scratch.close()
+        return [out]
+    if region.get("status") == "unresolved":
+        # unresolved regions have no shell; render a marker + reason so the
+        # reviewer sees the blank in the pack
+        seed = region.get("seed") or [disp_w / 2, disp_h / 2]
+        pg.draw_circle(seed, 5.0, color=SPAN_COLOR, width=1.5)
+        pg.insert_text((10, 20), f"{region['region_id']}  UNRESOLVED -"
+                       f" {region.get('unresolved_reason', '')[:90]}",
+                       fontname="helv", fontsize=9, color=(0.6, 0, 0))
+        clip = pymupdf.Rect(0, 0, disp_w, disp_h)
+        out = f"{out_base}_full.png"
+        pg.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip).save(out)
+        scratch.close()
+        return [out]
     poly = region["polygon"]
     ring = list(poly) + [poly[0]]  # draw_polyline leaves the ring open
     pg.draw_polyline(ring, color=SHELL_FILL, fill=SHELL_FILL,

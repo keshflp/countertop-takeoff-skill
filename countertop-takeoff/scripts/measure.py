@@ -89,7 +89,8 @@ def unresolved_result(region, sid, reason):
     }
 
 
-def measure_all_regions(spec, pages_by_no, calibrations, snap, audit_obj):
+def measure_all_regions(spec, pages_by_no, calibrations, snap, audit_obj,
+                        base_dir):
     """Measure every region; recoverable failures become UNRESOLVED
     records + callouts at the affected region only (P0.1). The agent's
     alternate routes are the spec's business; code refuses to let one bad
@@ -105,6 +106,22 @@ def measure_all_regions(spec, pages_by_no, calibrations, snap, audit_obj):
                       " re-run extract_geometry.py for it")
             results.append(unresolved_result(region, sid, reason))
             print(f"UNRESOLVED {rid}: {reason}")
+            continue
+        if region.get("route") == "image":
+            # P0.6 route 3: the crop anchors ARE the calibration; no vector
+            # calibration entry is required for this region.
+            r = regions_mod.measure_region_image(region, base_dir)
+            results.append(r)
+            if r.get("status") == "unresolved":
+                print(f"UNRESOLVED {rid} (image route):"
+                      f" {r['unresolved_reason'][:100]}")
+                audit_obj.add_callout(
+                    f"region {rid}", r["unresolved_reason"],
+                    blank_fields=r["blank_fields"], pages=[pno],
+                    source_id=sid)
+            else:
+                print(f"measured {rid} (image route): {r['area_sf']:.2f} SF"
+                      f" at {r['factor_px_per_ft']} px/ft")
             continue
         key = (sid, pno, region.get("viewport") or "main")
         cal = calibrations.get(key)
@@ -191,6 +208,37 @@ def run_pipeline(args):
             f"calibration {key[0]!r} p{key[1]} {key[2]!r}", msg,
             blank_fields=["area_sf", "edge_lf", "splash_lf"],
             pages=[key[1]], source_id=key[0]))
+    # Verified native-CAD units ARE the calibration for cad sources (P0.6):
+    # factor = units_per_ft, computed from $INSUNITS or an explicit
+    # operator declaration - never typed per region.
+    for s in spec["_sources"]:
+        if s["kind"] != "cad":
+            continue
+        geo = geometry_map.get(s["source_id"]) or {}
+        upf = (geo.get("source") or {}).get("units_per_ft")
+        if not upf:
+            raise TakeoffError(
+                f"CAD source {s['source_id']!r} has no verified units -"
+                " re-run scripts/cad_input.py (unitless files refuse)")
+        for p in geo.get("pages", []):
+            key = (s["source_id"], p["page"], "main")
+            if key in calibrations:
+                continue
+            calibrations[key] = {
+                "page": p["page"], "viewport": "main",
+                "source_id": s["source_id"], "viewport_box": None,
+                "spans": [], "factor_pt_per_ft": float(upf),
+                "spread_pct": 0.0, "status": "pass",
+                "units": (geo.get("source") or {}).get("units"),
+                "units_verified": (geo.get("source") or {}).get(
+                    "units_verified"),
+                "basis": "verified drawing units ($INSUNITS / declared)",
+            }
+        for c in geo.get("callouts") or []:
+            audit_obj.add_callout(c.get("scope", "cad"), c.get("reason",
+                                  ""), blank_fields=c.get("blank_fields"),
+                                  pages=c.get("source", {}).get("pages"),
+                                  source_id=s["source_id"])
     if not calibrations:
         # Catastrophic stop 1: no valid calibration anywhere in the set
         # (a verified-units native-CAD source qualifies on its own).
@@ -212,7 +260,7 @@ def run_pipeline(args):
                 f" {cal['spread_pct']:.2f}% in the documented 2-5% band -"
                 " explain it to the reviewer")
     results = measure_all_regions(spec, pages_by_no, calibrations, args.snap,
-                                  audit_obj)
+                                  audit_obj, base_dir)
     audit_mod.audit_planned_vs_completed(spec, results, pages_by_no,
                                          audit_obj)
     sched = audit_mod.audit_schedule(spec, results, audit_obj)

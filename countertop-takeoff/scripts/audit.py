@@ -863,6 +863,19 @@ def audit_region_checks(spec, results, calibrations, audit,
                 "unresolved"), blank_fields=r.get("blank_fields",
                 ["area_sf"]), pages=[r["page"]], source_id=r.get("source_id"))
             continue
+        if r.get("route") == "image":
+            if not r.get("expected_range_ok"):
+                audit.add("expected range", "fail",
+                          f"region {r['region_id']}: image-route"
+                          f" {r['area_sf']:.2f} SF outside expected"
+                          f" {r['expected_sf_range']} - withheld")
+            else:
+                audit.add("expected range", "pass",
+                          f"region {r['region_id']}: image-route"
+                          f" {r['area_sf']:.2f} SF within"
+                          f" {r['expected_sf_range']}"
+                          f" ({r.get('factor_px_per_ft')} px/ft)")
+            continue
         if cal is None:
             audit.add("region calibration", "fail",
                       f"region {r['region_id']}: no calibration for source"
