@@ -1,7 +1,36 @@
-# Measuring method (V2)
+# Measuring method (V3)
 
-How this skill turns PDF linework into trustworthy, auditable square footage.
-Written for the agent doing the takeoff and for the human auditing it.
+How this skill turns drawing sets (vector PDFs, DXF, rasters) into
+trustworthy, auditable quantities. Written for the agent doing the takeoff
+and for the human auditing it.
+
+## V3 deltas over V2 (this section is current; the rest describes the
+shared method)
+
+- Image-coverage thresholds are PERCENT (20 / 60); raster fingerprints hash
+  actual stored pixels (`get_image_info(xrefs=True)`).
+- Content REGIONS: per-region raster/vector classification inside a sheet —
+  a pasted bitmap schedule neither disappears nor disqualifies unrelated
+  vector geometry. Region boundaries must sit OUTSIDE raster regions for
+  the vector route; raster regions go through the image route or stay
+  blank.
+- Dimension parsing accepts total inches (211"), decimals (10.5'), explicit
+  inch-only values (4", 1 1/2" — required by section sheets), fractions,
+  and split labels.
+- Calibration spans must be independent (unique segments AND unique parsed
+  lengths); duplicate calibration keys for one viewport refuse; viewport
+  boxes bound spans and region seeds.
+- Graduated degradation: recoverable failures resolve to UNRESOLVED
+  records with BLANK quantities + callouts; run status is complete /
+  complete_with_callouts / stopped; exactly three stops (see SKILL.md).
+- Routes in order: vector PDF -> supplied DXF with verified units
+  ($INSUNITS; unitless refuses without an explicit --units declaration,
+  recorded operator-verified) -> calibrated image-space measurement
+  (image_measure.py: crop hash, 2+ agreeing anchors, mandatory overlay).
+- Counts: schedule evidence (text word boxes or hash-verified crop cells)
+  cross-validated against plan room tags; unsupported counts are withheld.
+- Dual BoQ: assemblies + pieces derive from one model; piece and assembly
+  views are never summed with each other.
 
 ## 0. Why this design
 

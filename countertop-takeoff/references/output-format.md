@@ -72,7 +72,12 @@ renamed `<name>.stale-<utc>` so an old export can't look current.
              "sf_per_unit": 38.25, "extended_sf": 114.75, "rows": [...]}],
   "totals": {"project_sf": 168.75, "unit_count": 5},
   "audit": [{"check": "...", "status": "pass|warn|fail", "detail": "..."}],
-  "status": "ready | warning | failed",
+  "run_status": "complete | complete_with_callouts | stopped",
+  "callouts": [{"scope", "reason", "blank_fields", "source"}],
+  "coverage_ledger": [{"item", "kind", "state":
+                       "measured|package_excluded|superseded|unresolved"}],
+  "assembly_boq": [...],
+  "piece_boq": [...],
   "review_status": "independent_audit_pending",
   "geometry_page_classes": {"1": "text_only", "2": "vector"}
 }
@@ -93,16 +98,17 @@ After an independent audit, `audit_pack.py --record-receipt` adds:
   base page render (recorded rotation applied) + translucent measured shell,
   region id, area, ACTUAL factor, policy, seed marker, calibration span
   highlights, declared cutouts
-- `index.md`: run summary (status, review status, totals) plus what the
-  independent reviewer must check: raw sheets, schedule evidence, omissions,
-  overlays
+- `index.md`: run summary (run status, review status, totals), the CALLOUTS
+  the reviewer must confirm, plus what to check: raw sheets, schedule
+  evidence, omissions, overlays. Unresolved regions render a marker page
+  naming the blank; image-route regions point at the route's own overlay
 
 ## 5. Exit codes
 
 | code | meaning |
 |---|---|
-| 0 | required checks passed (`ready` or `warning`); CSV written; check `review_status` before delivering |
-| 2 | hard stop — invalid spec, hash mismatch, non-vector measured page, calibration failure, unclosed boundary, audit FAIL. Diagnostics (report + results JSON) are still written; no CSV; stale exports quarantined. |
+| 0 | `complete` (deliverable) or `complete_with_callouts` (deliver with the CALLOUTS list: blank fields named, never zeros); CSVs written |
+| 2 | `stopped` — one of the three catastrophic cases: no valid calibration anywhere (verified-units CAD qualifies), no schedule and no repeatable pattern, or source integrity mismatch; also spec malformation. Diagnostics (report + results JSON) are still written; no exports; stale exports quarantined — even when the pipeline itself crashes |
 
 ## 6. Side files (regenerable, gitignored)
 

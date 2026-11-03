@@ -44,9 +44,8 @@ Vector plan-sheet candidates: [2, 3]
 Pages needing an explicit scope disposition: [1]
 ```
 
-The agent READS the schedule counts from the page text (never from images)
-and presents the scope/schedule plan for approval BEFORE any extraction —
-the v2 human gate. The fixture's job spec records: page 1 skipped (schedule
+The agent READS the schedule counts from the page text (never guessed) and
+records the scope plan in the job spec. The fixture's job spec records: page 1 skipped (schedule
 sheet), pages 2–3 measured with expected regions `A:kitchen, A:vanity` /
 `B:kitchen, B:vanity`, counts A=3 / B=2 with quoted rows + word boxes, and
 the plan/spec depth conflict (notes say 25 in., plans draw 30 in.) as a
