@@ -186,9 +186,79 @@ def validate_mode_and_policy(spec):
 PROFILE_KEYS = {"profile_version", "company", "material_aliases",
                 "gross_net_policy", "required_components",
                 "report_preferences", "approved_assumptions",
-                "package_defaults"}
+                "package_defaults", "currency", "rates"}
 PACKAGES = {"millwork", "FFE", "public_BOH"}
 HANDINGS = {"LH", "RH"}
+
+
+def validate_rates(profile):
+    """Profile v2 pricing schema (P1.1): rates[] price ASSEMBLY EA x an
+    exact company-profile rate. Matching requires a stable item code plus
+    matching assembly identity/dimensions - NEVER finish alone: a rate
+    whose match lacks 'assembly_kind' refuses to load (a finish-only rate
+    is exactly how a W laminate vanity gets priced as stone)."""
+    rates = profile.get("rates")
+    if rates is None:
+        return []
+    require(isinstance(rates, list) and rates,
+            "profile.rates must be a non-empty list when present")
+    codes = set()
+    profile_currency = profile.get("currency")
+    require(profile_currency is None or (isinstance(profile_currency, str)
+            and profile_currency.strip()),
+            "profile.currency must be a non-empty string (e.g. 'USD')")
+    for i, r in enumerate(rates):
+        require(isinstance(r, dict), f"rates[{i}] must be an object")
+        code = r.get("item_code")
+        require(isinstance(code, str) and code.strip(),
+                f"rates[{i}].item_code must be a non-empty string (the stable"
+                " code every line cites)")
+        require(code not in codes, f"rates[{i}]: duplicate item_code {code!r}")
+        codes.add(code)
+        match = r.get("match")
+        require(isinstance(match, dict), f"rates[{i}] ({code}): match must be"
+                " an object describing WHICH assemblies the rate prices")
+        ak = match.get("assembly_kind")
+        require(isinstance(ak, str) and ak.strip(),
+                f"rates[{i}] ({code}): match.assembly_kind is REQUIRED - a"
+                " rate must pin the assembly identity; NEVER infer price from"
+                " finish alone")
+        ft = match.get("finish_tag")
+        require(ft is None or (isinstance(ft, str) and ft.strip()),
+                f"rates[{i}] ({code}): match.finish_tag must be a string")
+        for k in ("width_in", "depth_in", "height_in"):
+            v = match.get(k)
+            require(v is None or (finite(v) and v > 0),
+                    f"rates[{i}] ({code}): match.{k} must be a positive"
+                    " number")
+        h = match.get("handing")
+        require(h is None or h in HANDINGS,
+                f"rates[{i}] ({code}): match.handing must be LH or RH")
+        pkg = match.get("package")
+        require(pkg is None or pkg in PACKAGES,
+                f"rates[{i}] ({code}): match.package must be one of"
+                f" {sorted(PACKAGES)}")
+        require(r.get("uom") == "EA",
+                f"rates[{i}] ({code}): uom must be 'EA' (v4 prices assembly"
+                " EA x exact rate; SF pricing is not built)")
+        up = r.get("unit_price")
+        require(finite(up) and up >= 0,
+                f"rates[{i}] ({code}): unit_price must be a finite number >="
+                " 0 (an explicit 0-rate stays distinguishable from a missing"
+                " rate)")
+        cur = r.get("currency")
+        require(cur is None or (isinstance(cur, str) and cur.strip()),
+                f"rates[{i}] ({code}): currency must be a string when present")
+        if cur and profile_currency and cur != profile_currency:
+            raise SpecError(
+                f"rates[{i}] ({code}): currency {cur!r} != the profile"
+                f" currency {profile_currency!r} - mixed currencies refuse")
+        inc = r.get("includes")
+        require(inc is None or (isinstance(inc, list)
+                and all(isinstance(x, str) and x.strip() for x in inc)),
+                f"rates[{i}] ({code}): includes must be a list of strings"
+                " (the components the rate already covers)")
+    return rates
 
 
 def validate_profile(spec, base_dir):
@@ -230,6 +300,7 @@ def validate_profile(spec, base_dir):
                 f"profile {k} must be a list of strings")
     require(isinstance(profile.get("report_preferences", {}), dict),
             "report_preferences must be an object")
+    validate_rates(profile)
     return profile
 
 

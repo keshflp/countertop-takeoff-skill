@@ -406,6 +406,20 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
         report_out.write_assembly_csv(args.assembly_csv, assembly_rows)
         print(f"wrote {args.assembly_csv} (assembly BoQ:"
               f" {len(assembly_rows)} row(s))")
+    if args.estimate_profile:
+        # P1.1: assembly-EA estimate from the SAME resolved records
+        import estimate as estimate_mod
+        base = args.report or args.json_path or "build/estimate"
+        stem = os.path.splitext(base)[0].replace("report", "estimate")
+        payload = estimate_mod.build_estimate(
+            args.json_path or args.report, args.estimate_profile,
+            out_md=stem + ".md",
+            out_json=stem + ".json",
+            out_pdf=stem + ".pdf")
+        print(f"estimate grand total:"
+              + (f" {payload['grand_total']}"
+                 if payload["grand_total"] is not None else " BLANK"
+                 " (unknown amounts disclosed in the estimate callouts)"))
     return 0
 
 
@@ -427,6 +441,10 @@ def parse_args(argv=None):
                     help="endpoint snap tolerance in pt (default 0.05)")
     ap.add_argument("--recheck-tolerance", type=float, default=2.0,
                     help="recheck deviation tolerance, percent (default 2.0)")
+    ap.add_argument("--estimate-profile", dest="estimate_profile", default=None,
+                    help="company profile with rates[] (P1.1): after a"
+                         " successful measure, also build the assembly-EA"
+                         " estimate next to the report")
     return ap.parse_args(argv)
 
 
