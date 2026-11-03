@@ -1,26 +1,31 @@
 # /// script
 # requires-python = ">=3.9"
-# dependencies = ["pymupdf>=1.24"]
+# dependencies = ["pymupdf==2.1"]
 # ///
-"""Extract vector geometry + text positions from PDF pages (step 2 of the takeoff).
+"""Extract vector geometry + text positions (step 2 of the V2 takeoff).
 
-Uses PyMuPDF page.get_drawings() to pull the page's VECTOR linework:
-  - straight lines              ("l"  items)
-  - bezier curves               ("c"  items, flattened into 8 chords)
-  - rectangles / quads          ("re"/"qu" items, emitted as 4 edges each)
-and page.get_text("words") for word bounding boxes (needed for calibration:
-dimension labels must be matched to vector segments on the SAME sheet).
+V2 upgrades over V1:
+  - every segment and word carries a stable integer ID (the job spec SELECTS
+    boundary segments and calibration spans by ID - code computes all lengths)
+  - coordinates are normalized to DISPLAYED page space (rotation applied), so
+    bbox/seed bookkeeping matches what a renderer shows; page rotation and
+    crop metadata are recorded per page
+  - each page records the shared preflight stats (segment count, image
+    coverage, content class, fingerprint) so measurement can refuse
+    raster/hybrid pages without re-deriving them
+  - the file records the source PDF's SHA-256; measure.py verifies the
+    geometry really belongs to the approved source
 
-Output: one JSON file containing, per page:
-  segments: [{x0, y0, x1, y1, w}]   (PDF points, page space, origin top-left)
-  words:    [{t, x0, y0, x1, y1}]
+Output JSON, per page:
+  segments: [{id, path, x0, y0, x1, y1, w}]   (displayed page points)
+  words:    [{id, t, x0, y0, x1, y1}]
+plus preflight/identity metadata and source digest.
 
 Usage:
     uv run scripts/extract_geometry.py <file.pdf> [--pages 2,3 | --pages all]
                                         [--out PATH]
-
-Default --pages: all.  Default --out: <pdf>.geometry.json next to the PDF.
-Page numbers are 1-based (as reported by index_pdf.py).
+Default --pages: all.  Default --out: <pdf>.geometry.json. Pages are 1-based
+as reported by index_pdf.py.
 """
 
 import argparse
@@ -30,15 +35,14 @@ import re
 import sys
 from datetime import datetime, timezone
 
-try:
-    import pymupdf
-except ImportError:
-    import fitz as pymupdf
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pymupdf  # noqa: E402
+import preflight_lib as pl  # noqa: E402
 
-CURVE_SUBDIVISIONS = 8
-
-SHEET_RE = re.compile(r"(?im)^\s*SHEET\s*[:#]?\s*([A-Z]{0,3}[-\s]?\d{1,4}[A-Z]?)\s*$")
+SHEET_RE = re.compile(
+    r"(?im)^\s*SHEET\s*[:#]?\s*([A-Z]{0,3}[-\s]?\d{1,4}[A-Z]?)\s*$")
 SHEET_FALLBACK_RE = re.compile(r"(?im)^\s*([A-Z]{1,3}-\d{1,4})\s*$")
+REVISION_RE = re.compile(r"\brev(?:ision)?\s*[.:#-]?\s*([A-Z0-9]{1,4})\b", re.I)
 
 
 def parse_pages(spec, page_count):
@@ -65,51 +69,64 @@ def detect_sheet(text):
     return m.group(1).replace(" ", "-").upper() if m else None
 
 
-def segments_from_page(page):
-    """Flatten all drawing items into straight segments in page points."""
-    segs = []
-    for d in page.get_drawings():
-        w = round(float(d.get("width") or 0.0), 3)
-        for item in d["items"]:
-            op = item[0]
-            if op == "l":
-                p1, p2 = item[1], item[2]
-                segs.append((p1.x, p1.y, p2.x, p2.y, w))
-            elif op == "c":
-                # cubic bezier: flatten into chords
-                p0, p1, p2, p3 = item[1], item[2], item[3], item[4]
-                pts = []
-                for k in range(1, CURVE_SUBDIVISIONS + 1):
-                    t = k / CURVE_SUBDIVISIONS
-                    mt = 1 - t
-                    x = (mt**3 * p0.x + 3 * mt**2 * t * p1.x
-                         + 3 * mt * t**2 * p2.x + t**3 * p3.x)
-                    y = (mt**3 * p0.y + 3 * mt**2 * t * p1.y
-                         + 3 * mt * t**2 * p2.y + t**3 * p3.y)
-                    pts.append((x, y))
-                prev = (p0.x, p0.y)
-                for pt in pts:
-                    segs.append((prev[0], prev[1], pt[0], pt[1], w))
-                    prev = pt
-            elif op == "re":
-                r = item[1]
-                segs.extend([
-                    (r.x0, r.y0, r.x1, r.y0, w),
-                    (r.x1, r.y0, r.x1, r.y1, w),
-                    (r.x1, r.y1, r.x0, r.y1, w),
-                    (r.x0, r.y1, r.x0, r.y0, w),
-                ])
-            elif op == "qu":
-                q = item[1]
-                corners = [q.ul, q.ur, q.lr, q.ll]
-                for i in range(4):
-                    a, b = corners[i], corners[(i + 1) % 4]
-                    segs.append((a.x, a.y, b.x, b.y, w))
-    return [
-        {"x0": round(s[0], 4), "y0": round(s[1], 4),
-         "x1": round(s[2], 4), "y1": round(s[3], 4), "w": s[4]}
-        for s in segs
+def page_record(doc, pno):
+    """One geometry page: ID'd segments/words (displayed space) + preflight."""
+    page = doc[pno - 1]
+    raw_segs = pl.segments_of_page(page)
+    # path ids by re-walking get_drawings() in the same order segments_of_page
+    # used, so every segment keeps the id of the path it came from
+    path_map = []
+    for j, d in enumerate(page.get_drawings()):
+        path_map.extend([j] * path_seg_count(d))
+    segments = [
+        {"id": i, "path": p, "x0": s[0], "y0": s[1], "x1": s[2], "y1": s[3],
+         "w": s[4]}
+        for i, (s, p) in enumerate(zip(raw_segs, path_map))
     ]
+    words = [{"id": i, **w} for i, w in enumerate(pl.words_of_page(page))]
+    text = page.get_text("text") or ""
+    stats = pl.drawing_stats(page)
+    images = pl.image_stats(page, doc)
+    page_area = float(page.rect.width * page.rect.height) or 1.0
+    img_area = sum(max(0.0, im["bbox"][2] - im["bbox"][0])
+                   * max(0.0, im["bbox"][3] - im["bbox"][1]) for im in images)
+    cover_pct = min(100.0, img_area / page_area * 100.0)
+    cls = pl.classify_page(stats["segment_count"], cover_pct, len(text))
+    return {
+        "page": pno,
+        "sheet": detect_sheet(text),
+        "identity": pl.page_identity(doc, page),
+        "coordinate_space": "displayed",
+        "segment_count": len(segments),
+        "word_count": len(words),
+        "segments": segments,
+        "words": words,
+        "preflight": {
+            "op_counts": stats["op_counts"],
+            "segment_bounds": stats["segment_bounds"],
+            "images": images,
+            "image_cover_pct": round(cover_pct, 2),
+            "class": cls["class"],
+            "class_reasons": cls["reasons"],
+            "fingerprint": pl.page_fingerprint(page, images),
+            "revision_marks": sorted({m.upper() for m in REVISION_RE.findall(text)}),
+        },
+        "text_chars": len(text),
+    }
+
+
+def path_seg_count(d):
+    """How many flattened segments one drawing path contributes."""
+    n = 0
+    for item in d["items"]:
+        op = item[0]
+        if op == "l":
+            n += 1
+        elif op == "c":
+            n += pl.CURVE_SUBDIVISIONS
+        elif op in ("re", "qu"):
+            n += 4
+    return n
 
 
 def main():
@@ -124,28 +141,13 @@ def main():
 
     doc = pymupdf.open(args.pdf)
     wanted = parse_pages(args.pages, doc.page_count)
-    pages = []
-    for pno in wanted:
-        page = doc[pno - 1]
-        words = page.get_text("words") or []
-        segs = segments_from_page(page)
-        pages.append({
-            "page": pno,
-            "sheet": detect_sheet(page.get_text("text") or ""),
-            "width": round(page.rect.width, 2),
-            "height": round(page.rect.height, 2),
-            "segment_count": len(segs),
-            "word_count": len(words),
-            "segments": segs,
-            "words": [
-                {"t": w[4], "x0": round(w[0], 3), "y0": round(w[1], 3),
-                 "x1": round(w[2], 3), "y1": round(w[3], 3)}
-                for w in words
-            ],
-        })
-        print(f"page {pno}: {len(segs)} segments, {len(words)} words"
-              f"  (sheet {pages[-1]['sheet'] or '?'})")
+    pages = [page_record(doc, pno) for pno in wanted]
+    page_count = doc.page_count
     doc.close()
+    for p in pages:
+        print(f"page {p['page']}: {p['segment_count']} segments,"
+              f" {p['word_count']} words, class {p['preflight']['class']}"
+              f"  (sheet {p['sheet'] or '?'}), rot {p['identity']['rotation']})")
 
     out = args.out or os.path.splitext(args.pdf)[0] + ".geometry.json"
     out_dir = os.path.dirname(out)
@@ -154,6 +156,7 @@ def main():
     payload = {
         "pdf": args.pdf,
         "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source": {"sha256": pl.file_sha256(args.pdf), "page_count": page_count},
         "pages": pages,
     }
     with open(out, "w", encoding="utf-8") as f:
