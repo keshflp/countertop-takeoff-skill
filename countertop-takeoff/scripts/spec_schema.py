@@ -1,0 +1,327 @@
+"""Job-spec schema validation for the V2 countertop takeoff.
+
+The V2 job spec is an EVIDENCE document: the agent records where every count
+came from (row text + word boxes on a page/sheet of a hashed source), which
+pages enter or leave the approved scope and why, which dimension spans and
+boundary segments to use, and the gross-area policy. Code then measures.
+
+Schema (documented in references/job-spec-v2.md):
+{
+  "schema": "countertop-takeoff/v2",
+  "source": {"pdf": "<path>", "sha256": "<64 hex>"},
+  "geometry": "<path to extract_geometry.py output>",
+  "mode": "repeated_types" | "individual_rooms",
+  "policy": {"gross_area": "gross" | "net_of_declared_cutouts",
+             "declarations": [{"kind": "...", "detail": "..."}]},   # optional
+  "schedule": {                                                   # repeated only
+    "page": 1, "sheet": "A-001",
+    "types":   [{"type": "A", "count": 3, "row_text": "...", "word_boxes": [...],
+                 "rows": [{"floor": "1", "count": 3, "row_text": "..."}]}],
+    "variants": [{"type": "A", "name": "ADA", "count": 1,
+                  "included_in_parent_total": false, "row_text": "...",
+                  "word_boxes": [...]}],
+    "stated_totals": {"per_floor": {"1": 5, "2": 5}, "project": 10}  # optional
+  },
+  "scope": {"pages": [
+      {"page": 1, "sheet": "A-001", "disposition": "intentionally_skipped",
+       "reason": "..."},
+      {"page": 2, "sheet": "A-101", "disposition": "measured",
+       "expected_regions": ["A:kitchen", "A:vanity"]},
+      {"page": 9, "disposition": "blocked", "reason": "..."}  # blocks export
+  ]},
+  "calibrations": [{"page": 2, "viewport": "main", "spans": [
+      {"label": "10'-0\"", "word_ids": [29], "seg_ids": [14], "real_ft": 10.0},
+      ... 2+ agreeing spans required ]}],
+  "regions": [
+      {"region_id": "A:kitchen", "kind": "base", "type": "A", "variant": null,
+       "page": 2, "sheet": "A-101", "viewport": "main",
+       "boundary": {"seg_ids": [4, 5, 6, 7, 8, 9]}, "seed": [160, 390],
+       "expected_sf_range": [25, 40],
+       "cutouts": [{"label": "sink", "seg_ids": [...]}]},              # optional
+      {"region_id": "A:kitchen@recheck", "kind": "recheck",
+       "of": "A:kitchen", ...}
+  ]
+}
+
+Every numeric field is checked finite; every count is a positive integer.
+Structural violations raise SpecError (hard stop, exit 2).
+"""
+
+import math
+import re
+
+SCHEMA_TAG = "countertop-takeoff/v2"
+MODES = {"repeated_types", "individual_rooms"}
+DISPOSITIONS = {"measured", "intentionally_skipped", "blocked"}
+REGION_KINDS = {"base", "recheck"}
+GROSS_POLICIES = {"gross", "net_of_declared_cutouts"}
+SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+class TakeoffError(Exception):
+    """Any hard stop: invalid spec, failed calibration, unclosed boundary,
+    failed audit. Never guessed around; maps to exit code 2."""
+
+
+class SpecError(TakeoffError):
+    pass
+
+
+def finite(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) \
+        and math.isfinite(x)
+
+
+def require(cond, msg):
+    if not cond:
+        raise SpecError(msg)
+
+
+def pos_int(x, what):
+    require(isinstance(x, int) and not isinstance(x, bool) and x >= 1,
+            f"{what} must be a positive integer, got {x!r}")
+    return x
+
+
+def box(b, what):
+    require(isinstance(b, dict), f"{what} must be an object")
+    require(isinstance(b.get("t"), str) and b["t"], f"{what}.t must be text")
+    for k in ("x0", "y0", "x1", "y1"):
+        require(finite(b.get(k)), f"{what}.{k} must be a finite number")
+    require(b["x1"] > b["x0"] and b["y1"] > b["y0"],
+            f"{what} box must have x1>x0 and y1>y0")
+
+
+def seg_ids(lst, what):
+    require(isinstance(lst, list) and lst, f"{what} must be a non-empty list")
+    require(all(isinstance(i, int) and not isinstance(i, bool) and i >= 0
+                for i in lst), f"{what} must be segment ids (ints >= 0)")
+    return lst
+
+
+def word_boxes(lst, what):
+    require(isinstance(lst, list) and lst,
+            f"{what} must be a non-empty list of word boxes (evidence)")
+    for i, b in enumerate(lst):
+        box(b, f"{what}[{i}]")
+
+
+def validate_source(spec):
+    src = spec.get("source")
+    require(isinstance(src, dict), "missing 'source' object")
+    require(isinstance(src.get("pdf"), str) and src["pdf"],
+            "source.pdf must name the source PDF")
+    require(isinstance(src.get("sha256"), str)
+            and SHA_RE.match(src["sha256"]),
+            "source.sha256 must be the 64-hex digest of the source PDF")
+    require(isinstance(spec.get("geometry"), str) and spec["geometry"],
+            "'geometry' must name the extract_geometry.py output")
+
+
+def validate_mode_and_policy(spec):
+    require(spec.get("schema") == SCHEMA_TAG,
+            f"schema must be {SCHEMA_TAG!r} (got {spec.get('schema')!r})"
+            " - V2 job specs are not V1 job specs")
+    mode = spec.get("mode")
+    require(mode in MODES, f"mode must be one of {sorted(MODES)}"
+            " - the takeoff refuses to infer it")
+    policy = spec.get("policy")
+    require(isinstance(policy, dict) and policy.get("gross_area") in GROSS_POLICIES,
+            f"policy.gross_area must be one of {sorted(GROSS_POLICIES)}"
+            " - v1 silently subtracted inner loops; v2 requires an explicit"
+            " policy")
+    decls = policy.get("declarations", [])
+    require(isinstance(decls, list), "policy.declarations must be a list")
+    for i, d in enumerate(decls):
+        require(isinstance(d, dict) and isinstance(d.get("kind"), str)
+                and isinstance(d.get("detail"), str) and d["detail"],
+                f"policy.declarations[{i}] needs kind + detail")
+
+
+def validate_scope(spec):
+    scope = spec.get("scope")
+    require(isinstance(scope, dict), "missing 'scope' object"
+            " - every source page must be dispositioned")
+    pages = scope.get("pages")
+    require(isinstance(pages, list) and pages,
+            "scope.pages must list every source page's disposition")
+    seen = set()
+    for entry in pages:
+        require(isinstance(entry, dict), "scope entry must be an object")
+        pno = pos_int(entry.get("page"), "scope page")
+        require(pno not in seen, f"page {pno} appears twice in scope.pages")
+        seen.add(pno)
+        disp = entry.get("disposition")
+        require(disp in DISPOSITIONS,
+                f"page {pno}: disposition must be one of {sorted(DISPOSITIONS)}")
+        if disp == "measured":
+            regions = entry.get("expected_regions")
+            require(isinstance(regions, list) and regions,
+                    f"page {pno}: measured pages must list expected_regions"
+                    " (an empty measured page is exactly the v1 hole that"
+                    " passed deleted scopes at 0 SF)")
+            require(len(set(regions)) == len(regions),
+                    f"page {pno}: duplicate region ids in expected_regions")
+        else:
+            require(isinstance(entry.get("reason"), str)
+                    and entry["reason"].strip(),
+                    f"page {pno}: {disp} pages need a non-empty reason")
+    return pages
+
+
+def validate_schedule(spec):
+    """Validate the schedule evidence block (repeated_types mode only)."""
+    sched = spec.get("schedule")
+    if spec["mode"] == "individual_rooms":
+        require(sched is None,
+                "individual_rooms mode takes no schedule block - rooms sum"
+                " independently, one region each")
+        return None
+    require(isinstance(sched, dict),
+            "repeated_types mode needs a schedule block (the multiplier"
+            " evidence) - v1 silently defaulted missing counts to 1")
+    pos_int(sched.get("page"), "schedule.page")
+    require(isinstance(sched.get("sheet"), str) and sched["sheet"],
+            "schedule.sheet must cite the schedule sheet id")
+    types = sched.get("types")
+    require(isinstance(types, list) and types,
+            "schedule.types must list every counted type")
+    names = set()
+    for t in types:
+        name = str(t.get("type", "")).strip()
+        require(name, "schedule type needs a non-empty 'type' name")
+        require(name not in names, f"duplicate schedule type {name!r}")
+        names.add(name)
+        pos_int(t.get("count"), f"schedule type {name} count")
+        require(isinstance(t.get("row_text"), str) and t["row_text"].strip(),
+                f"type {name}: row_text must quote the schedule row")
+        word_boxes(t.get("word_boxes"), f"type {name} word_boxes")
+        for r in t.get("rows", []) or []:
+            pos_int(r.get("count"), f"type {name} row count")
+            require(isinstance(r.get("floor"), str) and r["floor"],
+                    f"type {name}: each row needs a floor label")
+            require(isinstance(r.get("row_text"), str) and r["row_text"],
+                    f"type {name}: each row needs row_text")
+    variants = sched.get("variants", [])
+    require(isinstance(variants, list), "schedule.variants must be a list")
+    for v in variants:
+        vname = str(v.get("name", "")).strip()
+        require(vname, "variant needs a name")
+        require(v.get("type") in names,
+                f"variant {vname}: parent type {v.get('type')!r} not in types")
+        pos_int(v.get("count"), f"variant {vname} count")
+        require(isinstance(v.get("included_in_parent_total"), bool),
+                f"variant {vname}: included_in_parent_total must be an explicit"
+                " bool (true = parent count already contains this variant;"
+                " false = the variant row is additional)")
+        require(isinstance(v.get("row_text"), str) and v["row_text"].strip(),
+                f"variant {vname}: row_text must quote its schedule row")
+        word_boxes(v.get("word_boxes"), f"variant {vname} word_boxes")
+    totals = sched.get("stated_totals")
+    if totals is not None:
+        require(isinstance(totals, dict), "stated_totals must be an object")
+        per_floor = totals.get("per_floor")
+        if per_floor is not None:
+            require(isinstance(per_floor, dict) and per_floor,
+                    "stated_totals.per_floor must be a non-empty object")
+            for k, c in per_floor.items():
+                pos_int(c, f"stated_totals.per_floor[{k!r}]")
+        if "project" in totals:
+            pos_int(totals["project"], "stated_totals.project")
+    return sched
+
+
+def validate_schedule_consistency(sched):
+    """Self-consistency of stated evidence (no measurement involved)."""
+    problems = []
+    for t in sched["types"]:
+        rows = t.get("rows") or []
+        if rows:
+            s = sum(r["count"] for r in rows)
+            if s != t["count"]:
+                problems.append(
+                    f"type {t['type']}: count {t['count']} != sum of its"
+                    f" floor rows {s} ({[r['count'] for r in rows]})")
+        floors = {}
+        for r in rows:
+            floors[r["floor"]] = floors.get(r["floor"], 0) + r["count"]
+        t["_floor_counts"] = floors
+    for v in sched.get("variants", []):
+        parent = next(t for t in sched["types"] if t["type"] == v["type"])
+        if v["included_in_parent_total"] and v["count"] > parent["count"]:
+            problems.append(
+                f"variant {v['name']}: count {v['count']} exceeds parent type"
+                f" {v['type']} count {parent['count']} while claiming to be"
+                " included in it")
+    totals = sched.get("stated_totals") or {}
+    per_floor = totals.get("per_floor") or {}
+    if per_floor and "project" in totals:
+        s = sum(per_floor.values())
+        if s != totals["project"]:
+            problems.append(
+                f"stated_totals: floors sum to {s} but project total is"
+                f" {totals['project']}")
+    return problems
+
+
+def validate_regions(spec, sched):
+    regions = spec.get("regions")
+    require(isinstance(regions, list) and regions,
+            "regions must be a non-empty list - nothing to measure")
+    ids = set()
+    for r in regions:
+        rid = str(r.get("region_id", "")).strip()
+        require(rid, "every region needs a non-empty region_id")
+        require(rid not in ids, f"duplicate region_id {rid!r}")
+        ids.add(rid)
+    for r in regions:
+        rid = r["region_id"]
+        kind = r.get("kind", "base")
+        require(kind in REGION_KINDS, f"{rid}: kind must be one of"
+                f" {sorted(REGION_KINDS)}")
+        rtype = str(r.get("type", "")).strip()
+        require(rtype, f"{rid}: region needs a 'type'")
+        if kind == "base" and sched is not None:
+            names = {t["type"] for t in sched["types"]}
+            require(rtype in names,
+                    f"{rid}: type {rtype!r} is not in the approved schedule"
+                    " - unplanned scope must go through scope planning first")
+        if kind == "recheck":
+            require(r.get("of") in ids,
+                    f"{rid}: recheck 'of' must reference a base region_id")
+        v = r.get("variant")
+        if v is not None and sched is not None:
+            names = {x["name"] for x in sched.get("variants", [])
+                     if x["type"] == rtype}
+            require(v in names, f"{rid}: variant {v!r} not declared for type"
+                    f" {rtype!r} in the schedule")
+        pos_int(r.get("page"), f"{rid}: page")
+        seg_ids((r.get("boundary") or {}).get("seg_ids"),
+                f"{rid}: boundary.seg_ids")
+        seed = r.get("seed")
+        require(isinstance(seed, list) and len(seed) == 2
+                and all(finite(x) for x in seed),
+                f"{rid}: seed must be [x, y] in displayed page points")
+        rng = r.get("expected_sf_range")
+        require(isinstance(rng, list) and len(rng) == 2
+                and all(finite(x) for x in rng) and rng[0] < rng[1],
+                f"{rid}: expected_sf_range [min, max] is required (the sanity"
+                " guard that catches wrong calibration)")
+        for c in r.get("cutouts", []) or []:
+            require(isinstance(c.get("label"), str) and c["label"],
+                    f"{rid}: each cutout needs a label")
+            seg_ids(c.get("seg_ids"), f"{rid}: cutout {c['label']} seg_ids")
+    return regions
+
+
+def validate_spec(spec):
+    """Validate everything structural. Returns {scope, schedule, regions}."""
+    validate_source(spec)
+    validate_mode_and_policy(spec)
+    scope = validate_scope(spec)
+    sched = validate_schedule(spec)
+    if sched is not None:
+        for p in validate_schedule_consistency(sched):
+            raise SpecError("schedule evidence is inconsistent: " + p)
+    regions = validate_regions(spec, sched)
+    return {"scope": scope, "schedule": sched, "regions": regions}
