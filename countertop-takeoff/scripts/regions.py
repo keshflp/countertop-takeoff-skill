@@ -167,6 +167,37 @@ def measure_region_image(region, base_dir):
                          (m.get("polygon_px") or [])])
 
 
+def image_calibration_usable(region, base_dir):
+    """P0.3: TRUE when the region's image measurement carries an INDEPENDENT,
+    warning-free scale (>= 2 agreeing anchors, overlay present). A valid
+    image calibration satisfies the 'calibration exists anywhere' stop
+    check exactly like a vector or verified-CAD calibration."""
+    path = region.get("image_measurement")
+    if not path:
+        return False
+    if not os.path.isabs(path) and not os.path.exists(path):
+        path = os.path.join(base_dir, path)
+    if not os.path.exists(path):
+        return False
+    try:
+        m = json.load(open(path, encoding="utf-8"))
+    except Exception:
+        return False
+    if not m.get("px_per_ft") or m.get("warnings"):
+        return False
+    scales = m.get("anchors") or []
+    if len(scales) < 2:
+        return False
+    spread = m.get("anchor_spread_pct")
+    if spread is None or spread > 5.0:
+        return False
+    overlay = m.get("overlay")
+    if overlay and not os.path.isabs(overlay) \
+            and not os.path.exists(overlay):
+        overlay = os.path.join(base_dir, overlay)
+    return bool(overlay and os.path.exists(overlay))
+
+
 def _snap(v, tol):
     return round(v / tol) * tol if tol > 0 else v
 

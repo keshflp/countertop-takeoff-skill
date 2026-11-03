@@ -46,8 +46,20 @@ def render_overlay(pdf_path, page_no, region, cal, segments, out_base, zoom):
 
     `segments` is the geometry page's segment list (displayed space); span
     seg_ids are looked up there so the drawn calibration spans are exactly
-    the ones the factor was computed from.
-    """
+    the ones the factor was computed from. V4: tolerates regions with no
+    numeric area (blank-marker rendering, never a crash)."""
+    def label_for(region):
+        if region.get("status") == "unresolved":
+            return (f"{region['region_id']}  UNRESOLVED -"
+                    f" {region.get('unresolved_reason', '')[:90]}")
+        if region.get("area_sf") is None:
+            return f"{region['region_id']}  AREA BLANK (degraded)"
+        suffix = (f" at {region.get('factor_px_per_ft')} px/ft"
+                  if region.get("route") == "image"
+                  else f"  {region['factor_pt_per_ft']:.4f} pt/ft"
+                       f"  ({region.get('gross_area_policy')})")
+        return (f"{region['region_id']}  {region['area_sf']:.2f} SF"
+                f"{suffix}")
     src = pymupdf.open(pdf_path)
     page = src[page_no - 1]
     disp_w, disp_h = page.rect.width, page.rect.height
@@ -62,11 +74,8 @@ def render_overlay(pdf_path, page_no, region, cal, segments, out_base, zoom):
         # image-route areas are measured on a rendered CROP (crop-pixel
         # space), not on the PDF page: point the reviewer at the route's
         # own overlay proof instead of drawing a shell here.
-        pg.insert_text((10, 20), f"{region['region_id']}  IMAGE ROUTE"
-                       f" {region['area_sf']:.2f} SF at"
-                       f" {region.get('factor_px_per_ft')} px/ft - the"
-                       " overlay proof was rendered by image_measure.py on"
-                       " the crop",
+        pg.insert_text((10, 20), label_for(region) + " - the overlay proof"
+                       " was rendered by image_measure.py on the crop",
                        fontname="helv", fontsize=9, color=(0, 0, 0.6))
         clip = pymupdf.Rect(0, 0, disp_w, disp_h)
         out = f"{out_base}_full.png"
@@ -78,8 +87,7 @@ def render_overlay(pdf_path, page_no, region, cal, segments, out_base, zoom):
         # reviewer sees the blank in the pack
         seed = region.get("seed") or [disp_w / 2, disp_h / 2]
         pg.draw_circle(seed, 5.0, color=SPAN_COLOR, width=1.5)
-        pg.insert_text((10, 20), f"{region['region_id']}  UNRESOLVED -"
-                       f" {region.get('unresolved_reason', '')[:90]}",
+        pg.insert_text((10, 20), label_for(region),
                        fontname="helv", fontsize=9, color=(0.6, 0, 0))
         clip = pymupdf.Rect(0, 0, disp_w, disp_h)
         out = f"{out_base}_full.png"
@@ -103,10 +111,7 @@ def render_overlay(pdf_path, page_no, region, cal, segments, out_base, zoom):
                          color=SPAN_COLOR, width=2.0)
     cx = min(p[0] for p in poly)
     cy = min(p[1] for p in poly) - 8
-    pg.insert_text((cx, cy),
-                   f"{region['region_id']}  {region['area_sf']:.2f} SF"
-                   f"  {region['factor_pt_per_ft']:.4f} pt/ft"
-                   f"  ({region['gross_area_policy']})",
+    pg.insert_text((cx, cy), label_for(region),
                    fontname="helv", fontsize=9, color=(0, 0, 0))
     bbox = poly_bbox(poly)
     clip_full = pymupdf.Rect(0, 0, disp_w, disp_h)
@@ -162,9 +167,11 @@ def build_index_md(results, pack_dir, files_by_region):
              "## Regions"]
     for rid, files in files_by_region.items():
         r = next(x for x in results["regions"] if x["region_id"] == rid)
-        if r.get("status") == "unresolved":
-            lines.append(f"- `{rid}` ({r['type']}, UNRESOLVED) quantities BLANK"
-                         f" on page {r['page']}:"
+        if r.get("status") == "unresolved" or r.get("area_sf") is None:
+            lines.append(f"- `{rid}` ({r.get('type')},"
+                         f" {'UNRESOLVED' if r.get('status') == 'unresolved' else 'AREA BLANK'})"
+                         " quantities BLANK on page"
+                         f" {r.get('page')}:"
                          f" {r.get('unresolved_reason', '')[:90]}")
             lines += [f"  - {os.path.relpath(f, pack_dir)}" for f in files]
             continue
@@ -182,17 +189,53 @@ def safe_name(rid):
 
 def render_pack(results, pack_dir, zoom):
     os.makedirs(pack_dir, exist_ok=True)
+    # V4: multi-source jobs - geometry may be ONE path or {source_id: path};
+    # segments and base pages are looked up per (source_id, page), and the
+    # calibration per the region's OWN source (source-aware keys).
     geo_path = results.get("geometry")
-    geometry = json.load(open(geo_path, encoding="utf-8")) if geo_path and \
-        os.path.exists(geo_path) else {"pages": []}
-    segs_by_page = {p["page"]: p["segments"] for p in geometry["pages"]}
-    pdf_path = results["source"]["pdf"]
+    sources = results.get("sources") or []
+    default_sid = (sources[0] or {}).get("source_id") if sources else None
+    geo_by_source = {}
+    if isinstance(geo_path, dict):
+        for sid, gp in geo_path.items():
+            gp = gp if os.path.isabs(gp) or os.path.exists(gp) else \
+                os.path.join(os.path.dirname(args_results_path(results)), gp)
+            geo_by_source[sid] = json.load(open(gp, encoding="utf-8")) \
+                if os.path.exists(gp) else {"pages": []}
+    elif geo_path and os.path.exists(geo_path):
+        geo = json.load(open(geo_path, encoding="utf-8"))
+        geo_by_source[default_sid] = geo
+    segs_by_key = {}
+    for sid, geo in geo_by_source.items():
+        for p in geo.get("pages", []):
+            segs_by_key[(sid, p["page"])] = p["segments"]
+    pdf_by_source = {s["source_id"]: s["path"] for s in sources
+                     if s.get("path")}
+    default_pdf = (results.get("source") or {}).get("pdf") \
+        or (sources[0] or {}).get("path") if sources else None
     files_by_region = {}
     for r in results["regions"]:
-        cal = results["calibrations"].get(f"{r['page']}:{r['viewport']}")
+        sid = r.get("source_id") or default_sid
+        cal = None
+        cals = results.get("calibrations") or {}
+        for cand in (f"{sid}:{r['page']}:{r['viewport']}",
+                     f"{r['page']}:{r['viewport']}"):
+            if cand in cals:
+                cal = cals[cand]
+                break
+        pdf_path = pdf_by_source.get(sid) or default_pdf
         base = os.path.join(pack_dir, safe_name(r["region_id"]))
-        files = render_overlay(pdf_path, r["page"], r, cal,
-                               segs_by_page.get(r["page"], []), base, zoom)
+        try:
+            files = render_overlay(pdf_path, r["page"], r, cal,
+                                   segs_by_key.get((sid, r["page"]), []),
+                                   base, zoom)
+        except Exception as exc:
+            # a page we cannot render (e.g. a CAD source without a raster
+            # preview) must not crash the pack - render a marker instead
+            files = [os.path.join(pack_dir,
+                                  safe_name(r["region_id"]) + "_full.png")]
+            with open(files[0], "wb") as f:
+                f.write(_marker_png(str(exc)))
         files_by_region[r["region_id"]] = files
         print(f"rendered {r['region_id']}: {len(files)} image(s)")
     index = os.path.join(pack_dir, "index.md")
@@ -201,11 +244,32 @@ def render_pack(results, pack_dir, zoom):
     print(f"wrote {index} ({len(files_by_region)} region(s))")
 
 
+def args_results_path(results):
+    """Best-effort base dir for resolving relative geometry paths."""
+    return os.path.dirname(results.get("_results_path") or ".")
+
+
+def _marker_png(text):
+    """A tiny valid PNG rendered with pymupdf carrying the note text."""
+    doc = pymupdf.open()
+    pg = doc.new_page(width=420, height=90)
+    pg.insert_text((10, 30), f"overlay unavailable: {text[:70]}",
+                   fontname="helv", fontsize=9, color=(0.6, 0, 0))
+    data = pg.get_pixmap(matrix=pymupdf.Matrix(1, 1)).tobytes("png")
+    doc.close()
+    return data
+
+
 def record_receipt(results, results_path, reviewer, verdict, notes, pack_dir):
     """Write the independent-audit receipt into the results JSON."""
-    if results.get("status") == "failed":
-        print("REFUSED: required checks failed for this run - fix the job"
-              " spec, re-measure, then audit. Nothing recorded.")
+    # V4: a `stopped` run must NEVER receive an approved receipt. The guard
+    # checks the CURRENT status names (complete / complete_with_callouts /
+    # stopped) and the obsolete V2 name `failed` for old files.
+    status = results.get("run_status") or results.get("status")
+    if status in ("stopped", "failed"):
+        print(f"REFUSED: this run is {status.upper()} - required checks"
+              " failed/were stopped; fix the job spec, re-measure, then"
+              " audit. Nothing recorded.")
         return 2
     receipt = {
         "status": "independent_audit_recorded",

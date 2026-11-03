@@ -277,12 +277,19 @@ def run_pipeline(args):
                                   source_id=s["source_id"])
     if not calibrations:
         # Catastrophic stop 1: no valid calibration anywhere in the set
-        # (a verified-units native-CAD source qualifies on its own).
-        if not any(s["kind"] == "cad" for s in spec["_sources"]):
+        # (a verified-units native-CAD source OR a valid image-route
+        # calibration qualifies on its own - P0.3).
+        image_cal_ok = any(
+            r.get("route") == "image"
+            and regions_mod.image_calibration_usable(r, base_dir)
+            for r in spec.get("regions") or [])
+        if not any(s["kind"] == "cad" for s in spec["_sources"]) \
+                and not image_cal_ok:
             raise TakeoffError(
                 "STOP: no valid calibration exists anywhere in the set and no"
-                " verified-units CAD source is present - without one agreeing"
-                " scale no length or area in this job is measurable")
+                " verified-units CAD source or valid image-route calibration"
+                " is present - without one agreeing scale no length or area in"
+                " this job is measurable")
     for key in sorted(calibrations, key=lambda k: (str(k[0]), k[1], k[2])):
         cal = calibrations[key]
         print(f"calibration source {key[0]!r} page {key[1]} viewport"

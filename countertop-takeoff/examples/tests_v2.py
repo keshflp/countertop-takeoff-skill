@@ -539,7 +539,15 @@ def negative_tests(pdfs, geo):
         clone = copy.deepcopy(src)
         clone["region_id"] = "B:kitchen@copy"
         s["regions"].append(clone)
-    expect_refusal(pdfs, geo, "duplicate_region", dup, "overlap")
+    # V4 SUPERSEDES refuse-duplicate_region (P0.3: overlap/unplanned-scope
+    # failures degrade LOCALLY; nothing stops the job). The unplanned
+    # duplicate record is withheld blank behind a callout; the PLANNED
+    # original keeps its measurement (only one instance survives). The
+    # planned-pair overlap case (BOTH records withheld) is the tests_v4
+    # regression "overlap: duplicated pair withheld, job completes".
+    expect_degradation(pdfs, geo, "duplicate_region_withheld", dup,
+                       "UNPLANNED region", ["B:kitchen@copy"],
+                       want_total=990.0)
 
     def bad_count(s):
         s["schedule"]["types"][1]["count"] = 4.5

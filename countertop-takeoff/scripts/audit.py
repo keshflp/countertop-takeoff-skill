@@ -216,7 +216,9 @@ def audit_scope(spec, geometry_map, audit):
 
 def audit_planned_vs_completed(spec, results, pages_by_no, audit):
     """Expected region ids per measured page must match completed exactly
-    (per source page; missing = unresolved callout, unplanned = fail)."""
+    (per source page; missing = unresolved callout, unplanned = withhold
+    the unplanned record + callout - V4 degrades locally, V3 stopped the
+    job)."""
     base_ids = {r["region_id"] for r in results if r["kind"] == "base"}
     recheck_ids = {r["region_id"] for r in results if r["kind"] == "recheck"}
     unresolved_ids = {r["region_id"] for r in results
@@ -249,10 +251,27 @@ def audit_planned_vs_completed(spec, results, pages_by_no, audit):
                 " (blank quantities)",
                 blank_fields=["area_sf", "edge_lf"], pages=[e["page"]])
         if extra:
-            audit.add("planned vs completed", "fail",
-                      f"page {e['page']}: UNPLANNED region(s) measured:"
-                      f" {sorted(extra)} - measuring scope you did not plan"
-                      " cannot be excused after the fact")
+            # V4: unplanned scope degrades LOCALLY - the unplanned records
+            # are withheld (blank quantities + callout), never shipped, and
+            # the job still completes for the planned scope
+            for r in results:
+                if r["region_id"] in extra and r.get("status") != "unresolved":
+                    r["status"] = "unresolved"
+                    r["unresolved_reason"] = ("UNPLANNED region - not in the"
+                        " page's expected_regions; measuring scope you did"
+                        " not plan cannot be excused after the fact -"
+                        " withheld (blank quantities + callout)")
+                    r["blank_fields"] = ["area_sf", "edge_lf", "splash_lf"]
+                    if r.get("area_sf") is not None:
+                        r["measured_area_sf"] = r["area_sf"]
+                    r["area_sf"] = None
+            audit.add_callout(
+                "planned vs completed",
+                f"page {e['page']}: UNPLANNED region(s) measured:"
+                f" {sorted(extra)} - the records are withheld (blank"
+                " quantities); plan them through scope planning before"
+                " measuring again",
+                blank_fields=["area_sf", "edge_lf"], pages=[e["page"]])
         if not missing and not extra:
             qa = sorted(on_page & recheck_ids)
             audit.add("planned vs completed", "pass",
@@ -356,25 +375,36 @@ def reconcile_totals(sched, audit):
                      if "project" in totals else " (no stated total given)"))
     if per_floor:
         floors = {}
+        decomposed = False
         for t in sched["types"]:
             for fl, c in t.get("_floor_counts", {}).items():
                 floors[fl] = floors.get(fl, 0) + c
+                decomposed = True
         for v in sched.get("variants", []):
             if v["included_in_parent_total"]:
                 continue
             for r in v.get("rows", []) or []:
                 floors[r["floor"]] = floors.get(r["floor"], 0) + r["count"]
-        for fl, stated in per_floor.items():
-            got = floors.get(fl)
-            if got != stated:
-                audit.add_callout(
-                    f"floor reconciliation {fl}",
-                    f"floor {fl!r}: allocated {got} != stated {stated} -"
-                    " resolve from the floor rows or withhold the difference",
-                    blank_fields=[], pages=[sched.get("page")])
-            else:
-                audit.add("floor reconciliation", "pass",
-                          f"floor {fl!r}: allocated {got} == stated {stated}")
+                decomposed = True
+        if not decomposed:
+            audit.add_callout(
+                "floor reconciliation",
+                "stated floor totals exist but no type quotes per-floor rows"
+                " - the floor split cannot be reconciled from quoted rows"
+                " (quote rows[] per type to arm the floor check)",
+                blank_fields=[], pages=[sched.get("page")])
+        else:
+            for fl, stated in per_floor.items():
+                got = floors.get(fl)
+                if got != stated:
+                    audit.add_callout(
+                        f"floor reconciliation {fl}",
+                        f"floor {fl!r}: allocated {got} != stated {stated} -"
+                        " resolve from the floor rows or withhold the difference",
+                        blank_fields=[], pages=[sched.get("page")])
+                else:
+                    audit.add("floor reconciliation", "pass",
+                              f"floor {fl!r}: allocated {got} == stated {stated}")
     return unit_total
 
 
@@ -1342,8 +1372,31 @@ def audit_room_coverage(spec, audit):
 def audit_region_checks(spec, results, calibrations, audit,
                         recheck_tolerance=RECHECK_TOLERANCE_PCT):
     """Per-region QA: ranges, calibration coverage, recheck deviations,
-    duplicate/overlap within counted instances. Regions the recovery path
-    marked `unresolved` contribute callouts (blank quantities), not fails."""
+    duplicate/overlap within counted instances.
+
+    V4 (P0.3): NONE of these findings is a job stop - every failure
+    degrades LOCALLY: the affected regions are marked unresolved (numeric
+    quantities NULLED, the measured value kept aside as diagnostics)
+    behind named callouts. The three-stop list (no valid calibration
+    anywhere, no schedule and no repeatable pattern, source integrity
+    mismatch) is unaffected.
+    """
+    def withhold(r, reason):
+        # degraded fields are GENUINELY null: the numeric area_sf must not
+        # survive a blank declaration (the measured value moves to
+        # measured_area_sf for the auditor)
+        r["status"] = "unresolved"
+        r["unresolved_reason"] = reason
+        r["blank_fields"] = ["area_sf", "edge_lf", "splash_lf"]
+        if r.get("area_sf") is not None:
+            r["measured_area_sf"] = r["area_sf"]
+        r["area_sf"] = None
+        r["expected_range_ok"] = False
+        audit.add_callout(
+            f"region {r['region_id']}", reason,
+            blank_fields=r["blank_fields"], pages=[r["page"]],
+            source_id=r.get("source_id"))
+
     for r in results:
         key = (r.get("source_id"), r["page"], r["viewport"])
         cal = calibrations.get(key)
@@ -1358,10 +1411,13 @@ def audit_region_checks(spec, results, calibrations, audit,
             continue
         if r.get("route") == "image":
             if not r.get("expected_range_ok"):
-                audit.add("expected range", "fail",
-                          f"region {r['region_id']}: image-route"
-                          f" {r['area_sf']:.2f} SF outside expected"
-                          f" {r['expected_sf_range']} - withheld")
+                # V4: an image-route range breach degrades LOCALLY like the
+                # vector route (V3 made it a job stop)
+                withhold(r, f"image-route measurement"
+                         f" {(r.get('measured_area_sf') or r.get('area_sf') or 0):.2f}"
+                         f" SF outside expected {r.get('expected_sf_range')}"
+                         " - quantity withheld pending anchor/boundary"
+                         " investigation")
             else:
                 audit.add("expected range", "pass",
                           f"region {r['region_id']}: image-route"
@@ -1375,32 +1431,40 @@ def audit_region_checks(spec, results, calibrations, audit,
                       f" {r.get('source_id')!r} page {r['page']} viewport"
                       f" {r['viewport']!r}")
         if not r["expected_range_ok"]:
-            # V3: a range breach means the number cannot be trusted - the
-            # region is downgraded to unresolved (blank) instead of shipping
-            # a suspect quantity. The agent fixes the span/boundary and
-            # re-runs; the callout names what is withheld.
-            r["status"] = "unresolved"
-            r["unresolved_reason"] = (
-                f"measured {r['area_sf']:.2f} SF outside expected"
-                f" {r['expected_sf_range']} - quantity withheld pending"
-                " span/boundary investigation")
-            r["blank_fields"] = ["area_sf", "edge_lf", "splash_lf"]
-            audit.add_callout(
-                f"region {r['region_id']}", r["unresolved_reason"],
-                blank_fields=r["blank_fields"], pages=[r["page"]],
-                source_id=r.get("source_id"))
+            withhold(r, f"measured {(r.get('area_sf') or 0):.2f} SF outside"
+                    f" expected {r['expected_sf_range']} - quantity withheld"
+                    " pending span/boundary investigation")
             continue
         audit.add("expected range", "pass",
-                      f"region {r['region_id']}: {r['area_sf']:.2f} SF within"
-                      f" {r['expected_sf_range']} (factor"
-                      f" {r['factor_pt_per_ft']:.4f} pt/ft, policy"
-                      f" {r['gross_area_policy']})")
+                  f"region {r['region_id']}: {r['area_sf']:.2f} SF within"
+                  f" {r['expected_sf_range']} (factor"
+                  f" {r['factor_pt_per_ft']:.4f} pt/ft, policy"
+                  f" {r['gross_area_policy']})")
     dup = check_duplicate_boundaries(results)
     for e in dup:
-        audit.add("duplicate boundaries", "fail", e)
+        # V4: duplicate boundaries withhold the AFFECTED pair (callout),
+        # never stop the job
+        between = e.split("regions ")[1].split(" use")[0]
+        ids = [part.strip().strip("'") for part in between.split(" and ")]
+        for r in results:
+            if r["region_id"] in ids and r.get("status") != "unresolved":
+                withhold(r, "duplicate boundary selection - this segment"
+                         " set is already used by another region; one"
+                         " counter cannot be two regions (both records"
+                         " withheld)")
+        audit.add("duplicate boundaries", "warn", e + " - both records"
+                  " withheld (degrades locally; V3 stopped the job)")
     ov_err, ov_warn = check_overlaps(results)
     for e in ov_err:
-        audit.add("instance overlap", "fail", e)
+        between = e.split("regions ")[1].split(" on page")[0]
+        ids = [part.strip().strip("'") for part in between.split(" and ")]
+        for r in results:
+            if r["region_id"] in ids and r.get("status") != "unresolved":
+                withhold(r, "counted-instance overlap within one counted"
+                         " scope - the instances cannot both be counted"
+                         " (both records withheld until resolved)")
+        audit.add("instance overlap", "warn", e + " - both records withheld"
+                  " (degrades locally; V3 stopped the job)")
     for w in ov_warn:
         audit.add("instance overlap", "warn", w)
     base_by_id = {r["region_id"]: r for r in results if r["kind"] == "base"
@@ -1422,21 +1486,25 @@ def audit_region_checks(spec, results, calibrations, audit,
             continue
         base = base_by_id.get(r.get("of"))
         if base is None:
-            audit.add("recheck", "fail",
+            audit.add("recheck", "warn",
                       f"recheck {r['region_id']}: base region"
-                      f" {r.get('of')!r} missing")
+                      f" {r.get('of')!r} missing - recheck excluded from QA")
             continue
         dev = (abs(r["area_sf"] - base["area_sf"]) / base["area_sf"] * 100.0
                if base["area_sf"] else 0.0)
         if dev > recheck_tolerance:
-            audit.add("recheck", "fail",
-                      f"recheck {r['region_id']}: {r['area_sf']:.2f} SF vs base"
-                      f" {base['area_sf']:.2f} SF (dev {dev:.2f}% >"
-                      f" {recheck_tolerance}%) - resolve before shipping")
+            # V4: a failed recheck means the base number is untrusted - the
+            # BASE region is withheld (blank) behind a callout; V3 stopped
+            # the whole job
+            withhold(base, f"QA recheck {r['region_id']} disagrees:"
+                     f" {r['area_sf']:.2f} SF vs base"
+                     f" {base['area_sf']:.2f} SF (dev {dev:.2f}% >"
+                     f" {recheck_tolerance}%) - the base quantity is"
+                     " withheld until the two measurements agree")
         else:
             audit.add("recheck", "pass",
-                      f"recheck {r['region_id']}: {r['area_sf']:.2f} SF vs base"
-                      f" {base['area_sf']:.2f} SF (dev {dev:.2f}%)")
+                      f"recheck {r['region_id']}: {r['area_sf']:.2f} SF vs"
+                      f" base {base['area_sf']:.2f} SF (dev {dev:.2f}%)")
 
 
 def aggregate_types(spec, results, audit, resolved=None):
