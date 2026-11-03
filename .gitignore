@@ -1,0 +1,7 @@
+# regenerable pipeline artifacts
+__pycache__/
+*.pyc
+.venv/
+build/
+*.index.json
+*.geometry.json
