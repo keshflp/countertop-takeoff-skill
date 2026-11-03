@@ -549,20 +549,23 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
                           " quantities blank (never defaulted)",
             })
         else:
+            # V5 (P1.1): EA 0 is a resolved zero (an EA-0 room is measured
+            # scope, not unresolved); only a withheld EA is unresolved
+            has_ea = arow.get("ea") is not None
             ledger.append({
                 "item": f"room {room['room']} ({room['type']})",
                 "kind": "room",
                 "source": {"pages": [room["page"]]},
                 "state": ("package_excluded"
                           if arow["state"] == "package_excluded"
-                          else ("measured" if arow.get("ea")
-                                else "unresolved")),
+                          else ("measured" if has_ea else "unresolved")),
                 "detail": ("covered by assembly " + arow["assembly_id"]
                            + ("; package-excluded, reported separately"
                               if arow["state"] == "package_excluded"
-                              else (f" EA {arow.get('ea')}"
-                                    if arow.get("ea") is not None
-                                    else " EA withheld"))),
+                              else ((f" EA {arow.get('ea')}"
+                                     + (" (resolved zero)"
+                                        if arow.get("ea") == 0 else ""))
+                                     if has_ea else " EA withheld"))),
             })
     # assemblies + pieces reconcile into the same ledger from the resolved
     # model (measured evidence vs included scope vs package exclusion)
@@ -594,8 +597,17 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
         detail = (f"route {prow['route']}; EA {prow.get('ea')}"
                   if prow.get("ea") is not None
                   else f"route {prow['route']}; EA withheld")
+        if prow.get("ea") == 0:
+            detail = f"route {prow['route']}; EA 0 (resolved zero)"
         if prow.get("extension_sf") is None:
             detail += "; extension blank"
+        # V5 (P1.1): a withheld edge/splash length is a NAMED blank - the
+        # ledger entry declares it instead of shipping a silent `measured`
+        blanks = prow.get("blank_fields") or []
+        if blanks:
+            detail += "; blank: " + ", ".join(blanks)
+        if prow.get("extension_withheld"):
+            detail += "; REPEATED GEOMETRY CLAIM"
         ledger.append({"item": f"piece {prow['piece_id']}", "kind": "piece",
                        "source": {"pages": sorted(
                            {l.get("page")
@@ -824,8 +836,13 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
             "width_in": a.get("width_in"), "depth_in": a.get("depth_in"),
             "height_in": a.get("height_in"), "handing": a.get("handing"),
             "ea": count, "basis": basis,
+            # V5 (P1.1): a legitimate derived EA of ZERO (all units covered
+            # by included variants) is a resolved zero, never `unresolved`;
+            # and vice versa - an unresolved EA stays genuinely blank
+            "ea_state": ("unresolved" if count is None else "resolved"),
             "state": ("package_excluded" if excluded_asm
-                      else ("measured" if count else "unresolved")),
+                      else ("measured" if count is not None
+                            else "unresolved")),
             "pieces": list(a.get("pieces") or []),
             "sources": a.get("sources") or [],
             "sf_per_instance": None, "extended_sf": None,
@@ -887,6 +904,10 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
                 edge_blank.append(f"edge_lf:{prof}:{run.get('exposure')}")
                 continue
             entry["lf"] += v / 12.0
+        # V5 (P1.1): an unknown edge length is a NAMED blank - it declares
+        # itself in the piece's blank fields (callout) instead of silently
+        # shipping a `measured` record with a hidden null
+        blank.extend(edge_blank)
         for prof, entry in edge_runs_by_profile.items():
             edges[prof] = (round(entry["lf"], 3) if entry["complete"]
                            else None)
@@ -1026,7 +1047,8 @@ def build_assembly_boq(spec, audit, resolved=None):
             "package": a["package"], "finish_tag": a.get("finish_tag"),
             "width_in": a.get("width_in"), "depth_in": a.get("depth_in"),
             "height_in": a.get("height_in"), "handing": a.get("handing"),
-            "ea": count, "basis": basis, "state": state,
+            "ea": count, "ea_state": rrow.get("ea_state"),
+            "basis": basis, "state": state,
             "sf_per_instance": rrow.get("sf_per_instance"),
             "extended_sf": rrow.get("extended_sf"),
             "pieces": list(a.get("pieces") or []),
@@ -1344,10 +1366,11 @@ def audit_dual_boq(assembly_rows, piece_rows, audit, project_total=None):
         stay blank behind callouts)
 
     The first two MUST agree (any disagreement = EA/SF model inconsistency
-    = fail). The project total MUST equal the full piece view. Assemblies
-    with partially-blank pieces are excluded from the strict pair and their
-    known contributions are disclosed - partial knowledge survives without
-    faking a total.
+    = fail). The project total MUST equal the full piece view. The STRICT
+    comparison is between the SAME known contributions (the same assembly
+    set) in both views (V5/P1.1); the full known piece view and the
+    partial-knowledge assemblies are reported SEPARATELY so a 146.98-vs-
+    123.00 pairing can never read as agreement.
     """
     if not assembly_rows and not piece_rows:
         return 0.0
@@ -1357,6 +1380,7 @@ def audit_dual_boq(assembly_rows, piece_rows, audit, project_total=None):
     asm_total = 0.0
     piece_subset = 0.0
     partial_asms = []
+    strict_asms = []
     for a in assembly_rows:
         if a["state"] == "package_excluded":
             continue
@@ -1367,6 +1391,7 @@ def audit_dual_boq(assembly_rows, piece_rows, audit, project_total=None):
                 is not None and all(e is not None for e in exts):
             asm_total += a["ea"] * a["sf_per_instance"]
             piece_subset += sum(exts)
+            strict_asms.append(a["assembly_id"])
         else:
             partial_asms.append(a["assembly_id"])
     active = [r for r in piece_rows if r["state"] != "package_excluded"
@@ -1383,16 +1408,20 @@ def audit_dual_boq(assembly_rows, piece_rows, audit, project_total=None):
             "some piece extensions are blank (unresolved properties) -"
             " all view totals exclude them and the exclusion is disclosed",
             blank_fields=["extension_sf"])
-    detail = (f"piece view total {piece_total:.2f} SF; assembly view"
-              f" {round(asm_total, 2):.2f} SF over fully-resolved"
-              f" assemblies (their pieces sum to {round(piece_subset, 2):.2f}"
-              f" SF); project total"
-              + (f" {round(project_total, 2):.2f} SF" if project_total is not None
-                 else " n/a")
-              + (f"; partial assemblies excluded from the strict pair:"
-                 f" {partial_asms}" if partial_asms else "")
-              + " - the views are reconciled against each other and never"
-                " summed")
+    detail = (
+        "strict pair over the SAME known contributions"
+        f" ({len(strict_asms)} fully-resolved assembly(ies)): assembly view"
+        f" {round(asm_total, 2):.2f} SF == piece view"
+        f" {round(piece_subset, 2):.2f} SF"
+        + ("" if pair_ok else "  << MISMATCH")
+        + f"; full known piece view (all active pieces):"
+        f" {piece_total:.2f} SF; project total"
+        + (f" {round(project_total, 2):.2f} SF" if project_total is not None
+           else " n/a")
+        + (f"; partial-knowledge assemblies excluded from the strict pair"
+           f" (known parts still in the project total): {partial_asms}"
+           if partial_asms else "")
+        + " - the views are reconciled against each other and never summed")
     audit.add("dual BoQ reconciliation", "pass" if consistent else "fail",
               detail)
     return piece_total
@@ -1717,7 +1746,8 @@ def aggregate_types_resolved(spec, resolved, audit, base):
         name = arow["type"]
         if name not in groups:
             groups[name] = {"extended": 0.0, "excluded": 0.0,
-                            "rows": [], "ea": 0, "sf_pi": 0.0}
+                            "rows": [], "ea": 0, "sf_pi": 0.0,
+                            "known": False, "unknown": False}
             order.append(name)
         own = pieces_by_asm.get(arow["assembly_id"], [])
         # P0.1: the type/CSV total carries the KNOWN piece extensions of
@@ -1726,6 +1756,14 @@ def aggregate_types_resolved(spec, resolved, audit, base):
         # unresolved - the blank lives in the BoQ row, never in the total.
         group_ext = round(sum(p.get("extension_sf") or 0.0
                               for p in own if not p.get("orphan")), 4)
+        # V5 (P1.1): track whether the group carries known contributions at
+        # all - an all-unknown type must show a BLANK total, never 0.00
+        active_own = [p for p in own if not p.get("orphan")
+                      and arow["state"] != "package_excluded"]
+        if any(p.get("extension_sf") is not None for p in active_own):
+            groups[name]["known"] = True
+        if any(p.get("extension_sf") is None for p in active_own):
+            groups[name]["unknown"] = True
         region_meta = next((p["region_meta"] for p in own
                             if p.get("region_meta")), None)
         first_pid = (own[0]["piece_id"] if own else arow["assembly_id"])
@@ -1769,12 +1807,17 @@ def aggregate_types_resolved(spec, resolved, audit, base):
         g = groups[name]
         sched_count = (sched_types.get(name, {}).get("count")
                        if name in sched_types else g["ea"])
+        # V5 (P1.1): an all-unknown public-counter type shows a BLANK total
+        # (never 0.00); a partially-known type shows its known subtotal with
+        # completeness False
+        type_total = (round(g["extended"], 2) if g["known"] else None)
         types.append({
             "room_type": name,
             "schedule_count": sched_count,
             "std_units": g["ea"],
             "sf_per_unit": round(g["sf_pi"], 4),
-            "extended_sf": round(g["extended"], 2),
+            "extended_sf": type_total,
+            "complete": (not g["unknown"]),
             "excluded_extended_sf": round(g["excluded"], 2),
             "rows": g["rows"],
         })

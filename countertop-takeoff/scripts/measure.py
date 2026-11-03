@@ -386,6 +386,10 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
     review_status = REVIEW_PENDING
     settings = {"snap_pt": args.snap,
                 "recheck_tolerance_pct": args.recheck_tolerance}
+    # V5 (P1.1): room counts (the schedule/inventory unit count) stay
+    # DISTINCT from the summed assembly EA - both are reported, neither
+    # overwrites the other
+    schedule_unit_total = unit_total
     profile_summary = None
     if profile:
         profile_summary = {k: profile.get(k) for k in (
@@ -396,9 +400,6 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
                                             results_by_id=results_by_id)
     types, total = audit_mod.aggregate_types(spec, results, audit_obj,
                                              resolved=resolved)
-    if spec.get("_assemblies"):
-        unit_total = sum(a.get("ea") or 0 for a in resolved["assemblies"].values()
-                         if a["state"] != "package_excluded")
     ledger = audit_mod.build_coverage_ledger(
         spec, results, audit_obj, results_by_id=results_by_id,
         resolved=resolved)
@@ -412,9 +413,24 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
                   ("complete_with_callouts"
                    if (audit_obj.callouts or audit_obj.warned)
                    else "complete"))
+    unknown_pieces = [p for p in piece_rows
+                      if p["state"] != "package_excluded"
+                      and not p.get("orphan")
+                      and p.get("extension_sf") is None]
+    assembly_ea = (sum(a.get("ea") or 0 for a in assembly_rows
+                       if a["state"] != "package_excluded")
+                   if spec.get("_assemblies") else None)
+    totals_meta = {
+        "project_sf_complete": not unknown_pieces,
+        "unknown_contribution_count": len(unknown_pieces),
+        "known_subtotal_sf": round(total, 2),
+        "unit_count": schedule_unit_total,
+        "assembly_ea": assembly_ea,
+    }
     report = report_out.build_report(spec, calibrations, types, total,
                                      audit_obj, review_status, run_status,
-                                     ledger, assembly_rows, piece_rows)
+                                     ledger, assembly_rows, piece_rows,
+                                     totals_meta=totals_meta)
     print()
     print(report)
     if args.report:
@@ -427,6 +443,11 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
     payload["status"] = run_status
     payload["assembly_boq"] = assembly_rows
     payload["piece_boq"] = piece_rows
+    payload["totals"]["known_subtotal_sf"] = round(total, 2)
+    payload["totals"]["project_sf_complete"] = not unknown_pieces
+    payload["totals"]["unknown_contribution_count"] = len(unknown_pieces)
+    payload["totals"]["unit_count"] = schedule_unit_total
+    payload["totals"]["assembly_ea"] = assembly_ea
     payload["totals"]["excluded_package_sf"] = round(
         resolved.get("excluded_total_sf", 0.0), 2)
     payload["totals"]["piece_view_sf"] = round(

@@ -505,6 +505,164 @@ def estimate_scope_tests():
           " Decimal traceback", parse_ok)
 
 
+# ------------------------------------- P1.1 uncertainty everywhere
+def uncertainty_tests():
+    # (1) legitimate derived EA of ZERO: `resolved zero`, not unresolved
+    spec = orig_spec()
+    spec["schedule"]["variants"] = [{
+        "type": "A", "name": "ADA", "count": 3,
+        "included_in_parent_total": True,
+        "row_text": "TYPE A (ADA) 3 - all units ADA, included in the parent",
+        "word_boxes": spec["schedule"]["types"][0]["word_boxes"],
+        "rows": []}]
+    spec["assemblies"] = [
+        {"assembly_id": "a-std", "type": "A", "package": "millwork",
+         "quantity_basis": {"mode": "room_type_count", "type": "A"},
+         "pieces": ["p:k"],
+         "sources": [{"source_id": "plans", "page": 2}]}]
+    spec["pieces"] = [
+        {"piece_id": "p:k", "assembly_id": "a-std", "route": "geometry",
+         "region_id": "A:kitchen", "finish_tag": "PL", "edge_runs": []}]
+    rc, res, err = run_measure(spec, "v5_zeroea")
+    asm = {a["assembly_id"]: a for a in res["assembly_boq"]}
+    check("uncertainty: a derived EA of ZERO is a resolved zero (state"
+          " measured), never unresolved",
+          rc == 0 and asm["a-std"]["ea"] == 0
+          and asm["a-std"]["state"] == "measured"
+          and asm["a-std"].get("ea_state") == "resolved",
+          f"rc={rc} asm={asm.get('a-std', {})}")
+    ledger = json.dumps(res.get("coverage_ledger") or [])
+    check("uncertainty: the EA-0 assembly is measured in the ledger with a"
+          " resolved-zero marker",
+          '"state": "measured"' in ledger
+          and "resolved zero" in ledger, ledger[:160])
+
+    # (2) unknown edge length -> null edge LF + named declaration + callout
+    spec = messy_spec()
+    spec["assemblies"] = [
+        {"assembly_id": "a1", "type": "A", "package": "millwork",
+         "quantity_basis": {"mode": "room_type_count", "type": "A"},
+         "pieces": ["p:k"],
+         "sources": [{"source_id": "plans", "page": 5}]}]
+    spec["pieces"] = [
+        {"piece_id": "p:k", "assembly_id": "a1", "route": "geometry",
+         "region_id": "A:kitchen",
+         "edge_runs": [{"profile": "eased", "exposure": "front",
+                        "length_in": None}]}]
+    rc, res, err = run_measure(spec, "v5_edgenull")
+    pk = next(p for p in res["piece_boq"] if p["piece_id"] == "p:k")
+    co = callout_text(res)
+    ledger_txt = json.dumps(res.get("coverage_ledger") or [])
+    check("uncertainty: unknown edge length -> NULL edge LF (blank-field"
+          " declaration + callout), never a measured number",
+          rc == 0 and pk["edge_lf_by_profile"].get("eased") is None
+          and any("edge_lf" in b for b in pk.get("blank_fields") or [])
+          and "edge_lf" in co
+          and "blank: edge_lf" in ledger_txt,
+          f"rc={rc} piece={ {k: pk.get(k) for k in ('edge_lf_by_profile',
+                                                    'blank_fields')} }")
+
+    # (3) reconciliation compares the SAME known contributions (the strict
+    #     pair) - the partial-knowledge totals are reported separately
+    rc, res, err = run_measure(json.load(open(HOTEL_JOBS,
+                                              encoding="utf-8")),
+                               "v5_hotel_dual",
+                               jobs_path=os.path.join(BUILD, "hotel",
+                                                      "v5_dual.jobs.json"))
+    res_hotel_dual = res
+    dual = next(i for i in res["audit"]
+                if i["check"] == "dual BoQ reconciliation")
+    import re as _re
+    m = _re.search(r"assembly view ([\d.]+) SF == piece view ([\d.]+) SF",
+                   dual["detail"])
+    check("uncertainty: the strict pair compares the SAME known"
+          " contributions and they agree",
+          dual["status"] == "pass" and m
+          and abs(float(m.group(1)) - float(m.group(2))) < 0.02,
+          dual["detail"][:160])
+    check("uncertainty: the full known piece view is reported separately"
+          " from the strict pair",
+          "full known piece view" in dual["detail"]
+          and "partial-knowledge assemblies" in dual["detail"],
+          dual["detail"][:200])
+
+    # (4) missing-geometry-page calibration degrades LOCALLY (no stop)
+    spec = messy_spec()
+    spec["calibrations"].append(
+        {"page": 99, "viewport": "ghost", "spans": [
+            {"label": "10'-0\"", "word_ids": [41], "seg_ids": [25]},
+            {"label": "6'-0\"", "word_ids": [42], "seg_ids": [28]}]})
+    rc, res, err = run_measure(spec, "v5_ghostcal")
+    co = callout_text(res)
+    check("uncertainty: a calibration on a missing-geometry page degrades"
+          " locally (exit 0 + callout, other pages still measure)",
+          rc == 0 and "not in the geometry" in co
+          and abs(res["totals"]["project_sf"] - 990.0) < 0.01,
+          f"rc={rc} total={res and res['totals']['project_sf']}")
+
+    # (5) room counts stay DISTINCT from summed assembly EA
+    check("uncertainty: totals carry BOTH the schedule unit count and the"
+          " summed assembly EA (hotel: 10 room units vs 8 non-excluded"
+          " assembly EA)",
+          res_hotel_dual["totals"]["unit_count"] == 10
+          and res_hotel_dual["totals"]["assembly_ea"] == 8,
+          str(res_hotel_dual["totals"]))
+    spec_mixed = mixed_v5_spec()
+    rc2, res2, _ = run_measure(spec_mixed, "v5_mixed_ea")
+    check("uncertainty: mixed job - room schedule units (18) != assembly EA"
+          " (28) - different fields, neither overwrites the other",
+          rc2 == 0 and res2["totals"]["unit_count"] == 18
+          and res2["totals"]["assembly_ea"] == 28,
+          str(res2 and res2["totals"]))
+
+    # (6) completeness flags on results/report/CSV
+    spec = copy.deepcopy(json.load(open(HOTEL_JOBS, encoding="utf-8")))
+    rc, res, err = run_measure(spec, "v5_complete",
+                               jobs_path=os.path.join(BUILD, "hotel",
+                                                      "v5_complete.jobs.json"))
+    t = res["totals"]
+    check("uncertainty: hotel totals carry explicit completeness flags"
+          " (known subtotal + unknown count)",
+          t["project_sf_complete"] is False
+          and t["unknown_contribution_count"] >= 1
+          and abs(t["known_subtotal_sf"] - t["project_sf"]) < 0.01,
+          str(t))
+    club_type = next(t2 for t2 in res["types"]
+                     if t2["room_type"] == "CLUB")
+    check("uncertainty: a partially-known type carries complete=False with"
+          " its known subtotal",
+          club_type["complete"] is False
+          and club_type["extended_sf"] is not None,
+          str({k: club_type.get(k) for k in ("complete", "extended_sf")}))
+
+    # (7) an ALL-unknown type shows a BLANK total, never 0.00
+    spec = mixed_v5_spec()
+    for p in spec["pieces"]:
+        if p["piece_id"] == "p:stated":
+            p["dims_in"] = {"width": None, "depth": None, "thickness": 2,
+                            "height": 36}
+    rc, res, err = run_measure(spec, "v5_allunknown",
+                               ("--csv",
+                                os.path.join(BUILD, "v5_allunknown.csv"),))
+    pub_type = next((t2 for t2 in res["types"] if t2["room_type"] == "PUB"),
+                    None)
+    check("uncertainty: an all-unknown piece shows a BLANK type total"
+          " (never 0.00)",
+          rc == 0 and pub_type is not None
+          and pub_type["extended_sf"] is None,
+          str(pub_type and pub_type.get("extended_sf")))
+    import csv as _csv
+    rows = list(_csv.reader(open(os.path.join(BUILD, "v5_allunknown.csv"),
+                                 encoding="utf-8"))) if os.path.exists(
+        os.path.join(BUILD, "v5_allunknown.csv")) else []
+    pub_row = [r for r in rows if r and r[0] == "type_total"
+               and r[1] == "PUB"]
+    check("uncertainty: the CSV type_total for an all-unknown type is the"
+          " blank marker, never 0.00",
+          pub_row and pub_row[0][9] == "__blank__",
+          str(pub_row))
+
+
 def main():
     global ORIG_PDFS, ORIG_GEO
     shutil.rmtree(BUILD, ignore_errors=True)
@@ -517,6 +675,7 @@ def main():
     publish_safety_tests(rate_profile)
     identity_tests()
     estimate_scope_tests()
+    uncertainty_tests()
     print()
     failed = [r for r in RESULTS if not r[1]]
     for name, ok, detail in RESULTS:

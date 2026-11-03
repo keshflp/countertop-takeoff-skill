@@ -290,9 +290,17 @@ def build_calibrations(spec_calibrations, pages_by_no, default_source=None,
                 " (unsupported overrides refuse)")
         seen_keys.add(key)
         if (source, pno) not in pages_by_no:
-            raise CalibrationError(
-                f"calibration source {source!r} page {pno} is not in the"
-                " geometry file(s) - re-run extract_geometry.py for it")
+            # V5 (P1.1): a page whose geometry was never extracted degrades
+            # LOCALLY (callout; that viewport's regions go unresolved) - it
+            # must not abort the calibrations of every OTHER page
+            msg = (f"calibration source {source!r} page {pno} is not in the"
+                   " geometry file(s) - that viewport's quantities degrade to"
+                   " blank (re-run extract_geometry.py for it); other pages"
+                   " still calibrate")
+            errors.append((key, msg))
+            if on_error:
+                on_error(key, msg)
+            continue
         try:
             cal = calibrate_entry(entry, pages_by_no[(source, pno)])
         except CalibrationError as exc:

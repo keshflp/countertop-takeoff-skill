@@ -126,7 +126,7 @@ def _fmt_factor(v):
                                  else str(v))
 
 
-def takeoff_lines(spec, types, total):
+def takeoff_lines(spec, types, total, totals_meta=None):
     lines = ["", "## Takeoff by region", ""]
     mode = spec.get("mode")
     for t in types:
@@ -162,10 +162,32 @@ def takeoff_lines(spec, types, total):
                          f"**{t['excluded_extended_sf']:.2f} SF** (reported"
                          " separately, excluded from totals)")
         if mode == "repeated_types" or spec.get("_assemblies"):
+            t_total = t.get("extended_sf")
             lines.append("")
-            lines.append(f"Type total: **{t['extended_sf']:.2f} SF**")
+            if t_total is None:
+                # V5 (P1.1): an all-unknown type shows a BLANK total
+                lines.append("Type total: **__blank__** (no measured amounts"
+                             " for this type - see CALLOUTS)")
+            else:
+                lines.append(f"Type total: **{t_total:.2f} SF**"
+                             + ("" if t.get("complete", True) else
+                                " (known subtotal; some contributions are"
+                                " unknown - see CALLOUTS)"))
         lines.append("")
-    lines.append(f"**Project total: {total:.2f} SF**")
+    meta = totals_meta or {}
+    total_line = f"**Project total: {total:.2f} SF**"
+    if meta.get("project_sf_complete") is False:
+        total_line += (f" (known subtotal;"
+                       f" {meta.get('unknown_contribution_count', '?')}"
+                       " contribution(s) unknown - see CALLOUTS)")
+    lines.append(total_line)
+    if meta.get("assembly_ea") is not None:
+        lines.append("")
+        lines.append(
+            f"**Assembly EA total: {meta['assembly_ea']} EA** (summed resolved"
+            " assembly quantities - DISTINCT from the"
+            f" {meta.get('unit_count', '?')} unit(s) in the room schedule;"
+            " one counts rooms, the other counts assembled instances)")
     lines.append("")
     return lines
 
@@ -326,7 +348,8 @@ def piece_boq_lines(piece_rows):
 def ledger_lines(ledger):
     lines = ["", "## Coverage ledger", "",
              "Every inventoried item reconciles to exactly one state:",
-             "`measured | package_excluded | superseded | unresolved`.", "",
+             "`measured | included_scope | package_excluded | superseded |"
+             " unresolved`.", "",
              "| item | kind | state | source | detail |",
              "|------|------|-------|--------|--------|"]
     for e in ledger:
@@ -340,7 +363,7 @@ def ledger_lines(ledger):
 
 def build_report(spec, calibrations, types, total, audit, review_status,
                  run_status="complete", ledger=None, assembly_rows=None,
-                 piece_rows=None):
+                 piece_rows=None, totals_meta=None):
     lines = ["# Countertop Takeoff Report (V4)", ""]
     lines.append(f"- source(s): {sources_line(spec)}")
     lines.append(f"- generated: {runtime_versions()['generated_utc']}")
@@ -354,6 +377,7 @@ def build_report(spec, calibrations, types, total, audit, review_status,
     lines += scope_table_lines(spec)
     lines += schedule_table_lines(spec)
     lines += calibration_table_lines(calibrations)
+    lines += takeoff_lines(spec, types, total, totals_meta=totals_meta)
     lines += takeoff_lines(spec, types, total)
     lines += callout_lines(audit)
     if ledger is not None:
@@ -455,8 +479,13 @@ def _resolved_csv_rows(spec, types, piece_rows, project_total):
              else f"{src} (stated dims)"),
             notes])
     for t in types:
+        t_total = t.get("extended_sf")
         rows.append(["type_total", t["room_type"], "", "", "", "", "",
-                     "", "", f"{t['extended_sf']:.2f}", "", "", ""])
+                     "", "", "__blank__" if t_total is None
+                     else f"{t_total:.2f}", "", "",
+                     "" if t_total is not None else
+                     "no measured amounts for this type (blank, never"
+                     " 0.00)"])
     excluded = round(sum(t.get("excluded_extended_sf") or 0.0
                          for t in types), 2)
     if excluded:
