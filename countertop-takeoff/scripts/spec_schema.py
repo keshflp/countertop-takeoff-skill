@@ -186,7 +186,7 @@ def validate_mode_and_policy(spec):
 PROFILE_KEYS = {"profile_version", "company", "material_aliases",
                 "gross_net_policy", "required_components",
                 "report_preferences", "approved_assumptions",
-                "package_defaults", "currency", "rates"}
+                "package_defaults", "currency", "rates", "terms"}
 PACKAGES = {"millwork", "FFE", "public_BOH"}
 HANDINGS = {"LH", "RH"}
 
@@ -298,6 +298,11 @@ def validate_profile(spec, base_dir):
         v = profile.get(k, [])
         require(isinstance(v, list) and all(isinstance(x, str) for x in v),
                 f"profile {k} must be a list of strings")
+    terms = profile.get("terms")
+    require(terms is None or (isinstance(terms, list)
+            and all(isinstance(x, str) and x.strip() for x in terms)),
+            "profile terms must be a list of non-empty strings (the supplied"
+            " terms a proposal may quote - never invented)")
     require(isinstance(profile.get("report_preferences", {}), dict),
             "report_preferences must be an object")
     validate_rates(profile)

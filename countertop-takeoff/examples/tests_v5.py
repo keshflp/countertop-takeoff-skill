@@ -880,6 +880,125 @@ def estimate_pdf_tests():
           f"n_lines={len(payload2['lines'])}")
 
 
+# ----------------------------------------------- P1.3 proposal-lite
+def proposal_tests():
+    import proposal as proposal_mod
+    import pymupdf
+    prof_path = os.path.join(BUILD, "v5_hotel_rates.json")  # has terms[]
+    hotel_res = os.path.join(BUILD, "v5_hotel.results.json")
+
+    # (1) BLANK-case proposal (hotel room 203 unresolved): totals blank
+    est_blank = os.path.join(BUILD, "v5_est_203.json")
+    payload = proposal_mod.build_proposal(
+        hotel_res, est_blank, prof_path,
+        out_md=os.path.join(BUILD, "v5_proposal_blank.md"),
+        out_json=os.path.join(BUILD, "v5_proposal_blank.json"),
+        out_pdf=os.path.join(BUILD, "v5_proposal_blank.pdf"))
+    check("proposal: built from the corrected BLANK estimate - grand"
+          " preserved blank",
+          payload["schema"].endswith("proposal")
+          and payload["grand_total"] is None
+          and payload["scope_complete"] is False
+          and len(payload["packages"]) >= 2, str(payload["grand_total"]))
+    mdb = open(os.path.join(BUILD, "v5_proposal_blank.md"),
+               encoding="utf-8").read()
+    jsb = json.load(open(os.path.join(BUILD, "v5_proposal_blank.json"),
+                         encoding="utf-8"))
+    doc = pymupdf.open(os.path.join(BUILD, "v5_proposal_blank.pdf"))
+    txtb = "\n".join(pg.get_text() for pg in doc)
+    doc.close()
+    check("proposal: json/md/pdf agree on the BLANK total",
+          "ESTIMATE TOTAL: __blank__" in mdb
+          and jsb["grand_total"] is None
+          and "ESTIMATE TOTAL: __blank__" in txtb,
+          mdb[-400:])
+    check("proposal: signature lines are blank and the terms section carries"
+          " the SUPPLIED terms",
+          "________________________________________" in mdb
+          and "Net 30 from invoice date" in mdb
+          and "Prices valid for 30 days" in mdb
+          and jsb["terms"], mdb[-600:])
+    check("proposal: package summaries come from the data (millwork +"
+          " public_BOH priced, FFE shown once as excluded), EA totals"
+          " unchanged",
+          {g["package"] for g in payload["packages"]}
+          == {"millwork", "public_BOH", "FFE"}
+          and sum(g["ea_total"] for g in payload["packages"])
+          == sum(l["qty_ea"] or 0 for l in payload["lines"])
+          and sum(1 for g in payload["packages"] if g["package"] == "FFE")
+          == 1,
+          str([(g["package"], g["ea_total"]) for g in payload["packages"]]))
+    check("proposal: no invented percentages/tax/payable language",
+          "tax" not in mdb.lower() or "invents no" in mdb.lower()
+          and "payable" not in mdb.lower().replace("payable balances", ""),
+          "")
+
+    # (2) PRICED-case proposal: agreement with a fully-priced estimate
+    est_priced = os.path.join(BUILD, "v5_est_203.json")
+    est2 = json.load(open(est_priced, encoding="utf-8"))
+    est2["grand_total"] = est2["priced_subtotal"]
+    est2["scope_complete"] = True
+    est2["unknown_scope"] = []
+    est2["callouts"] = []
+    est_p = os.path.join(BUILD, "v5_est_priced.json")
+    json.dump(est2, open(est_p, "w", encoding="utf-8"))
+    payload = proposal_mod.build_proposal(
+        hotel_res, est_p, prof_path,
+        out_md=os.path.join(BUILD, "v5_proposal.md"),
+        out_json=os.path.join(BUILD, "v5_proposal.json"),
+        out_pdf=os.path.join(BUILD, "v5_proposal.pdf"))
+    grand = payload["grand_total"]
+    check("proposal: priced case carries the estimate total unchanged",
+          grand == est2["priced_subtotal"] and payload["scope_complete"],
+          str(grand))
+    mdp = open(os.path.join(BUILD, "v5_proposal.md"),
+               encoding="utf-8").read()
+    doc = pymupdf.open(os.path.join(BUILD, "v5_proposal.pdf"))
+    txtp = "\n".join(pg.get_text() for pg in doc)
+    doc.close()
+    grand_s = f"{grand:,.2f}"
+    check("proposal: json/md/pdf agree on the priced total",
+          f"ESTIMATE TOTAL: {grand_s} USD" in mdp
+          and grand_s in txtp and grand_s in mdp,
+          mdp[-300:])
+    # package subtotal agreement: each fully-priced package's amount equals
+    # the sum of its lines' totals
+    from collections import defaultdict
+    sums = defaultdict(float)
+    for l in payload["lines"]:
+        if l.get("line_total") is not None:
+            sums[l.get("package")] += l["line_total"]
+    check("proposal: every package amount equals the sum of its lines",
+          all(abs(g["known_amount"] - sums.get(g["package"], 0.0)) < 0.01
+              for g in payload["packages"] if g["lines"]),
+          str([(g["package"], g["known_amount"], sums.get(g["package"]))
+               for g in payload["packages"]]))
+
+    # (3) binding: an estimate from a DIFFERENT results file refuses
+    other = os.path.join(BUILD, "v5_proposal_other.json")
+    json.dump({"schema": "countertop-takeoff/v3 results"},
+              open(other, "w", encoding="utf-8"))
+    try:
+        proposal_mod.build_proposal(other, est_blank, prof_path)
+        refused = False
+    except SystemExit as exc:
+        refused = "DIFFERENT results file" in str(exc)
+    check("proposal: refuses an estimate not bound to the same results"
+          " file", refused, "no refusal")
+    # (4) an inconsistent estimate (tampered subtotal) refuses
+    tampered = json.load(open(est_p, encoding="utf-8"))
+    tampered["priced_subtotal"] = 1.23
+    tp = os.path.join(BUILD, "v5_est_tampered.json")
+    json.dump(tampered, open(tp, "w", encoding="utf-8"))
+    try:
+        proposal_mod.build_proposal(hotel_res, tp, prof_path)
+        refused2 = False
+    except SystemExit as exc:
+        refused2 = "disagrees with its own lines" in str(exc)
+    check("proposal: refuses an internally inconsistent estimate",
+          refused2, "no refusal")
+
+
 def main():
     global ORIG_PDFS, ORIG_GEO
     shutil.rmtree(BUILD, ignore_errors=True)
@@ -895,6 +1014,7 @@ def main():
     uncertainty_tests()
     audit_pack_tests()
     estimate_pdf_tests()
+    proposal_tests()
     print()
     failed = [r for r in RESULTS if not r[1]]
     for name, ok, detail in RESULTS:
