@@ -328,13 +328,233 @@ def reconcile_totals(sched, audit):
     return unit_total
 
 
-LEDGER_STATES = {"measured", "package_excluded", "superseded", "unresolved"}
+LEDGER_STATES = {"measured", "package_excluded", "superseded", "unresolved",
+                 "included_scope"}
 
 
-def _assembly_count(spec, a):
-    """Validated EA for an assembly: enumerated = 1; room_type_count = the
-    validated schedule count for its type/variant (None when the count is
-    unsupported - the BoQ EA stays blank, never guessed)."""
+def build_coverage_ledger(spec, results, audit, results_by_id=None,
+                          resolved=None):
+    """Reconcile EVERY inventoried item to exactly one ledger state (P0.1,
+    completed per P0.3):
+
+      measured | package_excluded | superseded | unresolved | included_scope
+
+    Inventory covers the COMPLETE set: schedule types/variants, every
+    room in the plan-tag inventory (a room covered by NO assembly - the
+    hotel-203 case - is its own unresolved entry), every scope-dispositioned
+    page (superseded pages appear here, not just in callouts), assemblies
+    and pieces. Entries distinguish measured evidence from included scope:
+    variants counted inside a parent total carry included_scope; package-
+    excluded GR entries carry package_excluded with their measured-evidence
+    detail.
+    """
+    resolved = resolved or {"assemblies": {}, "pieces": {}}
+    ledger = []
+    excluded_types = set((spec.get("policy") or {}).get(
+        "package_excluded_types") or [])
+    by_type = {}
+    for r in results:
+        if r["kind"] != "base":
+            continue
+        by_type.setdefault((r.get("type"), r.get("variant")), []).append(r)
+
+    def region_state(r):
+        if r.get("status") == "unresolved":
+            return "unresolved"
+        return "measured"
+
+    if spec.get("mode") == "individual_rooms":
+        for r in results:
+            if r["kind"] == "base":
+                ledger.append({
+                    "item": r["region_id"], "kind": "room",
+                    "source": {"source_id": r.get("source_id"),
+                               "pages": [r["page"]]},
+                    "state": region_state(r),
+                    "detail": (r.get("unresolved_reason", "")[:120]
+                               if r.get("status") == "unresolved"
+                               else f"{r['area_sf']:.2f} SF measured"),
+                })
+    else:
+        sched = spec.get("schedule") or {"types": []}
+        for t in sched.get("types", []):
+            name = t["type"]
+            rows = by_type.get((name, None), [])
+            measured_rows = [r for r in rows if r.get("status") !=
+                             "unresolved"]
+            evidence_ok = t.get("_evidence_ok") is not False
+            if name in excluded_types:
+                state, detail = "package_excluded", (
+                    "count known but excluded by policy; reported separately")
+            elif not measured_rows:
+                state = "unresolved"
+                detail = ("schedule count present but no region measured -"
+                          " SF blank")
+            elif not evidence_ok:
+                state = "unresolved"
+                detail = ("measured SF but unsupported schedule count -"
+                          " extension withheld")
+            else:
+                state, detail = "measured", (
+                    f"{len(measured_rows)} region(s) measured with schedule"
+                    " evidence")
+            ledger.append({"item": f"type {name} x{t['count']}",
+                           "kind": "type",
+                           "source": {"pages": [sched.get("page")]},
+                           "state": state, "detail": detail})
+        for v in sched.get("variants", []):
+            key = (v["type"], v["name"])
+            rows = by_type.get(key, [])
+            measured_rows = [r for r in rows
+                             if r.get("status") != "unresolved"]
+            if v.get("_evidence_ok") is False:
+                state = "unresolved"
+                detail = ("variant evidence unsupported - extension"
+                          " withheld")
+            elif v["included_in_parent_total"]:
+                # counted INSIDE the parent total: included scope, not a
+                # separate measured count
+                state = "included_scope"
+                detail = (f"{len(measured_rows)} region(s) measured; count"
+                          " included in the parent total (subtracted from"
+                          " it), never added again")
+            elif measured_rows:
+                state, detail = "measured", (
+                    f"{len(measured_rows)} region(s) measured")
+            else:
+                state = "unresolved"
+                detail = "declared but no region measured - SF blank"
+            ledger.append({
+                "item": f"variant {v['type']}:{v['name']} x{v['count']}",
+                "kind": "variant",
+                "source": {"pages": [sched.get("page")]},
+                "state": state, "detail": detail,
+            })
+        for r in results:
+            if r["kind"] != "base":
+                continue
+            ledger.append({
+                "item": r["region_id"], "kind": "region",
+                "source": {"source_id": r.get("source_id"),
+                           "pages": [r["page"]]},
+                "state": region_state(r),
+                "detail": (r.get("unresolved_reason", "")[:120]
+                           if r.get("status") == "unresolved"
+                           else f"{r['area_sf']:.2f} SF"),
+            })
+    # superseded pages appear in the ledger, not only in callouts (P0.3:
+    # the COMPLETE inventory)
+    for e in spec.get("scope", {}).get("pages", []):
+        if e.get("disposition") == "superseded":
+            ledger.append({
+                "item": (f"page {e.get('source_id') + ':' if e.get('source_id')
+                          else ''}{e['page']}"
+                         + (f" ({e.get('sheet')})" if e.get("sheet") else "")),
+                "kind": "page",
+                "source": {"source_id": e.get("source_id"),
+                           "pages": [e["page"]]},
+                "state": "superseded",
+                "detail": (e.get("reason") or "")[:110],
+            })
+    # every inventoried ROOM reconciles to the assembly that covers it
+    inv = ((spec.get("schedule") or {}).get("room_inventory") or {})
+    asm_rooms = {}
+    for arow in resolved.get("assemblies", {}).values():
+        if arow.get("room"):
+            asm_rooms[arow["room"]] = arow
+    for room in inv.get("rooms") or []:
+        arow = asm_rooms.get(room["room"])
+        if arow is None:
+            ledger.append({
+                "item": f"room {room['room']} ({room['type']})",
+                "kind": "room",
+                "source": {"pages": [room["page"]]},
+                "state": "unresolved",
+                "detail": "inventoried but covered by NO assembly -"
+                          " quantities blank (never defaulted)",
+            })
+        else:
+            ledger.append({
+                "item": f"room {room['room']} ({room['type']})",
+                "kind": "room",
+                "source": {"pages": [room["page"]]},
+                "state": ("package_excluded"
+                          if arow["state"] == "package_excluded"
+                          else ("measured" if arow.get("ea")
+                                else "unresolved")),
+                "detail": ("covered by assembly " + arow["assembly_id"]
+                           + ("; package-excluded, reported separately"
+                              if arow["state"] == "package_excluded"
+                              else (f" EA {arow.get('ea')}"
+                                    if arow.get("ea") is not None
+                                    else " EA withheld"))),
+            })
+    # assemblies + pieces reconcile into the same ledger from the resolved
+    # model (measured evidence vs included scope vs package exclusion)
+    for arow in resolved.get("assemblies", {}).values():
+        state = arow["state"]
+        if state == "package_excluded":
+            detail = (("measured evidence present" if arow.get("ea")
+                       is not None else "EA unresolved")
+                      + "; package rule excludes it from main totals -"
+                        " reported separately (included-scope distinction)")
+        elif arow.get("ea") is None:
+            state = "unresolved"
+            detail = arow.get("basis") or "EA withheld"
+        else:
+            detail = f"{arow.get('basis')} (resolved)"
+        ledger.append({"item": f"assembly {arow['assembly_id']}",
+                       "kind": "assembly",
+                       "source": {"pages": sorted(
+                           {s.get("page")
+                            for s in arow.get("sources", [])
+                            if s.get("page")})},
+                       "state": state, "detail": detail})
+    for prow in resolved.get("pieces", {}).values():
+        state = prow["state"]
+        if prow.get("orphan"):
+            state = "unresolved"
+        elif prow.get("extension_sf") is None and state == "measured":
+            state = "unresolved"
+        detail = (f"route {prow['route']}; EA {prow.get('ea')}"
+                  if prow.get("ea") is not None
+                  else f"route {prow['route']}; EA withheld")
+        if prow.get("extension_sf") is None:
+            detail += "; extension blank"
+        ledger.append({"item": f"piece {prow['piece_id']}", "kind": "piece",
+                       "source": {"pages": sorted(
+                           {l.get("page")
+                            for l in (prow.get("source_links") or {}).values()
+                            if l.get("page")})},
+                       "state": state, "detail": detail})
+    bad = [e for e in ledger if e["state"] not in LEDGER_STATES]
+    if bad:
+        audit.add("coverage ledger", "fail",
+                  f"ledger entries with an invalid state: {bad}")
+    states = {}
+    for e in ledger:
+        states[e["state"]] = states.get(e["state"], 0) + 1
+    audit.add("coverage ledger", "pass",
+              f"every inventoried item reconciled: {states}")
+    return ledger
+
+
+def resolve_assembly_ea(spec, a):
+    """Validated EA for ONE assembly, resolved independently (P0.1).
+
+    enumerated            -> 1
+    room_type_count       -> the schedule count for its type, MINUS the
+                             counts of INCLUDED variants (an ADA room inside
+                             the parent type count is SUBTRACTED from the
+                             standard EA, never added again on top)
+    room_type_count+var   -> that variant's own count
+
+    Returns (ea | None, basis). None = the count is unsupported (evidence
+    withheld or reconciliation conflict): the BoQ EA stays blank, never
+    guessed. Type-level withholding poisons standard assemblies AND
+    variants that are included in the parent total; an ADDITIONAL variant
+    with valid evidence of its own keeps its count.
+    """
     qb = a["quantity_basis"]
     if qb["mode"] == "enumerated":
         return 1, "enumerated"
@@ -342,56 +562,348 @@ def _assembly_count(spec, a):
     if not sched:
         return None, "room_type_count (no schedule declared)"
     vname = qb.get("variant")
-    for t in sched["types"]:
-        if t["type"] != qb.get("type"):
-            continue
-        if t.get("_evidence_ok") is False:
-            return None, "schedule count unsupported (evidence withheld)"
-        if vname:
-            for v in sched.get("variants", []):
-                if v["type"] == t["type"] and v["name"] == vname:
-                    return v["count"], f"variant {vname} count (schedule)"
+    t = next((x for x in sched["types"] if x["type"] == qb.get("type")), None)
+    if t is None:
+        return None, f"type {qb.get('type')!r} not in the schedule"
+    if t.get("_evidence_ok") is False:
+        return None, "schedule count unsupported (evidence withheld)"
+    if vname:
+        v = next((x for x in sched.get("variants", [])
+                  if x["type"] == t["type"] and x["name"] == vname), None)
+        if v is None:
             return None, f"variant {vname!r} not declared in the schedule"
-        incl = sum(v["count"] for v in sched.get("variants", [])
-                   if v["type"] == t["type"] and v["included_in_parent_total"])
-        return t["count"], f"room-type count x{t['count']} (schedule-validated)"
-    return None, f"type {qb.get('type')!r} not in the schedule"
+        if v.get("_evidence_ok") is False:
+            return None, "variant count unsupported (evidence withheld)"
+        return v["count"], f"variant {vname} count {v['count']} (schedule)"
+    incl = sum(v["count"] for v in sched.get("variants", [])
+               if v["type"] == t["type"] and v["included_in_parent_total"]
+               and v.get("_evidence_ok") is not False)
+    count = t["count"] - incl
+    if count < 0:
+        return None, (f"included variant counts exceed the type count"
+                      f" {t['count']}")
+    suffix = (f" minus {incl} included variant(s)" if incl else "")
+    return count, (f"room-type count {t['count']}{suffix}"
+                   " (schedule-validated)")
 
 
-def build_assembly_boq(spec, audit):
-    """ASSEMBLY BoQ rows: one per assembly with inch descriptions and EA x
-    validated count. Package-excluded assemblies are reported separately
-    (package_excluded), never silently dropped."""
+def resolve_quantities(spec, results, audit, results_by_id=None):
+    """ONE resolved quantity model (P0.1).
+
+    Every deliverable total - project SF, type rows, BoQ totals, CSV grand
+    total - is DERIVED from the records this function returns, so they
+    cannot disagree. Rules:
+
+      - each assembly's EA is resolved independently
+        (resolve_assembly_ea); included variants are subtracted from the
+        parent count, never added again
+      - package scope is applied ONCE per assembly, regardless of
+        aggregation branch
+      - piece<->assembly membership is bidirectional: orphan pieces,
+        pieces claimed by two assemblies, assembly piece-list entries with
+        no piece record, and measured regions covered by NO piece are all
+        flagged (callouts; the affected extensions stay blank)
+      - partial known quantities survive: a piece with measured SF and a
+        withheld EA keeps its SF and blanks only the extension
+    """
     excluded = spec.get("_excluded_packages") or set()
-    rows = []
-    for a in spec.get("_assemblies") or []:
-        count, basis = _assembly_count(spec, a)
+    assemblies = spec.get("_assemblies") or []
+    pieces = spec.get("_pieces") or []
+    resolved = {"assemblies": {}, "pieces": {}, "orphans": [],
+                "measured_orphans": [], "membership_problems": [],
+                "project_total_sf": 0.0, "excluded_total_sf": 0.0}
+
+    # ---- bidirectional membership ------------------------------------
+    asm_ids = {a["assembly_id"] for a in assemblies}
+    claims = {}
+    for p in pieces:
+        claims.setdefault(p["assembly_id"], []).append(p["piece_id"])
+    for aid, pids in claims.items():
+        if aid not in asm_ids:
+            resolved["orphans"].extend(pids)
+            resolved["membership_problems"].append(
+                f"piece(s) {pids} reference assembly {aid!r} which is NOT"
+                " declared - their extensions stay blank")
+        dupes = sorted({pid for pid in pids if pids.count(pid) > 1})
+        if dupes:
+            resolved["membership_problems"].append(
+                f"assembly {aid!r} lists piece(s) {dupes} more than once")
+    seen_claim = {}
+    for p in pieces:
+        prev = seen_claim.get(p["piece_id"])
+        if prev is not None and prev != p["assembly_id"]:
+            resolved["membership_problems"].append(
+                f"piece {p['piece_id']!r} is claimed by assemblies {prev!r}"
+                f" and {p['assembly_id']!r} - one piece cannot belong to two"
+                " assemblies")
+        seen_claim[p["piece_id"]] = p["assembly_id"]
+    for a in assemblies:
+        for pid in a.get("pieces") or []:
+            if not any(p["piece_id"] == pid for p in pieces):
+                resolved["membership_problems"].append(
+                    f"assembly {a['assembly_id']!r} lists piece {pid!r} with"
+                    " no piece record")
+    for problem in resolved["membership_problems"]:
+        audit.add_callout("piece/assembly membership", problem,
+                          blank_fields=["extension_sf"])
+
+    # ---- measured regions covered by NO piece ------------------------
+    if assemblies:
+        covered = {p.get("region_id") for p in pieces if p.get("region_id")}
+        for r in results:
+            if (r["kind"] == "base" and r.get("status") != "unresolved"
+                    and r["region_id"] not in covered):
+                resolved["measured_orphans"].append(r["region_id"])
+                audit.add_callout(
+                    f"region {r['region_id']}",
+                    "measured but covered by NO assembly/piece - excluded"
+                    " from the resolved totals; add it to the job spec or"
+                    " exclude it explicitly",
+                    blank_fields=["extension_sf"], pages=[r["page"]],
+                    source_id=r.get("source_id"))
+
+    # ---- resolve every assembly independently ------------------------
+    for a in assemblies:
+        aid = a["assembly_id"]
         pkg = a["package"]
-        state = ("package_excluded" if pkg in excluded
-                 else ("measured" if count else "unresolved"))
+        excluded_asm = pkg in excluded
+        count, basis = resolve_assembly_ea(spec, a)
         pages = sorted({s.get("page") for s in a.get("sources", [])
                         if s.get("page")})
-        if pkg in excluded:
+        if excluded_asm:
             audit.add("package exclusion", "pass",
-                      f"assembly {a['assembly_id']} ({a['type']}) is in"
-                      f" excluded package {pkg!r} - reported separately and"
-                      " excluded from main totals")
+                      f"assembly {aid} ({a['type']}) is in excluded package"
+                      f" {pkg!r} - reported separately, excluded from main"
+                      " totals")
         elif count is None:
             audit.add_callout(
-                f"assembly {a['assembly_id']}",
+                f"assembly {aid}",
                 f"quantity basis unresolved: {basis} - EA stays blank",
                 blank_fields=["ea"], pages=pages,
                 source_id=(a.get("sources") or [{}])[0].get("source_id"))
+        resolved["assemblies"][aid] = {
+            "assembly_id": aid, "room": a.get("room"), "type": a["type"],
+            "variant": a.get("variant"), "package": pkg,
+            "finish_tag": a.get("finish_tag"),
+            "width_in": a.get("width_in"), "depth_in": a.get("depth_in"),
+            "height_in": a.get("height_in"), "handing": a.get("handing"),
+            "ea": count, "basis": basis,
+            "state": ("package_excluded" if excluded_asm
+                      else ("measured" if count else "unresolved")),
+            "pieces": list(a.get("pieces") or []),
+            "sources": a.get("sources") or [],
+            "sf_per_instance": None, "extended_sf": None,
+        }
+
+    # ---- resolve every piece from the SAME counts --------------------
+    for p in pieces:
+        pid = p["piece_id"]
+        aid = p["assembly_id"]
+        arow = resolved["assemblies"].get(aid)
+        orphan = arow is None
+        ea = None if orphan else arow["ea"]
+        state = "unresolved" if orphan else arow["state"]
+        blank = []
+        sf = None
+        dims = {}
+        factor = None
+        policy = None
+        region_meta = None
+        if p["route"] == "geometry":
+            r = (results_by_id or {}).get(p.get("region_id"))
+            if r is None or r.get("status") == "unresolved":
+                blank.append("sf")
+            else:
+                sf = r["area_sf"]
+                factor = r.get("factor_pt_per_ft") or r.get("factor_px_per_ft")
+                policy = r.get("gross_area_policy")
+                region_meta = {"region_id": r["region_id"],
+                               "sheet": r.get("sheet") or "?",
+                               "page": r.get("page"),
+                               "viewport": r.get("viewport") or "main",
+                               "source_id": r.get("source_id"),
+                               "factor": factor, "policy": policy}
+        else:
+            d = p.get("dims_in") or {}
+            dims = {k: d.get(k) for k in ("width", "depth", "thickness",
+                                          "height")}
+            if d.get("width") is None or d.get("depth") is None:
+                blank.append("sf")
+            else:
+                sf = round(d["width"] * d["depth"] / 144.0, 4)
+                policy = "stated dims"
+                region_meta = {"region_id": None, "sheet": "?", "page": "",
+                               "viewport": "stated", "source_id": None,
+                               "factor": None, "policy": policy}
+        edges = {}
+        edge_blank = []
+        edge_runs_by_profile = {}
+        for run in p.get("edge_runs") or []:
+            prof = run["profile"]
+            entry = edge_runs_by_profile.setdefault(
+                prof, {"lf": 0.0, "complete": True, "exposures": []})
+            entry["exposures"].append(run.get("exposure"))
+            v = run.get("length_in")
+            if v is None:
+                # P0.3: an unknown edge blanks ITS profile's LF (never
+                # folded into the known length of the same profile)
+                entry["complete"] = False
+                edge_blank.append(f"edge_lf:{prof}:{run.get('exposure')}")
+                continue
+            entry["lf"] += v / 12.0
+        for prof, entry in edge_runs_by_profile.items():
+            edges[prof] = (round(entry["lf"], 3) if entry["complete"]
+                           else None)
+        splash_lf = 0.0
+        splash_sf = 0.0
+        splash_lf_ok = True
+        splash_sf_ok = True
+        splash_detail = []
+        for run in p.get("splash_runs") or []:
+            ln = run.get("length_in")
+            ht = run.get("height_in")
+            splash_detail.append({"handing": run.get("handing"),
+                                  "returns_in": run.get("returns_in"),
+                                  "length_in": ln, "height_in": ht})
+            if ln is None:
+                splash_lf_ok = False
+            else:
+                splash_lf += ln / 12.0
+            if ln is None or ht is None:
+                splash_sf_ok = False   # blank, never a partial zero
+            else:
+                splash_sf += ln * ht / 144.0
+        if not splash_lf_ok:
+            blank.append("splash_lf")
+        if not splash_sf_ok:
+            blank.append("splash_sf")
+        cutouts = {}
+        for c in p.get("cutouts") or []:
+            cutouts[c["kind"]] = cutouts.get(c["kind"], 0) + c["ea"]
+        ext = (round(sf * ea, 4)
+               if sf is not None and isinstance(ea, (int, float)) else None)
+        if ext is None:
+            blank.append("extension_sf")
+        edge_ext = ({k: round(v * ea, 3) for k, v in edges.items()
+                     if v is not None and ea is not None}
+                    if ea is not None else None)
+        splash_lf_ext = (round(splash_lf * ea, 3)
+                         if splash_lf_ok and ea is not None else None)
+        splash_sf_ext = (round(splash_sf * ea, 3)
+                         if splash_sf_ok and ea is not None else None)
+        cutouts_ext = ({k: v * ea for k, v in cutouts.items()}
+                       if ea is not None else None)
+        if blank:
+            audit.add_callout(
+                f"piece {pid}",
+                "unresolved construction properties - fields stay blank"
+                f" ({sorted(set(blank))})",
+                blank_fields=sorted(set(blank)),
+                pages=sorted({l.get("page")
+                              for l in (p.get("source_links") or {}).values()
+                              if l.get("page")}),
+                source_id=next(iter((p.get("source_links") or {}).values()),
+                               {}).get("source_id") if (
+                                   p.get("source_links") or {}) else None)
+        resolved["pieces"][pid] = {
+            "piece_id": pid, "assembly_id": aid,
+            "room": None if orphan else arow.get("room"),
+            "type": None if orphan else arow.get("type"),
+            "package": None if orphan else arow.get("package"),
+            "finish_tag": p.get("finish_tag") or (
+                None if orphan else arow.get("finish_tag")),
+            "route": p["route"], "region_id": p.get("region_id"),
+            "dims_in": dims, "sf": sf, "region_meta": region_meta,
+            "edge_lf_by_profile": edges,
+            "edge_blank_profiles": sorted({b.split(":")[1]
+                                           for b in edge_blank}),
+            "splash_lf": round(splash_lf, 3) if splash_lf_ok else None,
+            "splash_sf": round(splash_sf, 3) if splash_sf_ok else None,
+            "splash_detail": splash_detail,
+            "cutouts_ea": cutouts or {},
+            "ea": ea, "extension_sf": ext,
+            "edge_lf_ext": edge_ext, "splash_lf_ext": splash_lf_ext,
+            "splash_sf_ext": splash_sf_ext, "cutouts_ea_ext": cutouts_ext,
+            "state": state, "blank_fields": sorted(set(blank)),
+            "source_links": p.get("source_links") or {},
+            "orphan": orphan,
+        }
+
+    # ---- assembly SF per instance + extensions (same records) --------
+    pieces_by_asm = {}
+    for prow in resolved["pieces"].values():
+        pieces_by_asm.setdefault(prow["assembly_id"], []).append(prow)
+    for arow in resolved["assemblies"].values():
+        own = pieces_by_asm.get(arow["assembly_id"], [])
+        sfs = [pp["sf"] for pp in own]
+        if own and all(v is not None for v in sfs):
+            arow["sf_per_instance"] = round(sum(sfs), 4)
+            arow["extended_sf"] = (round(arow["sf_per_instance"] * arow["ea"], 4)
+                                   if arow["ea"] is not None else None)
+        elif own:
+            audit.add_callout(
+                f"assembly {arow['assembly_id']}",
+                "piece SF incomplete - the assembly's SF/extension stays"
+                " blank while its other quantities survive",
+                blank_fields=["sf", "extension_sf"])
+
+    # ---- totals from the SAME resolved records -----------------------
+    for prow in resolved["pieces"].values():
+        if prow["orphan"] or prow["state"] == "package_excluded":
+            if prow["state"] == "package_excluded" and \
+                    prow["extension_sf"] is not None:
+                resolved["excluded_total_sf"] += prow["extension_sf"]
+            continue
+        if prow["extension_sf"] is not None:
+            resolved["project_total_sf"] += prow["extension_sf"]
+    resolved["project_total_sf"] = round(resolved["project_total_sf"], 4)
+    resolved["excluded_total_sf"] = round(resolved["excluded_total_sf"], 4)
+    return resolved
+
+
+def build_assembly_boq(spec, audit, resolved=None):
+    """ASSEMBLY BoQ rows: one per assembly with inch descriptions and the
+    RESOLVED EA (P0.1). Package-excluded assemblies are reported separately
+    (package_excluded), never silently dropped. All rows come from the ONE
+    resolved model - they cannot disagree with the piece view."""
+    excluded = spec.get("_excluded_packages") or set()
+    rows = []
+    for a in spec.get("_assemblies") or []:
+        aid = a["assembly_id"]
+        rrow = (resolved or {}).get("assemblies", {}).get(aid) or {}
+        count = rrow.get("ea")
+        basis = rrow.get("basis") or "unresolved"
+        state = rrow.get("state") or "unresolved"
         rows.append({
-            "assembly_id": a["assembly_id"], "room": a.get("room"),
+            "assembly_id": aid, "room": a.get("room"),
             "type": a["type"], "variant": a.get("variant"),
-            "package": pkg, "finish_tag": a.get("finish_tag"),
+            "package": a["package"], "finish_tag": a.get("finish_tag"),
             "width_in": a.get("width_in"), "depth_in": a.get("depth_in"),
             "height_in": a.get("height_in"), "handing": a.get("handing"),
             "ea": count, "basis": basis, "state": state,
+            "sf_per_instance": rrow.get("sf_per_instance"),
+            "extended_sf": rrow.get("extended_sf"),
             "pieces": list(a.get("pieces") or []),
             "sources": a.get("sources") or [],
         })
+    if excluded and rows:
+        audit.add("package exclusion", "pass",
+                  f"excluded packages {sorted(excluded)} are reported"
+                  " separately (state package_excluded), excluded from main"
+                  " totals in EVERY aggregation branch")
+    return rows
+
+
+def build_piece_boq(spec, audit, resolved=None):
+    """PIECE BoQ rows from the ONE resolved model: inch dims, gross/net SF,
+    edge LF by profile, splash LF/SF (returns + handing preserved), cutout
+    EA - and every extension multiplied by the SAME validated EA (P0.1:
+    LF and cutout counts extend with assembly quantities, not just SF).
+    Unknown dims keep the affected fields BLANK with a callout naming
+    them; a piece with measured SF and a withheld EA keeps its SF."""
+    rows = []
+    for prow in (resolved or {}).get("pieces", {}).values():
+        rows.append(dict(prow))
     return rows
 
 
@@ -586,131 +1098,78 @@ def audit_room_reconciliation(spec, audit):
                 " disagreement is resolved from evidence")
 
 
-def build_piece_boq(spec, results_by_id, assembly_rows, audit):
-    """PIECE BoQ rows: inch dims, gross/net SF, edge LF by profile, splash
-    LF/SF, cutouts EA, and extensions using the SAME validated assembly
-    counts (the two views are never summed with each other). Unknown dims
-    keep the affected fields BLANK with a callout naming them."""
-    asm_by_id = {r["assembly_id"]: r for r in assembly_rows}
-    excluded = spec.get("_excluded_packages") or set()
-    rows = []
-    for p in spec.get("_pieces") or []:
-        arow = asm_by_id.get(p["assembly_id"]) or {}
-        count = arow.get("ea")
-        astate = arow.get("state", "unresolved")
-        blank = []
-        sf = None
-        dims = {}
-        if p["route"] == "geometry":
-            r = results_by_id.get(p.get("region_id"))
-            if r is None or r.get("status") == "unresolved":
-                blank.append("sf")
-            else:
-                sf = r["area_sf"]
-        else:
-            d = p.get("dims_in") or {}
-            dims = {k: d.get(k) for k in ("width", "depth", "thickness",
-                                          "height")}
-            if d.get("width") is None or d.get("depth") is None:
-                blank.append("sf")
-            else:
-                sf = round(d["width"] * d["depth"] / 144.0, 4)
-        edges = {}
-        splash_lf = 0.0
-        splash_sf = 0.0
-        splash_blank = False
-        for run in p.get("edge_runs") or []:
-            v = run.get("length_in")
-            if v is None:
-                blank.append(f"edge_lf:{run.get('exposure')}")
-                continue
-            edges[run["profile"]] = round(
-                edges.get(run["profile"], 0.0) + v / 12.0, 3)
-        for run in p.get("splash_runs") or []:
-            ln = run.get("length_in")
-            ht = run.get("height_in")
-            if ln is None:
-                splash_blank = True
-                continue
-            splash_lf += ln / 12.0
-            if ht is not None:
-                splash_sf += ln * ht / 144.0
-            else:
-                blank.append("splash_height")
-        cutouts = {}
-        for c in p.get("cutouts") or []:
-            cutouts[c["kind"]] = cutouts.get(c["kind"], 0) + c["ea"]
-        if splash_blank:
-            blank.append("splash_lf")
-        ext = (round(sf * count, 4)
-               if sf is not None and isinstance(count, (int, float))
-               else None)
-        if ext is None:
-            blank.append("extension_sf")
-        links = p.get("source_links") or {}
-        if blank:
-            audit.add_callout(
-                f"piece {p['piece_id']}",
-                "unresolved construction properties - fields stay blank"
-                f" ({sorted(set(blank))})",
-                blank_fields=sorted(set(blank)),
-                pages=sorted({l.get("page") for l in links.values()
-                              if l.get("page")}),
-                source_id=next(iter(links.values()), {}).get("source_id"))
-        rows.append({
-            "piece_id": p["piece_id"], "assembly_id": p["assembly_id"],
-            "room": arow.get("room"), "type": arow.get("type"),
-            "package": arow.get("package"),
-            "finish_tag": p.get("finish_tag") or arow.get("finish_tag"),
-            "route": p["route"], "region_id": p.get("region_id"),
-            "dims_in": dims, "sf": sf,
-            "edge_lf_by_profile": edges,
-            "splash_lf": round(splash_lf, 3) if not splash_blank else None,
-            "splash_sf": round(splash_sf, 3) if not splash_blank else None,
-            "cutouts_ea": cutouts or {},
-            "count": count, "extension_sf": ext,
-            "state": ("package_excluded"
-                      if arow.get("package") in excluded else astate),
-            "source_links": links,
-        })
-    return rows
+def build_piece_boq_legacy(spec, results_by_id, assembly_rows, audit):
+    """(superseded V3 builder - kept as a thin alias for older callers;
+    the V4 pipeline calls build_piece_boq with the resolved model)."""
+    return build_piece_boq(spec, audit, None)
 
 
-def audit_dual_boq(assembly_rows, piece_rows, audit):
-    """Cross-check the two views (same records, same validated counts) and
-    report both totals SEPARATELY - the piece view and the assembly view
-    are never summed together."""
+def audit_dual_boq(assembly_rows, piece_rows, audit, project_total=None):
+    """Three-way reconciliation (P0.1): the PIECE view, the ASSEMBLY view
+    and the PROJECT total are reconciled AGAINST EACH OTHER - not by
+    regrouping extensions:
+
+      - assembly view: sum of (resolved EA x resolved per-instance SF)
+        over assemblies whose pieces are ALL resolved (independent
+        arithmetic path: EA model x SF model)
+      - piece view: sum of the per-piece extensions of THOSE SAME
+        assemblies (piece-level arithmetic)
+      - project total: sum of ALL active piece extensions (including the
+        known parts of partially-resolved assemblies - their unknown parts
+        stay blank behind callouts)
+
+    The first two MUST agree (any disagreement = EA/SF model inconsistency
+    = fail). The project total MUST equal the full piece view. Assemblies
+    with partially-blank pieces are excluded from the strict pair and their
+    known contributions are disclosed - partial knowledge survives without
+    faking a total.
+    """
     if not assembly_rows and not piece_rows:
         return 0.0
-    active = [r for r in piece_rows if r["state"] != "package_excluded"]
-    piece_total = round(sum(r["extension_sf"] or 0.0 for r in active), 4)
-    per_asm = {}
-    for r in active:
-        per_asm.setdefault(r["assembly_id"], 0.0)
-        per_asm[r["assembly_id"]] += (r["extension_sf"] or 0.0)
+    pieces_by_asm = {}
+    for r in piece_rows:
+        pieces_by_asm.setdefault(r["assembly_id"], []).append(r)
     asm_total = 0.0
-    consistent = True
+    piece_subset = 0.0
+    partial_asms = []
     for a in assembly_rows:
         if a["state"] == "package_excluded":
             continue
-        want = per_asm.get(a["assembly_id"])
-        if want is None:
-            continue
-        if a["ea"] is None:
-            consistent = False
-            continue
-        asm_total += want
+        own = [r for r in pieces_by_asm.get(a["assembly_id"], [])
+               if not r.get("orphan")]
+        exts = [r.get("extension_sf") for r in own]
+        if own and a.get("ea") is not None and a.get("sf_per_instance") \
+                is not None and all(e is not None for e in exts):
+            asm_total += a["ea"] * a["sf_per_instance"]
+            piece_subset += sum(exts)
+        else:
+            partial_asms.append(a["assembly_id"])
+    active = [r for r in piece_rows if r["state"] != "package_excluded"
+              and not r.get("orphan")]
+    piece_total = round(sum(r["extension_sf"] or 0.0 for r in active), 4)
+    pair_ok = abs(round(asm_total, 4) - round(piece_subset, 4)) <= 0.02
+    matches_project = True
+    if project_total is not None:
+        matches_project = abs(piece_total - round(project_total, 4)) <= 0.02
+    consistent = pair_ok and matches_project
     if any(r["extension_sf"] is None for r in piece_rows):
         audit.add_callout(
             "dual BoQ reconciliation",
             "some piece extensions are blank (unresolved properties) -"
-            " both view totals exclude them and the exclusion is disclosed",
+            " all view totals exclude them and the exclusion is disclosed",
             blank_fields=["extension_sf"])
+    detail = (f"piece view total {piece_total:.2f} SF; assembly view"
+              f" {round(asm_total, 2):.2f} SF over fully-resolved"
+              f" assemblies (their pieces sum to {round(piece_subset, 2):.2f}"
+              f" SF); project total"
+              + (f" {round(project_total, 2):.2f} SF" if project_total is not None
+                 else " n/a")
+              + (f"; partial assemblies excluded from the strict pair:"
+                 f" {partial_asms}" if partial_asms else "")
+              + " - the views are reconciled against each other and never"
+                " summed")
     audit.add("dual BoQ reconciliation", "pass" if consistent else "fail",
-              f"piece view total {piece_total:.2f} SF; assembly view total"
-              f" {asm_total:.2f} SF over {len(per_asm)} assembly instance(s)"
-              " - the two views describe the SAME records with the SAME"
-              " validated counts and are reported separately, never summed")
+              detail)
     return piece_total
 
 
@@ -750,152 +1209,6 @@ def audit_room_coverage(spec, audit):
         audit.add("room coverage", "pass",
                   f"all {len(asm_rooms) or len(inv.get('rooms') or [])}"
                   " inventoried room(s) reconcile to assemblies")
-
-
-def build_coverage_ledger(spec, results, audit, results_by_id=None):
-    """Reconcile EVERY inventoried item to exactly one ledger state:
-    measured | package_excluded | superseded | unresolved (P0.1).
-
-    Inventory: schedule types/variants (repeated mode), individual rooms
-    (individual mode), and the region/page level. Assemblies and pieces
-    extend this in the V3 schema; package exclusion comes from the profile
-    or job policy.
-    """
-    ledger = []
-    excluded_types = set((spec.get("policy") or {}).get(
-        "package_excluded_types") or [])
-    by_type = {}
-    for r in results:
-        if r["kind"] != "base":
-            continue
-        by_type.setdefault((r.get("type"), r.get("variant")), []).append(r)
-
-    def region_state(r):
-        if r.get("status") == "unresolved":
-            return "unresolved"
-        return "measured"
-
-    if spec.get("mode") == "individual_rooms":
-        for r in results:
-            if r["kind"] == "base":
-                ledger.append({
-                    "item": r["region_id"], "kind": "room",
-                    "source": {"source_id": r.get("source_id"),
-                               "pages": [r["page"]]},
-                    "state": region_state(r),
-                    "detail": (r.get("unresolved_reason", "")[:120]
-                               if r.get("status") == "unresolved"
-                               else f"{r['area_sf']:.2f} SF measured"),
-                })
-    else:
-        sched = spec.get("schedule") or {"types": []}
-        seen = set()
-        for t in sched.get("types", []):
-            name = t["type"]
-            if name in excluded_types:
-                ledger.append({"item": f"type {name}", "kind": "type",
-                               "state": "package_excluded",
-                               "source": {"pages": [sched.get("page")]},
-                               "detail": "count known but excluded by the"
-                                         " package rules; reported separately"})
-            else:
-                rows = by_type.get((name, None), [])
-                measured_rows = [r for r in rows if r.get("status") !=
-                                 "unresolved"]
-                evidence_ok = t.get("_evidence_ok") is not False
-                if not measured_rows:
-                    state = "unresolved"
-                elif not evidence_ok:
-                    state = "unresolved"
-                else:
-                    state = "measured"
-                ledger.append({"item": f"type {name} x{t['count']}",
-                               "kind": "type",
-                               "source": {"pages": [sched.get("page")]},
-                               "state": state,
-                               "detail": (f"{len(measured_rows)} region(s)"
-                                          " measured with schedule evidence"
-                                          if measured_rows and evidence_ok
-                                          else ("measured SF but unsupported"
-                                                " schedule count"
-                                                if measured_rows else
-                                                "schedule count present but"
-                                                " no region measured - SF"
-                                                " blank"))})
-            seen.add((name, None))
-        for v in sched.get("variants", []):
-            key = (v["type"], v["name"])
-            rows = by_type.get(key, [])
-            measured_rows = [r for r in rows
-                             if r.get("status") != "unresolved"]
-            ledger.append({
-                "item": f"variant {v['type']}:{v['name']} x{v['count']}",
-                "kind": "variant",
-                "source": {"pages": [sched.get("page")]},
-                "state": ("measured" if measured_rows else "unresolved"),
-                "detail": (f"{len(measured_rows)} region(s) measured"
-                           if measured_rows else
-                           "declared but no region measured - SF blank"),
-            })
-            seen.add(key)
-        for r in results:
-            if r["kind"] != "base":
-                continue
-            key = (r.get("type"), r.get("variant"))
-            ledger.append({
-                "item": r["region_id"], "kind": "region",
-                "source": {"source_id": r.get("source_id"),
-                           "pages": [r["page"]]},
-                "state": region_state(r),
-                "detail": (r.get("unresolved_reason", "")[:120]
-                           if r.get("status") == "unresolved"
-                           else f"{r['area_sf']:.2f} SF"),
-            })
-    # V3 assemblies + pieces reconcile into the same ledger
-    for a in spec.get("_assemblies") or []:
-        excluded = a["package"] in (spec.get("_excluded_packages") or set())
-        if excluded:
-            state, detail = "package_excluded", ("package " + a["package"]
-                                                 + " excluded; reported"
-                                                 " separately")
-        else:
-            count, basis = _assembly_count(spec, a)
-            state = "measured" if count else "unresolved"
-            detail = basis
-        ledger.append({"item": f"assembly {a['assembly_id']}",
-                       "kind": "assembly",
-                       "source": {"pages": sorted({s.get("page")
-                                                  for s in a.get("sources", [])
-                                                  if s.get("page")})},
-                       "state": state, "detail": detail})
-    for p in spec.get("_pieces") or []:
-        asm = next((x for x in ledger
-                    if x["item"] == f"assembly {p['assembly_id']}"), {})
-        state = asm.get("state", "unresolved")
-        if p.get("route") == "geometry":
-            r = results_by_id.get(p.get("region_id")) if results_by_id \
-                else None
-            if r is not None and r.get("status") == "unresolved":
-                state = "unresolved"
-        ledger.append({"item": f"piece {p['piece_id']}", "kind": "piece",
-                       "source": {"pages": sorted({l.get("page")
-                                                  for l in
-                                                  (p.get("source_links")
-                                                   or {}).values()
-                                                  if l.get("page")})},
-                       "state": state,
-                       "detail": ("route " + p["route"] + "; "
-                                  + str(p.get("finish_tag") or ""))})
-    bad = [e for e in ledger if e["state"] not in LEDGER_STATES]
-    if bad:
-        audit.add("coverage ledger", "fail",
-                  f"ledger entries with an invalid state: {bad}")
-    states = {}
-    for e in ledger:
-        states[e["state"]] = states.get(e["state"], 0) + 1
-    audit.add("coverage ledger", "pass",
-              f"every inventoried item reconciled: {states}")
-    return ledger
 
 
 def audit_region_checks(spec, results, calibrations, audit,
@@ -998,12 +1311,16 @@ def audit_region_checks(spec, results, calibrations, audit,
                       f" {base['area_sf']:.2f} SF (dev {dev:.2f}%)")
 
 
-def aggregate_types(spec, results, audit):
+def aggregate_types(spec, results, audit, resolved=None):
     """Build the per-type totals. Returns (types, project_total_sf).
 
-    V3 fixes the individual_rooms crash (reporting expected grouped rows
-    with a 'rows' key; V2's flat list raised KeyError 'rows') and excludes
-    unresolved regions from extensions (their SF is blank + callout).
+    V4 (P0.1): when the job declares assemblies, EVERY total comes from the
+    ONE resolved model (resolve_quantities) - project total, type rows,
+    BoQ totals and CSV totals cannot disagree. The legacy branches (V2
+    multiplication without assemblies, individual_rooms) are preserved for
+    specs that declare no assemblies; package scope is applied in every
+    branch and variant counts with unsupported evidence are withheld
+    (blank + callout), never shipped.
     """
     base = [r for r in results if r["kind"] == "base"
             and r.get("status") != "unresolved"]
@@ -1015,33 +1332,10 @@ def aggregate_types(spec, results, audit):
             "totals", f"{len(unresolved)} region(s) unresolved"
             f" ({[r['region_id'] for r in unresolved]}) - excluded from"
             " extensions; their quantities stay blank")
-    # V3: when the spec declares individually-enumerated assemblies, every
-    # measured instance counts ONCE (no schedule multiplication - the
-    # schedule counts cross-validate the room inventory instead). Package
-    # exclusions still remove their regions from the main total.
-    enumerated = bool(spec.get("_assemblies")) and all(
-        a["quantity_basis"]["mode"] == "enumerated"
-        for a in spec["_assemblies"])
-    if enumerated:
-        excluded = spec.get("_excluded_packages") or set()
-        asm_by_id = {a["assembly_id"]: a for a in spec["_assemblies"]}
-        excluded_regions = {
-            p.get("region_id") for p in spec.get("_pieces") or []
-            if (asm_by_id.get(p.get("assembly_id")) or {}).get("package")
-            in excluded}
-        total = round(sum(
-            r["area_sf"] or 0.0 for r in base
-            if r["region_id"] not in excluded_regions), 2)
-        exc_sf = round(sum(r["area_sf"] or 0.0 for r in base
-                           if r["region_id"] in excluded_regions), 2)
-        audit.add("totals", "pass",
-                  f"individually enumerated assemblies: {len(base)} measured"
-                  f" instance(s) sum to {total:.2f} SF"
-                  + (f" (+ {exc_sf:.2f} SF in excluded packages, reported"
-                     " separately)" if exc_sf else "")
-                  + " - schedule counts cross-validate the inventory and do"
-                    " NOT multiply here")
-        return [], total
+    if spec.get("_assemblies"):
+        return aggregate_types_resolved(spec, resolved or {"assemblies": {},
+                                                           "pieces": {}},
+                                        audit, base)
     if not base:
         audit.add("measured scope", "fail",
                   "no measurable regions completed - nothing to total"
@@ -1073,8 +1367,11 @@ def aggregate_types(spec, results, audit):
                   f" = {total:.2f} SF (count 1 each, by mode declaration)")
         return types, total
     sched = spec["schedule"]
+    pkg_excluded_types = set((spec.get("policy") or {}).get(
+        "package_excluded_types") or [])
     types = []
     total = 0.0
+    excluded_total = 0.0
     for t in sched["types"]:
         name = t["type"]
         std = [r for r in base if r["type"] == name and r["variant"] is None]
@@ -1105,7 +1402,16 @@ def aggregate_types(spec, results, audit):
             vr = [r for r in base if r["type"] == name
                   and r["variant"] == v["name"]]
             vsf = round(sum(r["area_sf"] for r in vr), 4)
-            ext += vsf * v["count"]
+            if v.get("_evidence_ok") is False:
+                # P0.2: invalid variant evidence -> its SF extension is
+                # withheld (blank), not silently added
+                audit.add_callout(
+                    f"totals variant {name}:{v['name']}",
+                    "variant evidence unsupported - its SF extension is"
+                    " withheld (blank), not added to the total",
+                    blank_fields=["extended_sf"], pages=[sched.get("page")])
+            else:
+                ext += vsf * v["count"]
             rows += [{"room_type": name, "variant": v["name"],
                       "region_id": r["region_id"],
                       "assembly": r.get("assembly"),
@@ -1113,6 +1419,12 @@ def aggregate_types(spec, results, audit):
                       "sf": r["area_sf"], "count": v["count"],
                       "extended_sf": round(r["area_sf"] * v["count"], 2),
                       "regions": [r]} for r in vr]
+        if name in pkg_excluded_types:
+            excluded_total += ext
+            ext = 0.0
+            audit.add("package exclusion", "pass",
+                      f"type {name} is package-excluded by policy - reported"
+                      " separately, excluded from the project total")
         types.append({"room_type": name, "schedule_count": t["count"],
                       "std_units": std_units, "sf_per_unit": sf_unit,
                       "extended_sf": round(ext, 2), "rows": rows})
@@ -1123,5 +1435,103 @@ def aggregate_types(spec, results, audit):
         if not v["included_in_parent_total"])
     audit.add("totals", "pass",
               f"repeated_types: {len(types)} type(s), {units} unit(s),"
-              f" project total {total:.2f} SF")
+              f" project total {total:.2f} SF"
+              + (f" (+ {round(excluded_total, 2):.2f} SF package-excluded,"
+                 " reported separately)" if excluded_total else ""))
+    return types, total
+
+
+def aggregate_types_resolved(spec, resolved, audit, base):
+    """Type rows derived from the ONE resolved model (P0.1). Every row
+    carries the assembly's resolved EA and its pieces' resolved SF; the
+    project total equals the sum of the ACTIVE type rows by construction."""
+    pieces_by_asm = {}
+    for prow in resolved.get("pieces", {}).values():
+        pieces_by_asm.setdefault(prow["assembly_id"], []).append(prow)
+    groups = {}
+    order = []
+    for arow in resolved.get("assemblies", {}).values():
+        name = arow["type"]
+        if name not in groups:
+            groups[name] = {"extended": 0.0, "excluded": 0.0,
+                            "rows": [], "ea": 0, "sf_pi": 0.0}
+            order.append(name)
+        own = pieces_by_asm.get(arow["assembly_id"], [])
+        # P0.1: the type/CSV total carries the KNOWN piece extensions of
+        # the assembly (partial knowledge survives); the ASSEMBLY-view
+        # extended_sf (EA x per-instance SF) stays blank when any piece is
+        # unresolved - the blank lives in the BoQ row, never in the total.
+        group_ext = round(sum(p.get("extension_sf") or 0.0
+                              for p in own if not p.get("orphan")), 4)
+        region_meta = next((p["region_meta"] for p in own
+                            if p.get("region_meta")), None)
+        first_pid = (own[0]["piece_id"] if own else arow["assembly_id"])
+        display = dict(region_meta) if region_meta else {
+            "region_id": None, "sheet": "?", "page": "",
+            "viewport": "stated", "source_id": None, "factor": None,
+            "policy": "stated dims"}
+        row = {
+            "room_type": name, "variant": arow.get("variant"),
+            "region_id": display.get("region_id") or first_pid,
+            "assembly": arow["assembly_id"], "assembly_id": arow["assembly_id"],
+            "material_canonical": None, "package": arow["package"],
+            "sf": arow.get("sf_per_instance"), "count": arow.get("ea"),
+            "extended_sf": (arow.get("extended_sf") if arow.get("extended_sf")
+                            is not None else group_ext or None),
+            "regions": [{
+                "region_id": display.get("region_id") or first_pid,
+                "type": name, "variant": arow.get("variant"),
+                "sheet": display.get("sheet") or "?",
+                "page": display.get("page"),
+                "viewport": display.get("viewport") or "main",
+                "source_id": display.get("source_id"),
+                "factor_pt_per_ft": display.get("factor"),
+                "gross_area_policy": display.get("policy") or "stated dims",
+            }],
+        }
+        ext = group_ext
+        if arow["state"] == "package_excluded":
+            groups[name]["excluded"] += ext
+            groups[name]["rows"].append(row)
+            continue
+        groups[name]["extended"] += ext
+        groups[name]["ea"] += arow.get("ea") or 0
+        groups[name]["sf_pi"] += arow.get("sf_per_instance") or 0.0
+        groups[name]["rows"].append(row)
+    types = []
+    total = 0.0
+    sched_types = {t["type"]: t for t in
+                   (spec.get("schedule") or {}).get("types", [])}
+    for name in sorted(groups):
+        g = groups[name]
+        sched_count = (sched_types.get(name, {}).get("count")
+                       if name in sched_types else g["ea"])
+        types.append({
+            "room_type": name,
+            "schedule_count": sched_count,
+            "std_units": g["ea"],
+            "sf_per_unit": round(g["sf_pi"], 4),
+            "extended_sf": round(g["extended"], 2),
+            "excluded_extended_sf": round(g["excluded"], 2),
+            "rows": g["rows"],
+        })
+        total += g["extended"]
+    total = round(total, 2)
+    excluded_total = round(sum(g["excluded"] for g in groups.values()), 2)
+    # P0.1 invariant: the type rows MUST sum to the resolved project total
+    # (both derive from the same piece records).
+    resolved_total = round(resolved.get("project_total_sf", 0.0), 2)
+    if abs(total - resolved_total) > 0.02:
+        audit.add("totals", "fail",
+                  f"type rows sum to {total:.2f} SF but the resolved project"
+                  f" total is {resolved_total:.2f} SF - internal model"
+                  " inconsistency")
+    unit_count = sum(t["std_units"] for t in types)
+    audit.add("totals", "pass",
+              f"resolved model: {len(types)} type(s), {unit_count} unit(s),"
+              f" project total {total:.2f} SF"
+              + (f" (+ {excluded_total:.2f} SF package-excluded, reported"
+                 " separately)" if excluded_total else "")
+              + " - derived from the same resolved records as both BoQ"
+                " views")
     return types, total

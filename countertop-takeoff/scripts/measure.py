@@ -306,13 +306,15 @@ def run_pipeline(args):
     audit_mod.audit_room_coverage(spec, audit_obj)
     audit_mod.audit_region_checks(spec, results, calibrations, audit_obj,
                                   args.recheck_tolerance)
-    types, total = audit_mod.aggregate_types(spec, results, audit_obj)
-    return finish(spec, geometry_map, calibrations, types, total, audit_obj,
-                  results, unit_total, args, profile)
+    return finish(spec, geometry_map, calibrations, audit_obj, results,
+                  unit_total, args, profile)
 
 
-def finish(spec, geometry_map, calibrations, types, total, audit_obj, results,
-           unit_total, args, profile):
+def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
+           args, profile):
+    """Deliverable assembly (V4): ONE resolved quantity model feeds the
+    type rows, project total, both BoQ views, the CSVs and the ledger -
+    they cannot disagree (P0.1)."""
     review_status = REVIEW_PENDING
     settings = {"snap_pt": args.snap,
                 "recheck_tolerance_pct": args.recheck_tolerance}
@@ -321,13 +323,21 @@ def finish(spec, geometry_map, calibrations, types, total, audit_obj, results,
         profile_summary = {k: profile.get(k) for k in (
             "profile_version", "company", "gross_net_policy",
             "required_components", "approved_assumptions")}
+    results_by_id = {r["region_id"]: r for r in results}
+    resolved = audit_mod.resolve_quantities(spec, results, audit_obj,
+                                            results_by_id=results_by_id)
+    types, total = audit_mod.aggregate_types(spec, results, audit_obj,
+                                             resolved=resolved)
+    if spec.get("_assemblies"):
+        unit_total = sum(a.get("ea") or 0 for a in resolved["assemblies"].values()
+                         if a["state"] != "package_excluded")
     ledger = audit_mod.build_coverage_ledger(
-        spec, results, audit_obj,
-        results_by_id={r["region_id"]: r for r in results})
-    assembly_rows = audit_mod.build_assembly_boq(spec, audit_obj)
-    piece_rows = audit_mod.build_piece_boq(
-        spec, {r["region_id"]: r for r in results}, assembly_rows, audit_obj)
-    audit_mod.audit_dual_boq(assembly_rows, piece_rows, audit_obj)
+        spec, results, audit_obj, results_by_id=results_by_id,
+        resolved=resolved)
+    assembly_rows = audit_mod.build_assembly_boq(spec, audit_obj, resolved)
+    piece_rows = audit_mod.build_piece_boq(spec, audit_obj, resolved)
+    audit_mod.audit_dual_boq(assembly_rows, piece_rows, audit_obj,
+                             project_total=total)
     # Run status is one of: complete | complete_with_callouts | stopped.
     # Callouts/warnings degrade locally; remaining FAIL items are stops.
     run_status = ("stopped" if audit_obj.failed else
@@ -349,6 +359,14 @@ def finish(spec, geometry_map, calibrations, types, total, audit_obj, results,
     payload["status"] = run_status
     payload["assembly_boq"] = assembly_rows
     payload["piece_boq"] = piece_rows
+    payload["totals"]["excluded_package_sf"] = round(
+        resolved.get("excluded_total_sf", 0.0), 2)
+    payload["totals"]["piece_view_sf"] = round(
+        sum(r.get("extension_sf") or 0.0 for r in piece_rows
+            if r["state"] != "package_excluded" and not r.get("orphan")), 2)
+    payload["totals"]["assembly_view_sf"] = round(
+        sum(a.get("extended_sf") or 0.0 for a in assembly_rows
+            if a["state"] != "package_excluded"), 2)
     if profile_summary:
         payload["profile"] = profile_summary
     if args.json_path:
@@ -362,7 +380,10 @@ def finish(spec, geometry_map, calibrations, types, total, audit_obj, results,
             " stops or exclude the unresolved scope explicitly")
     # Final exports publish only after every internal check has finished.
     if args.csv_path:
-        total_csv = report_out.write_csv(args.csv_path, spec, types, results)
+        total_csv = report_out.write_csv(
+            args.csv_path, spec, types, results,
+            resolved=piece_rows if spec.get("_assemblies") else None,
+            project_total=total)
         print(f"wrote {args.csv_path} (extended total {total_csv:.2f} SF)")
     if args.piece_csv and piece_rows:
         report_out.write_piece_csv(args.piece_csv, piece_rows)

@@ -121,12 +121,21 @@ def calibration_table_lines(calibrations):
     return lines
 
 
+def _fmt_factor(v):
+    return "" if v is None else (f"{v:.4f}" if isinstance(v, (int, float))
+                                 else str(v))
+
+
 def takeoff_lines(spec, types, total):
     lines = ["", "## Takeoff by region", ""]
     mode = spec.get("mode")
     for t in types:
         title = f"### {t['room_type']}"
-        if mode == "repeated_types":
+        if spec.get("_assemblies"):
+            title += (f" - resolved EA {t['std_units']}"
+                      + (f" (schedule count {t['schedule_count']})"
+                         if t.get("schedule_count") is not None else ""))
+        elif mode == "repeated_types" and "schedule_count" in t:
             title += (f" - schedule count {t['schedule_count']}"
                       f" ({t['std_units']} standard unit(s) + variants)")
         lines += [title, "",
@@ -136,17 +145,23 @@ def takeoff_lines(spec, types, total):
                   "|-----------:|-------------:|"]
         for row in t["rows"]:
             r = row["regions"][0]
-            ident = row.get("assembly") or "-"
+            ident = row.get("assembly") or row.get("region_id") or "-"
             if row.get("material_canonical"):
                 ident += f" / {row['material_canonical']}"
             lines.append(
-                f"| {row['region_id']} | {row['variant'] or '-'} "
+                f"| {row.get('region_id') or '-'} | {row.get('variant') or '-'} "
                 f"| {ident} "
-                f"| {r['sheet']} ({r['page']}, {r['viewport']}) "
-                f"| {row['sf']:.2f} | {row['count']} "
-                f"| {row['extended_sf']:.2f} "
-                f"| {r['factor_pt_per_ft']:.4f} |")
-        if mode == "repeated_types":
+                f"| {r.get('sheet') or '?'} ({r.get('page') or '-'},"
+                f" {r.get('viewport') or '-'}) "
+                f"| {_fmt(row.get('sf'))} | {_fmt(row.get('count'))} "
+                f"| {_fmt(row.get('extended_sf'))} "
+                f"| {_fmt_factor(r.get('factor_pt_per_ft')) or '-'} |")
+        if t.get("excluded_extended_sf"):
+            lines.append("")
+            lines.append("Package-excluded scope in this type: "
+                         f"**{t['excluded_extended_sf']:.2f} SF** (reported"
+                         " separately, excluded from totals)")
+        if mode == "repeated_types" or spec.get("_assemblies"):
             lines.append("")
             lines.append(f"Type total: **{t['extended_sf']:.2f} SF**")
         lines.append("")
@@ -220,13 +235,14 @@ def assembly_boq_lines(assembly_rows, excluded_packages):
     if not assembly_rows:
         return []
     lines = ["", "## ASSEMBLY BoQ", "",
-             "One row per assembly; EA comes from the validated quantity"
-             " basis. **This view is never summed with the PIECE BoQ below**"
-             " - they describe the same records.", "",
+             "One row per assembly; EA is the RESOLVED quantity (P0.1: one"
+             " model; included variants subtracted from parent counts)."
+             " **This view is never summed with the PIECE BoQ below** -"
+             " both derive from the same resolved records.", "",
              "| assembly | room/type/variant | package | finish | W x D x H"
-             " (in) | hand | EA | basis | state |",
+             " (in) | hand | EA | SF/instance | ext SF | basis | state |",
              "|----------|-------------------|---------|--------|-----------"
-             "----|------|---:|-------|-------|"]
+             "----|------|---:|---:|-------:|-------|-------|"]
     for r in assembly_rows:
         dims = " x ".join(_fmt(r.get(k)) for k in
                            ("width_in", "depth_in", "height_in"))
@@ -235,6 +251,8 @@ def assembly_boq_lines(assembly_rows, excluded_packages):
             f"/{r.get('variant') or '-'} | {r['package']}"
             f" | {r.get('finish_tag') or '-'} | {dims}"
             f" | {r.get('handing') or '-'} | {_fmt(r.get('ea'))}"
+            f" | {_fmt(r.get('sf_per_instance'))}"
+            f" | {_fmt(r.get('extended_sf'))}"
             f" | {r['basis'][:40]} | {r['state']} |")
     if excluded_packages:
         lines += ["", f"Excluded packages ({', '.join(sorted(excluded_packages))})"
@@ -247,30 +265,53 @@ def piece_boq_lines(piece_rows):
     if not piece_rows:
         return []
     lines = ["", "## PIECE BoQ", "",
-             "Per piece: inch dims, SF, edge LF by profile, splash LF/SF,"
-             " cutout EA, extensions at the SAME validated counts. **Never"
-             " summed with the ASSEMBLY BoQ.**", "",
+             "Per piece: inch dims, SF, edge LF by profile, splash LF/SF"
+             " (returns + handing preserved), cutout EA - extensions x the"
+             " SAME resolved EA (LF and cutouts extend with assembly"
+             " quantities). **Never summed with the ASSEMBLY BoQ.**", "",
              "| piece | assembly | dims (in) | SF | edge LF by profile |"
-             " splash LF/SF | cutouts EA | EA | ext SF | finish |",
+             " edge LF xEA | splash LF/SF | splash xEA | cutouts EA | cutouts"
+             " xEA | EA | ext SF | finish |",
              "|-------|----------|-----------|---:|--------------------|"
-             "--------------|------------|---:|-------:|--------|"]
+             "-------------|--------------|------------|------------|------"
+             "-------|---:|-------:|--------|"]
     finishes = {}
     for r in piece_rows:
         d = r.get("dims_in") or {}
         dims = " x ".join(_fmt(d.get(k)) for k in
                            ("width", "depth", "height")) if d else \
             "(geometry route)"
-        edges = ", ".join(f"{k}={v:.2f}" for k, v in
-                          (r.get("edge_lf_by_profile") or {}).items()) or "-"
+        edges = ", ".join(
+            (f"{k}={v:.2f}" if v is not None else f"{k}=BLANK")
+            for k, v in (r.get("edge_lf_by_profile") or {}).items()) or "-"
+        edge_ext = ", ".join(
+            f"{k}={v:.2f}" for k, v in (r.get("edge_lf_ext") or {}).items()
+        ) or ("-" if r.get("edge_lf_ext") is None or
+              not r.get("edge_lf_ext") else "-")
         splash = (f"{_fmt(r.get('splash_lf'))}/{_fmt(r.get('splash_sf'))}"
-                  if (r.get("splash_lf") or r.get("splash_sf")) else "-")
+                  if (r.get("splash_lf") is not None
+                      or r.get("splash_sf") is not None) else "-")
+        splash_x = (f"{_fmt(r.get('splash_lf_ext'))}/"
+                    f"{_fmt(r.get('splash_sf_ext'))}"
+                    if (r.get("splash_lf_ext") is not None
+                        or r.get("splash_sf_ext") is not None) else "-")
         cuts = ", ".join(f"{k}={v}" for k, v in
                          (r.get("cutouts_ea") or {}).items()) or "-"
+        cuts_x = ", ".join(f"{k}={v}" for k, v in
+                           (r.get("cutouts_ea_ext") or {}).items()) or "-"
         lines.append(
             f"| {r['piece_id']} | {r['assembly_id']} | {dims}"
-            f" | {_fmt(r.get('sf'))} | {edges} | {splash} | {cuts}"
-            f" | {_fmt(r.get('count'))} | {_fmt(r.get('extension_sf'))}"
+            f" | {_fmt(r.get('sf'))} | {edges} | {edge_ext} | {splash}"
+            f" | {splash_x} | {cuts} | {cuts_x}"
+            f" | {_fmt(r.get('ea'))} | {_fmt(r.get('extension_sf'))}"
             f" | {r.get('finish_tag') or '-'} |")
+        for sd in r.get("splash_detail") or []:
+            if sd.get("handing") or sd.get("returns_in") is not None:
+                lines.append(
+                    f"  - splash run: handing {sd.get('handing') or '-'},"
+                    f" returns {sd.get('returns_in') or '-'} in,"
+                    f" length {_fmt(sd.get('length_in'))} in,"
+                    f" height {_fmt(sd.get('height_in'))} in")
         tag = r.get("finish_tag")
         if tag:
             finishes.setdefault(tag, 0)
@@ -300,7 +341,7 @@ def ledger_lines(ledger):
 def build_report(spec, calibrations, types, total, audit, review_status,
                  run_status="complete", ledger=None, assembly_rows=None,
                  piece_rows=None):
-    lines = ["# Countertop Takeoff Report (V3)", ""]
+    lines = ["# Countertop Takeoff Report (V4)", ""]
     lines.append(f"- source(s): {sources_line(spec)}")
     lines.append(f"- generated: {runtime_versions()['generated_utc']}")
     lines.append(f"- mode: `{spec.get('mode')}`; gross-area policy:"
@@ -334,8 +375,9 @@ def sources_line(spec):
 
 
 def _csv_rows(spec, types, results):
-    """Base rows carry the extension; recheck rows are separate with no
-    extension; then one totals row per type and a grand total row."""
+    """Legacy (no-assemblies) CSV: base rows carry the extension; recheck
+    rows are separate with no extension; then one totals row per type and
+    a grand total row."""
     rows = []
     src = (spec.get("source") or {}).get("pdf")         or spec["_sources"][0]["path"]
     recheck_ids = {r["region_id"] for r in results if r["kind"] == "recheck"}
@@ -343,37 +385,41 @@ def _csv_rows(spec, types, results):
     for t in types:
         for row in t["rows"]:
             r = row["regions"][0]
-            base_by_id[r["region_id"]] = (row, r)
+            base_by_id[row.get("region_id")] = (row, r)
     for rid, (row, r) in base_by_id.items():
         notes = (f"factor from page {r['page']} viewport {r['viewport']}"
-                 f" ({r['gross_area_policy']})")
+                 f" ({r.get('gross_area_policy')})")
         factor = r.get("factor_pt_per_ft")
         if factor is None:
             factor = r.get("factor_px_per_ft")
-            notes = f"image route at {factor} px/ft ({r['gross_area_policy']})"
+            notes = f"image route at {factor} px/ft ({r.get('gross_area_policy')})"
         rows.append([
-            "base", row["room_type"], row["variant"] or "", rid, r["sheet"],
-            r["page"], r["viewport"], f"{row['sf']:.2f}", row["count"],
-            f"{row['extended_sf']:.2f}", f"{factor:.4f}",
-            f"{src} p.{r['page']} ({r['sheet']})", notes])
+            "base", row["room_type"], row.get("variant") or "", rid or "",
+            r.get("sheet") or "?", r.get("page") or "",
+            r.get("viewport") or "", f"{row['sf']:.2f}", row["count"],
+            f"{row['extended_sf']:.2f}", _fmt_factor(factor),
+            f"{src} p.{r.get('page')} ({r.get('sheet') or '?'})", notes])
     for r in results:
         if r["kind"] != "recheck":
             continue
         base = base_by_id.get(r.get("of"))
         if r.get("status") == "unresolved":
             rows.append([
-                "recheck_of_base", r["type"], r["variant"] or "",
-                r["region_id"], r["sheet"], r["page"], r["viewport"],
+                "recheck_of_base", r["type"], r.get("variant") or "",
+                r["region_id"], r.get("sheet") or "?", r["page"],
+                r.get("viewport") or "main",
                 "", 0, "", "",
-                f"{src} p.{r['page']} ({r['sheet']})",
+                f"{src} p.{r['page']} ({r.get('sheet') or '?'})",
                 f"QA recheck of {r.get('of')}; UNRESOLVED -"
                 f" {r.get('unresolved_reason', '')[:80]}"])
             continue
         rows.append([
-            "recheck_of_base", r["type"], r["variant"] or "", r["region_id"],
-            r["sheet"], r["page"], r["viewport"], f"{r['area_sf']:.2f}", 0,
-            "", f"{r.get('factor_pt_per_ft') or r.get('factor_px_per_ft') or 0:.4f}",
-            f"{src} p.{r['page']} ({r['sheet']})",
+            "recheck_of_base", r["type"], r.get("variant") or "", r["region_id"],
+            r.get("sheet") or "?", r["page"], r.get("viewport") or "main",
+            f"{r['area_sf']:.2f}", 0,
+            "", _fmt_factor(r.get("factor_pt_per_ft")
+                            or r.get("factor_px_per_ft")) or "0",
+            f"{src} p.{r['page']} ({r.get('sheet') or '?'})",
             f"QA recheck of {r.get('of')}; never extended"])
     for t in types:
         rows.append(["type_total", t["room_type"], "", "", "", "", "",
@@ -384,8 +430,53 @@ def _csv_rows(spec, types, results):
     return rows, total
 
 
-def write_csv(path, spec, types, results):
-    rows, total = _csv_rows(spec, types, results)
+def _resolved_csv_rows(spec, types, piece_rows, project_total):
+    """V4 CSV (jobs with assemblies): rows DERIVED from the ONE resolved
+    model - one base row per piece (blank extensions stay blank), the
+    resolved type totals, a documented excluded-package total row, and a
+    grand total row that EQUALS the project total and both BoQ views."""
+    src = (spec.get("source") or {}).get("pdf") or spec["_sources"][0]["path"]
+    rows = []
+    for r in piece_rows:
+        meta = r.get("region_meta") or {}
+        blanks = r.get("blank_fields") or []
+        notes = (f"state {r['state']}"
+                 + (f"; blank: {', '.join(blanks)}" if blanks else "")
+                 + ("; ORPHAN piece (assembly not declared)"
+                    if r.get("orphan") else ""))
+        rows.append([
+            "base", r.get("type") or "", r.get("assembly_id") or "",
+            r.get("region_id") or r["piece_id"],
+            meta.get("sheet") or "?", meta.get("page") or "",
+            meta.get("viewport") or "stated",
+            _fmt(r.get("sf")), _fmt(r.get("ea")), _fmt(r.get("extension_sf")),
+            _fmt_factor(meta.get("factor")),
+            (f"{src} p.{meta.get('page')}" if meta.get("page")
+             else f"{src} (stated dims)"),
+            notes])
+    for t in types:
+        rows.append(["type_total", t["room_type"], "", "", "", "", "",
+                     "", "", f"{t['extended_sf']:.2f}", "", "", ""])
+    excluded = round(sum(t.get("excluded_extended_sf") or 0.0
+                         for t in types), 2)
+    if excluded:
+        rows.append(["excluded_package_total", "", "", "", "", "", "",
+                     "", "", f"{excluded:.2f}", "", "",
+                     "package-excluded scope; reported separately, NEVER"
+                     " added into the grand total"])
+    rows.append(["grand_total", "", "", "", "", "", "", "", "",
+                 f"{round(project_total, 2):.2f}", "", "",
+                 "equals the project total and BOTH BoQ view totals (one"
+                 " resolved model)"])
+    return rows, round(project_total, 2)
+
+
+def write_csv(path, spec, types, results, resolved=None, project_total=None):
+    if resolved is not None:
+        rows, total = _resolved_csv_rows(spec, types, resolved,
+                                         project_total or 0.0)
+    else:
+        rows, total = _csv_rows(spec, types, results)
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
@@ -398,9 +489,11 @@ def write_csv(path, spec, types, results):
 
 PIECE_CSV_COLUMNS = ["piece_id", "assembly_id", "room", "type", "package",
                      "finish_tag", "route", "width_in", "depth_in",
-                     "height_in", "sf", "edge_lf_by_profile", "splash_lf",
-                     "splash_sf", "cutouts_ea", "count", "extension_sf",
-                     "state", "source_pages"]
+                     "height_in", "sf", "edge_lf_by_profile",
+                     "edge_lf_by_profile_xEA", "splash_lf", "splash_sf",
+                     "splash_lf_xEA", "splash_sf_xEA", "splash_runs",
+                     "cutouts_ea", "cutouts_ea_xEA", "ea", "extension_sf",
+                     "state", "blank_fields", "source_pages"]
 
 ASSEMBLY_CSV_COLUMNS = ["assembly_id", "room", "type", "variant", "package",
                         "finish_tag", "width_in", "depth_in", "height_in",
@@ -430,10 +523,17 @@ def write_piece_csv(path, piece_rows):
                 _num(d_.get("width")), _num(d_.get("depth")),
                 _num(d_.get("height")), _num(r.get("sf")),
                 json.dumps(r.get("edge_lf_by_profile") or {}, sort_keys=True),
+                json.dumps(r.get("edge_lf_ext") or {}, sort_keys=True)
+                if r.get("edge_lf_ext") is not None else "",
                 _num(r.get("splash_lf")), _num(r.get("splash_sf")),
+                _num(r.get("splash_lf_ext")), _num(r.get("splash_sf_ext")),
+                json.dumps(r.get("splash_detail") or [], sort_keys=True),
                 json.dumps(r.get("cutouts_ea") or {}, sort_keys=True),
-                _num(r.get("count")), _num(r.get("extension_sf")),
-                r["state"], ";".join(str(p) for p in pages)])
+                json.dumps(r.get("cutouts_ea_ext") or {}, sort_keys=True)
+                if r.get("cutouts_ea_ext") is not None else "",
+                _num(r.get("ea")), _num(r.get("extension_sf")),
+                r["state"], ";".join(r.get("blank_fields") or []),
+                ";".join(str(p) for p in pages)])
     return len(piece_rows)
 
 
