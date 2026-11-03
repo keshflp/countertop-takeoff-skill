@@ -1,2 +1,2 @@
-pymupdf>=1.24
-shapely>=2.0
+pymupdf==2.1
+shapely==2.2.0

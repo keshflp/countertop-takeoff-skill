@@ -78,9 +78,21 @@ def page_record(doc, pno):
     path_map = []
     for j, d in enumerate(page.get_drawings()):
         path_map.extend([j] * path_seg_count(d))
+    # op provenance per segment (aligned with segments_of_page order) so
+    # regions drawn with curves can be flagged in the evidence
+    op_map = []
+    for d in page.get_drawings():
+        for item in d["items"]:
+            op = item[0]
+            if op == "l":
+                op_map.append("l")
+            elif op == "c":
+                op_map.extend(["c"] * pl.CURVE_SUBDIVISIONS)
+            elif op in ("re", "qu"):
+                op_map.extend([op] * 4)
     segments = [
-        {"id": i, "path": p, "x0": s[0], "y0": s[1], "x1": s[2], "y1": s[3],
-         "w": s[4]}
+        {"id": i, "path": p, "op": op_map[i] if i < len(op_map) else "?",
+         "x0": s[0], "y0": s[1], "x1": s[2], "y1": s[3], "w": s[4]}
         for i, (s, p) in enumerate(zip(raw_segs, path_map))
     ]
     words = [{"id": i, **w} for i, w in enumerate(pl.words_of_page(page))]

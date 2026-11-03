@@ -147,6 +147,9 @@ def measure_region(region, page, factor, policy, snap_tol=SNAP_DEFAULT):
     shell = shell_from_segments(segs, region["boundary"]["seg_ids"],
                                 label, snap_tol)
     _require_strict_interior(shell, region["seed"], label)
+    by_id = {s["id"]: s for s in segs}
+    curved = any(by_id[i].get("op") == "c"
+                 for i in region["boundary"]["seg_ids"])
     cutouts = _cutout_polygons(region, segs, label, snap_tol)
     gross_sf = shell.area / factor ** 2
     applied = "gross"
@@ -188,6 +191,7 @@ def measure_region(region, page, factor, policy, snap_tol=SNAP_DEFAULT):
         "area_sf": round(area_sf, 4),
         "factor_pt_per_ft": round(factor, 6),
         "gross_area_policy": applied,
+        "curved_boundary": curved,
         "expected_sf_range": rng,
     }
     result["expected_range_ok"] = rng[0] <= area_sf <= rng[1]
