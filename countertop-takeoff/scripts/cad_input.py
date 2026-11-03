@@ -80,9 +80,9 @@ def resolve_units(doc, declared):
         return name, INSUNITS_PER_FT[insunits], True, None
     if declared:
         if declared not in DECLARED_PER_FT:
-            print(f"ERROR: --units must be one of {sorted(DECLARED_PER_FT)}",
-              file=sys.stderr)
-        sys.exit(2)
+            print(f"ERROR: --units must be one of"
+                  f" {sorted(DECLARED_PER_FT)}", file=sys.stderr)
+            sys.exit(2)
         return (declared, DECLARED_PER_FT[declared], False,
                 "drawing is UNITLESS ($INSUNITS missing/0); units declared on"
                 " the command line and recorded as OPERATOR-VERIFIED - the"

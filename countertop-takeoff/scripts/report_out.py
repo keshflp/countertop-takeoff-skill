@@ -337,7 +337,7 @@ def _csv_rows(spec, types, results):
     """Base rows carry the extension; recheck rows are separate with no
     extension; then one totals row per type and a grand total row."""
     rows = []
-    src = spec["source"]["pdf"]
+    src = (spec.get("source") or {}).get("pdf")         or spec["_sources"][0]["path"]
     recheck_ids = {r["region_id"] for r in results if r["kind"] == "recheck"}
     base_by_id = {}
     for t in types:

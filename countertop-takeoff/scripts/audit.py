@@ -531,7 +531,16 @@ def audit_room_reconciliation(spec, audit):
     NEVER default a missing count to 1."""
     sched = spec.get("schedule")
     inv = (sched or {}).get("room_inventory")
-    if not sched or not inv:
+    if not sched:
+        return
+    if not inv:
+        audit.add_callout(
+            "room reconciliation",
+            "no plan-derived room inventory recorded - schedule counts are"
+            " used WITHOUT cross-validation against the plan tags; record"
+            " room_inventory.per_type_counts to arm the 3->30 invention"
+            " guard",
+            blank_fields=[], pages=[sched.get("page")])
         return
     ptc = inv.get("per_type_counts") or {}
     resolutions = inv.get("count_resolutions") or {}
