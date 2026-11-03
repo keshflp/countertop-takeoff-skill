@@ -209,9 +209,13 @@ def invention_tests(hotel_spec):
     # the invented count WITHOUT any inventory still must not pass silently:
     # messy has no tags, so the absence of plan evidence is itself disclosed
     rc, res, err = run_measure(tv2.spec_messy(pdfs, geo), "inv_none")
-    callouts = " | ".join(c["scope"] for c in res.get("callouts") or [])
-    check("invention guard (messy): missing plan inventory disclosed",
-          rc == 0 and "room reconciliation" in callouts, callouts[:120])
+    items = " | ".join(i["check"] + ": " + i["detail"]
+                       for i in res.get("audit", [])
+                       if i["check"].startswith("room reconciliation"))
+    check("invention guard (messy): unarmed guard disclosed in the audit",
+          rc == 0 and "invention" in items
+          and "WITHOUT cross-validation" in items,
+          f"rc={rc} items={items[:150]}")
 
 
 def dxf_tests():

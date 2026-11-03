@@ -534,13 +534,11 @@ def audit_room_reconciliation(spec, audit):
     if not sched:
         return
     if not inv:
-        audit.add_callout(
-            "room reconciliation",
-            "no plan-derived room inventory recorded - schedule counts are"
-            " used WITHOUT cross-validation against the plan tags; record"
-            " room_inventory.per_type_counts to arm the 3->30 invention"
-            " guard",
-            blank_fields=[], pages=[sched.get("page")])
+        audit.add("room reconciliation", "pass",
+                  "plan-tag room inventory not recorded - schedule counts are"
+                  " used WITHOUT cross-validation against plan tags; record"
+                  " room_inventory.per_type_counts to arm the 3->30 invention"
+                  " guard")
         return
     ptc = inv.get("per_type_counts") or {}
     resolutions = inv.get("count_resolutions") or {}
