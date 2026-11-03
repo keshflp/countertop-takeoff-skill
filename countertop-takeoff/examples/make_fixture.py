@@ -109,15 +109,21 @@ def plan_page(doc, sheet, title, unit, kitchen, kitchen_label_at, vanity,
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--case", choices=["original", "messy"],
+    ap.add_argument("--case", choices=["original", "messy", "hotel"],
                     default="original",
                     help="original = clean V1 fixture; messy = V2 hostile"
-                         " fixture")
+                         " fixture; hotel = V3 hotel fixture (rotated pages,"
+                         " bitmap schedule, 3 scales on one sheet, wrong"
+                         " duplicate title block, GR package exclusion)")
     ap.add_argument("--out", default="examples/fixture.pdf")
     args = ap.parse_args()
     if args.case == "messy":
         import messy_fixture
         messy_fixture.build(args.out)
+        return
+    if args.case == "hotel":
+        import hotel_fixture
+        hotel_fixture.build(args.out)
         return
 
     doc = pymupdf.open()

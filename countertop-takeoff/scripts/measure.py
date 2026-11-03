@@ -152,6 +152,38 @@ def measure_all_regions(spec, pages_by_no, calibrations, snap, audit_obj,
     return results
 
 
+def audit_intake_manifest(spec, audit_obj, base_dir):
+    """Step 0 intake (P0.7): when an intake manifest is declared (or found
+    beside the job spec), verify it against the declared sources: unavailable
+    inputs and expected-count mismatches become disclosed callouts."""
+    path = spec.get("intake_manifest")
+    if not path:
+        candidate = os.path.join(base_dir, "intake_manifest.json")
+        if os.path.exists(candidate):
+            path = candidate
+    if not path:
+        return
+    path = resolve_path(path, base_dir)
+    if not os.path.exists(path):
+        audit_obj.add_callout("intake", f"intake manifest not found: {path}",
+                              blank_fields=[], pages=[])
+        return
+    manifest = load_json(path)
+    for e in manifest.get("sources") or []:
+        if e.get("status") != "resolved":
+            audit_obj.add_callout(
+                "intake", f"source {e.get('requested')!r} was never resolved"
+                " (unavailable at intake) - the job proceeds without it",
+                blank_fields=["all quantities from this source"], pages=[])
+    verdict = manifest.get("verdict") or ""
+    if "mismatch" in verdict:
+        audit_obj.add_callout("intake", verdict, blank_fields=[], pages=[])
+    audit_obj.add("intake manifest", "pass",
+                  f"manifest {os.path.basename(path)}:"
+                  f" {len(manifest.get('sources') or [])} source(s)"
+                  " requested, disclosed above when not resolved")
+
+
 def run_pipeline(args):
     base_dir = os.path.dirname(os.path.abspath(args.jobs))
     spec = load_json(args.jobs)
@@ -201,6 +233,7 @@ def run_pipeline(args):
           f" {len(parsed['scope'])} scope page(s)")
 
     audit_obj = audit_mod.Audit()
+    audit_intake_manifest(spec, audit_obj, base_dir)
     audit_mod.audit_scope(spec, geometry_map, audit_obj)
     calibrations, cal_errors = cal_mod.build_calibrations(
         spec.get("calibrations", []), pages_by_no, default_source,
