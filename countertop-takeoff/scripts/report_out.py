@@ -173,21 +173,58 @@ def audit_lines(audit, review_status):
     return lines
 
 
-def status_line(audit):
+def status_line(run_status, audit):
     failed, warned = audit.failed, audit.warned
-    if failed:
-        return (f"**Overall: FAILED** ({len(failed)} required check(s) failed,"
-                f" {len(warned)} warning(s)) - numbers must not be quoted or"
-                " exported")
+    if run_status == "stopped":
+        return (f"**Run status: STOPPED** ({len(failed)} required check(s)"
+                f" failed, {len(warned)} warning(s)) - numbers must not be"
+                " quoted or exported")
     if warned:
-        return (f"**Overall: WARNING** ({len(warned)} warning(s)) - required"
-                " checks passed; deliverables need review of the warnings")
-    return "**Overall: READY** (0 fail, 0 warn)"
+        return (f"**Run status: COMPLETE WITH CALLOUTS**"
+                f" ({len(warned)} callout(s)) - quantities for the named"
+                " scope stay blank; everything else is deliverable")
+    return "**Run status: COMPLETE** (0 fail, 0 callout)"
 
 
-def build_report(spec, calibrations, types, total, audit, review_status):
-    lines = ["# Countertop Takeoff Report (V2)", ""]
-    lines.append(f"- source: {source_line(spec)}")
+def callout_lines(audit):
+    if not audit.callouts:
+        return []
+    lines = ["", "## CALLOUTS (degraded-but-disclosed; blank fields, never"
+             " zeros)", ""]
+    for i, c in enumerate(audit.callouts, 1):
+        src = c.get("source") or {}
+        where = []
+        if src.get("source_id"):
+            where.append(f"source {src['source_id']}")
+        if src.get("pages"):
+            where.append(f"pages {src['pages']}")
+        lines.append(f"{i}. **{c['scope']}**"
+                     + (f" [{'; '.join(where)}]" if where else ""))
+        lines.append(f"   - reason: {c['reason']}")
+        if c.get("blank_fields"):
+            lines.append(f"   - excluded/blank fields: {c['blank_fields']}")
+    return lines
+
+
+def ledger_lines(ledger):
+    lines = ["", "## Coverage ledger", "",
+             "Every inventoried item reconciles to exactly one state:",
+             "`measured | package_excluded | superseded | unresolved`.", "",
+             "| item | kind | state | source | detail |",
+             "|------|------|-------|--------|--------|"]
+    for e in ledger:
+        src = e.get("source") or {}
+        where = ",".join(filter(None, [str(src.get("source_id") or ""),
+                                       str(src.get("pages") or "")]))
+        lines.append(f"| {e['item']} | {e['kind']} | **{e['state']}** |"
+                     f" {where} | {e.get('detail', '')[:80]} |")
+    return lines
+
+
+def build_report(spec, calibrations, types, total, audit, review_status,
+                 run_status="complete", ledger=None):
+    lines = ["# Countertop Takeoff Report (V3)", ""]
+    lines.append(f"- source(s): {sources_line(spec)}")
     lines.append(f"- generated: {runtime_versions()['generated_utc']}")
     lines.append(f"- mode: `{spec.get('mode')}`; gross-area policy:"
                  f" `{spec['policy']['gross_area']}`")
@@ -200,9 +237,20 @@ def build_report(spec, calibrations, types, total, audit, review_status):
     lines += schedule_table_lines(spec)
     lines += calibration_table_lines(calibrations)
     lines += takeoff_lines(spec, types, total)
+    lines += callout_lines(audit)
+    if ledger is not None:
+        lines += ledger_lines(ledger)
     lines += audit_lines(audit, review_status)
-    lines += ["", status_line(audit), ""]
+    lines += ["", status_line(run_status, audit), ""]
     return "\n".join(lines) + "\n"
+
+
+def sources_line(spec):
+    parts = []
+    for s in spec.get("_sources") or []:
+        parts.append(f"`{s['source_id']}: {s['path']}`"
+                     f" (sha256 {s['sha256'][:16]}...)")
+    return "; ".join(parts) or source_line(spec)
 
 
 def _csv_rows(spec, types, results):
@@ -228,6 +276,15 @@ def _csv_rows(spec, types, results):
         if r["kind"] != "recheck":
             continue
         base = base_by_id.get(r.get("of"))
+        if r.get("status") == "unresolved":
+            rows.append([
+                "recheck_of_base", r["type"], r["variant"] or "",
+                r["region_id"], r["sheet"], r["page"], r["viewport"],
+                "", 0, "", "",
+                f"{src} p.{r['page']} ({r['sheet']})",
+                f"QA recheck of {r.get('of')}; UNRESOLVED -"
+                f" {r.get('unresolved_reason', '')[:80]}"])
+            continue
         rows.append([
             "recheck_of_base", r["type"], r["variant"] or "", r["region_id"],
             r["sheet"], r["page"], r["viewport"], f"{r['area_sf']:.2f}", 0,
@@ -265,13 +322,38 @@ def quarantine_stale_export(path, when_utc):
     return None
 
 
-def build_results(spec, geometry, calibrations, types, total, audit, results,
-                  review_status, settings, unit_total):
-    """Evidence package: polygons, segment ids, factors, hashes, versions."""
+def calibration_key(source_id, page, viewport, multi):
+    """Results-JSON calibration key. Single-source runs keep the V2 shape
+    'page:viewport'; multi-source runs qualify with the source id."""
+    return (f"{source_id}:{page}:{viewport}" if multi
+            else f"{page}:{viewport}")
+
+
+def find_calibration(results, region):
+    """Look up the calibration a region actually used (source-qualified
+    first, V2 key as fallback)."""
+    cals = results.get("calibrations") or {}
+    sid = region.get("source_id")
+    if sid:
+        hit = cals.get(f"{sid}:{region['page']}:{region['viewport']}")
+        if hit:
+            return hit
+    return cals.get(f"{region['page']}:{region['viewport']}")
+
+
+def build_results(spec, geometry_map, calibrations, types, total, audit,
+                  results, review_status, settings, unit_total,
+                  coverage_ledger=None):
+    """Evidence package: polygons, segment ids, factors, hashes, versions,
+    callouts + the coverage ledger."""
     versions = runtime_versions()
+    multi = len(spec["_sources"]) > 1
     return {
-        "schema": "countertop-takeoff/v2 results",
-        "source": dict(spec["source"]),
+        "schema": "countertop-takeoff/v3 results",
+        "sources": spec["_sources"],
+        "source": dict(spec.get("source") or {
+            "pdf": spec["_sources"][0]["path"],
+            "sha256": spec["_sources"][0]["sha256"]}),
         "geometry": spec["geometry"],
         "mode": spec.get("mode"),
         "policy": spec["policy"],
@@ -279,19 +361,23 @@ def build_results(spec, geometry, calibrations, types, total, audit, results,
         "settings": settings,
         "scope": spec["scope"],
         "schedule": spec.get("schedule"),
-        "calibrations": {f"{p}:{v}": calibrations[(p, v)]
-                         for p, v in calibrations},
+        "calibrations": {
+            calibration_key(k[0], k[1], k[2], multi): cal
+            for k, cal in calibrations.items()},
         "regions": results,
         "types": types,
         "totals": {"project_sf": total, "unit_count": unit_total},
         "audit": audit.items,
-        "status": ("failed" if audit.failed
-                   else ("warning" if audit.warned else "ready")),
+        "callouts": audit.callouts,
+        "coverage_ledger": coverage_ledger or [],
+        "run_status": None,  # set by measure.finish
+        "status": None,      # set by measure.finish (complete/.../stopped)
         "review_status": review_status,
         "declarations": spec["policy"].get("declarations", []),
         "geometry_page_classes": {
-            str(p["page"]): p["preflight"]["class"]
-            for p in geometry["pages"]},
+            f"{sid}:{p['page']}": p["preflight"]["class"]
+            for sid, geo in (geometry_map or {}).items()
+            for p in geo["pages"]},
     }
 
 

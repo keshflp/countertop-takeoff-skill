@@ -105,15 +105,24 @@ def clamped(bbox, w, h):
 
 
 def build_index_md(results, pack_dir, files_by_region):
-    lines = [f"# Audit pack - {results['source']['pdf']}", "",
-             f"- source sha256: `{results['source']['sha256']}`",
-             f"- run status: **{results['status']}**; review status:"
-             f" {results['review_status']}",
-             f"- mode: {results['mode']}; gross-area policy:"
-             f" {results['policy']['gross_area']}",
-             f"- totals: {results['totals']['project_sf']:.2f} SF over"
-             f" {results['totals']['unit_count']} unit(s)", "",
-             "## What the independent reviewer must check", "",
+    src = results.get("source") or {}
+    status = results.get("run_status") or results.get("status")
+    lines = [f"# Audit pack - {src.get('pdf', '')}", "",
+             f"- source sha256: `{src.get('sha256', '')}`",
+             f"- run status: **{status}**; review status:"
+             f" {results.get('review_status')}",
+             f"- mode: {results.get('mode')}; gross-area policy:"
+             f" {results.get('policy', {}).get('gross_area')}",
+             f"- totals: {results.get('totals', {}).get('project_sf', 0):.2f}"
+             f" SF over {results.get('totals', {}).get('unit_count')}"
+             " unit(s)", ""]
+    callouts = results.get("callouts") or []
+    if callouts:
+        lines += ["## Callouts the reviewer must confirm", ""]
+        for c in callouts:
+            lines.append(f"- {c['scope']}: {c['reason']}")
+        lines.append("")
+    lines += ["## What the independent reviewer must check", "",
              "1. RAW SHEETS: do the highlighted shells sit on countertop",
              "   linework? anything cut off or swallowed by a neighbor?",
              "2. SCHEDULE EVIDENCE: re-read the schedule page; do the counts,",
@@ -125,6 +134,12 @@ def build_index_md(results, pack_dir, files_by_region):
              "## Regions"]
     for rid, files in files_by_region.items():
         r = next(x for x in results["regions"] if x["region_id"] == rid)
+        if r.get("status") == "unresolved":
+            lines.append(f"- `{rid}` ({r['type']}, UNRESOLVED) quantities BLANK"
+                         f" on page {r['page']}:"
+                         f" {r.get('unresolved_reason', '')[:90]}")
+            lines += [f"  - {os.path.relpath(f, pack_dir)}" for f in files]
+            continue
         lines.append(f"- `{rid}` ({r['type']}"
                      + (f"/{r['variant']}" if r["variant"] else "")
                      + f", {r['kind']}) {r['area_sf']:.2f} SF on page"

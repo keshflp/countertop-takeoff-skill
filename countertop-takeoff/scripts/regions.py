@@ -135,14 +135,26 @@ def _cutout_polygons(region, segments, label, snap_tol):
     return out
 
 
-def measure_region(region, page, factor, policy, snap_tol=SNAP_DEFAULT):
+def measure_region(region, page, factor, policy, snap_tol=SNAP_DEFAULT,
+                   viewport_box=None):
     """Measure one region dict against one geometry page.
 
     factor: pt per real foot for this region's (page, viewport) - the ACTUAL
     factor used, recorded in the result. policy: gross-area policy string.
+    viewport_box: the viewport's displayed bounding box, when declared; the
+    region seed must sit inside it (a region outside its viewport is a
+    selection error, not a measurement).
     """
     rid = region["region_id"]
     label = f"region {rid} on page {region['page']}"
+    if viewport_box is not None:
+        sx, sy = region["seed"]
+        if not (viewport_box[0] <= sx <= viewport_box[2]
+                and viewport_box[1] <= sy <= viewport_box[3]):
+            raise RegionError(
+                f"{label}: seed ({sx}, {sy}) lies OUTSIDE the viewport_box"
+                f" {viewport_box} - a region belongs to the viewport it"
+                " draws in")
     segs = page["segments"]
     shell = shell_from_segments(segs, region["boundary"]["seg_ids"],
                                 label, snap_tol)
@@ -175,6 +187,7 @@ def measure_region(region, page, factor, policy, snap_tol=SNAP_DEFAULT):
         "region_id": rid, "kind": region.get("kind", "base"),
         "of": region.get("of"), "type": region["type"],
         "variant": region.get("variant"), "page": region["page"],
+        "source_id": region.get("source_id"),
         "viewport": region.get("viewport") or "main",
         "sheet": region.get("sheet") or page.get("sheet") or "?",
         "assembly": region.get("assembly"),
@@ -198,15 +211,25 @@ def measure_region(region, page, factor, policy, snap_tol=SNAP_DEFAULT):
     return result
 
 
+def _same_page(a, b):
+    """Duplicate/overlap scope key: (source_id, page). V2 compared page
+    numbers alone, so the same page number on two different sources
+    (PDF page 2 vs DXF modelspace page 2) collided."""
+    return (a.get("source_id"), a["page"]) == (b.get("source_id"), b["page"])
+
+
 def check_duplicate_boundaries(results):
-    """Two base regions selected via identical segment sets = one region
-    measured twice (a scope error, not a spot-check)."""
+    """Two base regions selected via identical segment sets on the SAME
+    (source, page) = one region measured twice (a scope error, not a
+    spot-check). Cross-source identical ids are unrelated."""
     errors = []
-    base = [r for r in results if r["kind"] == "base"]
+    base = [r for r in results if r["kind"] == "base"
+            and r.get("status") != "unresolved"]
     for i in range(len(base)):
         for j in range(i + 1, len(base)):
             a, b = base[i], base[j]
-            if set(a["boundary_seg_ids"]) == set(b["boundary_seg_ids"]):
+            if _same_page(a, b) and \
+                    set(a["boundary_seg_ids"]) == set(b["boundary_seg_ids"]):
                 errors.append(
                     f"regions {a['region_id']!r} and {b['region_id']!r} use"
                     " the identical boundary segment set - one counter cannot"
@@ -215,18 +238,19 @@ def check_duplicate_boundaries(results):
 
 
 def check_overlaps(results):
-    """Counted instances must not overlap on the same page.
+    """Counted instances must not overlap on the same (source, page).
 
     Same (type, variant) overlap = hard fail (the v1 duplicate-Type-B bug
     that passed at 208.75 SF); cross-type overlap = warning (possible
     mirrored plans or a mislabeled bbox) reported for human review.
     """
     errors, warnings = [], []
-    base = [r for r in results if r["kind"] == "base"]
+    base = [r for r in results if r["kind"] == "base"
+            and r.get("status") != "unresolved"]
     for i in range(len(base)):
         for j in range(i + 1, len(base)):
             a, b = base[i], base[j]
-            if a["page"] != b["page"]:
+            if not _same_page(a, b):
                 continue
             pa = Polygon(a["polygon"])
             pb = Polygon(b["polygon"])

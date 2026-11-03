@@ -51,28 +51,87 @@ def resolve_path(path, base_dir):
     return candidate if os.path.exists(candidate) else path
 
 
-def measure_all_regions(spec, pages_by_no, calibrations, snap):
+def load_geometry_map(spec, base_dir):
+    """Load one geometry payload per source. spec['geometry'] is a path
+    (single source) or a {source_id: path} object (V3 multi-source)."""
+    geo_spec = spec["geometry"]
+    if isinstance(geo_spec, str):
+        path = resolve_path(geo_spec, base_dir)
+        return {spec_schema.default_source_id(spec): load_json(path)}
+    out = {}
+    for sid, path in geo_spec.items():
+        out[sid] = load_json(resolve_path(path, base_dir))
+    return out
+
+
+def unresolved_result(region, sid, reason):
+    """A region whose SF could not be measured: quantities stay BLANK
+    (never zero), the record keeps every identity field, and the reason
+    drives the callout."""
+    return {
+        "region_id": region["region_id"],
+        "kind": region.get("kind", "base"),
+        "of": region.get("of"),
+        "type": region.get("type"),
+        "variant": region.get("variant"),
+        "page": region["page"],
+        "source_id": sid,
+        "viewport": region.get("viewport") or "main",
+        "sheet": region.get("sheet") or "?",
+        "assembly": region.get("assembly"),
+        "piece": region.get("piece"),
+        "status": "unresolved",
+        "unresolved_reason": reason,
+        "blank_fields": ["area_sf", "edge_lf", "splash_lf"],
+        "area_sf": None,
+        "factor_pt_per_ft": None,
+        "expected_sf_range": region.get("expected_sf_range"),
+    }
+
+
+def measure_all_regions(spec, pages_by_no, calibrations, snap, audit_obj):
+    """Measure every region; recoverable failures become UNRESOLVED
+    records + callouts at the affected region only (P0.1). The agent's
+    alternate routes are the spec's business; code refuses to let one bad
+    boundary sink a whole job."""
     results = []
+    default_source = spec_schema.default_source_id(spec)
     for region in spec["regions"]:
+        sid = region.get("source_id") or default_source
         pno = region["page"]
-        if pno not in pages_by_no:
-            raise TakeoffError(
-                f"region {region['region_id']}: page {pno} is not in the"
-                " geometry - re-run extract_geometry.py for it")
-        key = (pno, region.get("viewport") or "main")
+        rid = region["region_id"]
+        if (sid, pno) not in pages_by_no:
+            reason = (f"source {sid!r} page {pno} is not in the geometry -"
+                      " re-run extract_geometry.py for it")
+            results.append(unresolved_result(region, sid, reason))
+            print(f"UNRESOLVED {rid}: {reason}")
+            continue
+        key = (sid, pno, region.get("viewport") or "main")
         cal = calibrations.get(key)
         if cal is None:
-            raise TakeoffError(
-                f"region {region['region_id']}: no calibration entry for page"
-                f" {pno} viewport {key[1]!r} - calibrations are per (page,"
-                " viewport), never per page alone")
-        results.append(regions_mod.measure_region(
-            region, pages_by_no[pno], cal["factor_pt_per_ft"],
-            spec["policy"]["gross_area"], snap))
-        r = results[-1]
-        print(f"measured {r['region_id']}: {r['area_sf']:.2f} SF"
-              f" (factor {r['factor_pt_per_ft']:.4f} pt/ft,"
-              f" policy {r['gross_area_policy']})")
+            reason = (f"no usable calibration for source {sid!r} page {pno}"
+                      f" viewport {key[2]!r} - its quantities are excluded"
+                      " (blank) while the rest of the job completes")
+            results.append(unresolved_result(region, sid, reason))
+            print(f"UNRESOLVED {rid}: {reason}")
+            continue
+        try:
+            r = regions_mod.measure_region(
+                region, pages_by_no[(sid, pno)], cal["factor_pt_per_ft"],
+                spec["policy"]["gross_area"], snap,
+                viewport_box=cal.get("viewport_box"))
+        except regions_mod.RegionError as exc:
+            r = unresolved_result(region, sid, str(exc))
+            print(f"UNRESOLVED {rid}: {exc}")
+        results.append(r)
+        if r.get("status") == "unresolved":
+            audit_obj.add_callout(
+                f"region {rid}", r["unresolved_reason"],
+                blank_fields=r["blank_fields"], pages=[pno], source_id=sid)
+        else:
+            print(f"measured {r['region_id']}: {r['area_sf']:.2f} SF"
+                  f" (factor {r['factor_pt_per_ft']:.4f} pt/ft,"
+                  f" policy {r['gross_area_policy']})")
     return results
 
 
@@ -81,10 +140,19 @@ def run_pipeline(args):
     spec = load_json(args.jobs)
     if isinstance(spec.get("geometry"), str):
         spec["geometry"] = resolve_path(spec["geometry"], base_dir)
+    elif isinstance(spec.get("geometry"), dict):
+        spec["geometry"] = {k: resolve_path(v, base_dir)
+                            for k, v in spec["geometry"].items()}
     if isinstance(spec.get("source"), dict) and isinstance(
             spec["source"].get("pdf"), str):
         spec["source"]["pdf"] = resolve_path(spec["source"]["pdf"], base_dir)
+    for s in spec.get("sources", []) or []:
+        if isinstance(s.get("path"), str):
+            s["path"] = resolve_path(s["path"], base_dir)
     parsed = spec_schema.validate_spec(spec)
+    for s in spec["_sources"]:
+        if s["kind"] == "pdf":
+            s["path"] = resolve_path(s["path"], base_dir)
     profile = spec_schema.validate_profile(spec, base_dir)
     if not spec["policy"].get("gross_area"):
         if profile and profile.get("gross_net_policy"):
@@ -94,33 +162,52 @@ def run_pipeline(args):
         else:
             raise TakeoffError(
                 "no gross-area policy: set policy.gross_area in the job spec"
-                " or gross_net_policy in the company profile - v2 never"
-                " guesses")
+                " or gross_net_policy in the company profile - never guessed")
     spec_schema.resolve_materials(spec, profile)
-    geometry = load_json(spec["geometry"])
+    geometry_map = load_geometry_map(spec, base_dir)
+    default_source = spec_schema.default_source_id(spec)
+    pages_by_no = {}
+    for sid, geo in geometry_map.items():
+        for p in geo["pages"]:
+            pages_by_no[(sid, p["page"])] = p
     print(f"jobs spec  : {args.jobs}")
-    print(f"source     : {spec['source']['pdf']}")
+    print(f"sources    : " + ", ".join(
+        f"{s['source_id']}={os.path.basename(s['path'])}"
+        for s in spec["_sources"]))
     print(f"mode/policy: {spec['mode']} / {spec['policy']['gross_area']}")
     print(f"regions    : {len(spec['regions'])} across"
           f" {len(parsed['scope'])} scope page(s)")
 
     audit_obj = audit_mod.Audit()
-    pages_by_no = audit_mod.audit_scope(spec, geometry, audit_obj)
-    calibrations = cal_mod.build_calibrations(
-        spec.get("calibrations", []), pages_by_no)
-    for key in sorted(calibrations, key=lambda k: (k[0], k[1])):
+    audit_mod.audit_scope(spec, geometry_map, audit_obj)
+    calibrations, cal_errors = cal_mod.build_calibrations(
+        spec.get("calibrations", []), pages_by_no, default_source,
+        on_error=lambda key, msg: audit_obj.add_callout(
+            f"calibration {key[0]!r} p{key[1]} {key[2]!r}", msg,
+            blank_fields=["area_sf", "edge_lf", "splash_lf"],
+            pages=[key[1]], source_id=key[0]))
+    if not calibrations:
+        # Catastrophic stop 1: no valid calibration anywhere in the set
+        # (a verified-units native-CAD source qualifies on its own).
+        if not any(s["kind"] == "cad" for s in spec["_sources"]):
+            raise TakeoffError(
+                "STOP: no valid calibration exists anywhere in the set and no"
+                " verified-units CAD source is present - without one agreeing"
+                " scale no length or area in this job is measurable")
+    for key in sorted(calibrations, key=lambda k: (str(k[0]), k[1], k[2])):
         cal = calibrations[key]
-        print(f"calibration page {key[0]} viewport {key[1]!r}:"
-              f" {cal['factor_pt_per_ft']:.4f} pt/ft"
+        print(f"calibration source {key[0]!r} page {key[1]} viewport"
+              f" {key[2]!r}: {cal['factor_pt_per_ft']:.4f} pt/ft"
               f" ({len(cal['spans'])} spans, spread"
               f" {cal['spread_pct']:.2f}%, {cal['status']})")
         if cal["status"] != "pass":
             audit_obj.add(
                 "calibration spread", "warn",
-                f"page {key[0]} viewport {key[1]!r}: spread"
+                f"source {key[0]!r} page {key[1]} viewport {key[2]!r}: spread"
                 f" {cal['spread_pct']:.2f}% in the documented 2-5% band -"
                 " explain it to the reviewer")
-    results = measure_all_regions(spec, pages_by_no, calibrations, args.snap)
+    results = measure_all_regions(spec, pages_by_no, calibrations, args.snap,
+                                  audit_obj)
     audit_mod.audit_planned_vs_completed(spec, results, pages_by_no,
                                          audit_obj)
     sched = audit_mod.audit_schedule(spec, results, audit_obj)
@@ -128,11 +215,11 @@ def run_pipeline(args):
     audit_mod.audit_region_checks(spec, results, calibrations, audit_obj,
                                   args.recheck_tolerance)
     types, total = audit_mod.aggregate_types(spec, results, audit_obj)
-    return finish(spec, geometry, calibrations, types, total, audit_obj,
+    return finish(spec, geometry_map, calibrations, types, total, audit_obj,
                   results, unit_total, args, profile)
 
 
-def finish(spec, geometry, calibrations, types, total, audit_obj, results,
+def finish(spec, geometry_map, calibrations, types, total, audit_obj, results,
            unit_total, args, profile):
     review_status = REVIEW_PENDING
     settings = {"snap_pt": args.snap,
@@ -142,26 +229,38 @@ def finish(spec, geometry, calibrations, types, total, audit_obj, results,
         profile_summary = {k: profile.get(k) for k in (
             "profile_version", "company", "gross_net_policy",
             "required_components", "approved_assumptions")}
+    ledger = audit_mod.build_coverage_ledger(spec, results, audit_obj)
+    # Run status is one of: complete | complete_with_callouts | stopped.
+    # Callouts/warnings degrade locally; remaining FAIL items are stops.
+    run_status = ("stopped" if audit_obj.failed else
+                  ("complete_with_callouts"
+                   if (audit_obj.callouts or audit_obj.warned)
+                   else "complete"))
     report = report_out.build_report(spec, calibrations, types, total,
-                                     audit_obj, review_status)
+                                     audit_obj, review_status, run_status,
+                                     ledger)
     print()
     print(report)
     if args.report:
         report_out.write_report(args.report, report)
         print(f"wrote {args.report}")
+    payload = report_out.build_results(
+        spec, geometry_map, calibrations, types, total, audit_obj, results,
+        review_status, settings, unit_total, coverage_ledger=ledger)
+    payload["run_status"] = run_status
+    payload["status"] = run_status
+    if profile_summary:
+        payload["profile"] = profile_summary
     if args.json_path:
-        payload = report_out.build_results(
-            spec, geometry, calibrations, types, total, audit_obj, results,
-            review_status, settings, unit_total)
-        if profile_summary:
-            payload["profile"] = profile_summary
         report_out.write_json(args.json_path, payload)
         print(f"wrote {args.json_path}")
-    if audit_obj.failed:
+    if run_status == "stopped":
+        # Diagnostics are published (report + results JSON); exports are NOT.
         raise TakeoffError(
-            f"audit FAILED ({len(audit_obj.failed)} item(s)); diagnostics are"
-            " in the report/results JSON - fix the job spec and re-run; the"
-            " export was NOT written")
+            f"run STOPPED ({len(audit_obj.failed)} required check(s));"
+            " diagnostics are in the report/results JSON - resolve the named"
+            " stops or exclude the unresolved scope explicitly")
+    # Final exports publish only after every internal check has finished.
     if args.csv_path:
         total_csv = report_out.write_csv(args.csv_path, spec, types, results)
         print(f"wrote {args.csv_path} (extended total {total_csv:.2f} SF)")
@@ -185,16 +284,29 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+
+    def quarantine_exports():
+        # ANY stop must not leave an older export looking current.
+        when = report_out.runtime_versions()["generated_utc"]
+        for path in (args.csv_path, getattr(args, "piece_csv", None),
+                     getattr(args, "assembly_csv", None)):
+            if path and os.path.exists(path):
+                stale = report_out.quarantine_stale_export(path, when)
+                if stale:
+                    print(f"quarantined stale export: {stale}", file=sys.stderr)
+
     try:
         return run_pipeline(args)
     except TakeoffError:
-        # ANY refusal must not leave an older export looking current
-        if args.csv_path:
-            when = report_out.runtime_versions()["generated_utc"]
-            stale = report_out.quarantine_stale_export(args.csv_path, when)
-            if stale:
-                print(f"quarantined stale export: {stale}", file=sys.stderr)
+        quarantine_exports()
         raise
+    except Exception as exc:  # noqa: BLE001 - quarantine survives ANY crash
+        quarantine_exports()
+        import traceback
+        traceback.print_exc()
+        raise TakeoffError(
+            f"unexpected pipeline failure (exports quarantined): {exc!r}") \
+            from exc
 
 
 if __name__ == "__main__":

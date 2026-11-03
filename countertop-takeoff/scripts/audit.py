@@ -1,67 +1,96 @@
-"""Completeness + reconciliation audit (V2).
+"""Completeness + reconciliation audit (V3).
 
-V1's audit unconditionally added a passing "coverage" item, so a job spec
-with every Type B job deleted still passed at 114.75 SF, and empty region
-lists passed at 0 SF. V2's audit:
+V2 established: geometry belongs to the hashed approved source; every page
+dispositioned; only vector content measured by the vector route; planned vs
+completed compared exactly; schedule counts evidence-backed; rechecks/ranges
+checked.
 
-  - verifies the geometry belongs to the hashed, approved source
-  - requires EVERY source page to be dispositioned (measured with expected
-    regions / intentionally_skipped with reason / blocked)
-  - refuses to measure pages whose content class is not vector
-  - resolves duplicate/revision-conflicted sheets: at most one page per
-    sheet id may be measured, and every conflict page needs a disposition
-  - compares planned region ids vs completed results exactly (missing OR
-    unplanned = fail)
-  - reconciles the schedule: every type needs a measured region, variant
-    allocation must not double-count, stated totals must match
-  - checks recheck deviations, expected ranges, calibration coverage
-
-Audit items carry pass/warn/fail; any fail makes the run NOT ready.
+V3 changes (graduated degradation + tolerant identity):
+  - pages are keyed (source_id, page_number); multi-source jobs supported
+  - sheet identity conflicts / index gaps are CALLOUTS, never silent scope
+    drops (sheet_identity.audit_identity)
+  - most per-region failures become UNRESOLVED quantities + callouts instead
+    of whole-job refusals; only the three catastrophic stops (no valid
+    calibration anywhere, no schedule and no repeatable pattern, source
+    integrity mismatch) stop the job (measure.py owns the stop decisions)
+  - the coverage ledger reconciles every inventoried item to
+    measured | package_excluded | superseded | unresolved
 """
 
 import os
 import statistics
 
 import preflight_lib as pl
+import sheet_identity
 from regions import check_duplicate_boundaries, check_overlaps
 from spec_schema import SpecError, TakeoffError
 
 RECHECK_TOLERANCE_PCT = 2.0
 
 
-def validate_source_and_geometry(spec, geometry):
-    """The frozen source: the PDF on disk and the geometry must both carry
-    the approved digest."""
-    want = spec["source"]["sha256"]
-    pdf = spec["source"]["pdf"]
-    if not os.path.exists(pdf):
-        raise SpecError(f"source PDF not found: {pdf}")
-    actual = pl.file_sha256(pdf)
-    if actual != want:
-        raise SpecError(
-            f"source PDF hash mismatch: approved {want[:16]}..., on disk"
-            f" {actual[:16]}... - the approved scope is frozen to a digest;"
-            " re-approve the pack if the file changed")
-    gsrc = (geometry.get("source") or {}).get("sha256")
-    if gsrc != want:
-        raise SpecError(
-            "geometry file was extracted from a different source (geometry"
-            f" {str(gsrc)[:16]}... != approved {want[:16]}...) - re-run"
-            " extract_geometry.py on the approved PDF")
-    page_count = (geometry.get("source") or {}).get("page_count")
-    if not isinstance(page_count, int) or page_count < 1:
-        raise SpecError("geometry does not record the source page count")
-    return page_count
+def validate_source_and_geometry(spec, geometry_map):
+    """The frozen sources: each source file on disk and its geometry
+    payload must both carry the declared digest (integrity mismatch = one
+    of the three catastrophic stops)."""
+    for src in spec["_sources"]:
+        want = src["sha256"]
+        path = src["path"]
+        if src["kind"] == "pdf" and not os.path.exists(path):
+            raise SpecError(f"source file not found: {path}")
+        if src["kind"] == "pdf":
+            actual = pl.file_sha256(path)
+            if actual != want:
+                raise SpecError(
+                    f"source file hash mismatch ({src['source_id']}):"
+                    f" approved {want[:16]}..., on disk {actual[:16]}... - the"
+                    " scope is frozen to digests; re-run intake/preflight if"
+                    " the file changed")
+        geo = geometry_map.get(src["source_id"])
+        if geo is None:
+            raise SpecError(
+                f"no geometry payload for source {src['source_id']!r} -"
+                " extract/import it before measuring")
+        gsrc = (geo.get("source") or {}).get("sha256")
+        if gsrc != want:
+            raise SpecError(
+                f"geometry for source {src['source_id']!r} was extracted from"
+                f" a different file (geometry {str(gsrc)[:16]}... != approved"
+                f" {want[:16]}...) - re-run the extractor on the approved"
+                " source")
+        page_count = (geo.get("source") or {}).get("page_count")
+        if not isinstance(page_count, int) or page_count < 1:
+            raise SpecError(
+                f"geometry for {src['source_id']!r} does not record the"
+                " source page count")
+    return {s["source_id"] for s in spec["_sources"]}
 
 
 class Audit:
-    """Collects pass/warn/fail items."""
+    """Collects pass/warn/fail items + callouts.
+
+    A CALLOUT is a degraded-but-disclosed finding: the affected scope,
+    source pages, the reason, and which quantity fields stay blank. Any
+    callout makes the run `complete_with_callouts` (never silent). A FAIL
+    makes it `stopped`.
+    """
 
     def __init__(self):
         self.items = []
+        self.callouts = []
 
     def add(self, check, status, detail):
         self.items.append({"check": check, "status": status, "detail": detail})
+
+    def add_callout(self, scope, detail, blank_fields=None, pages=None,
+                    source_id=None):
+        """Record a graduated-degradation callout (audit severity: warn)."""
+        entry = {"scope": scope, "reason": detail,
+                 "blank_fields": blank_fields or [],
+                 "source": ({"source_id": source_id, "pages": pages}
+                            if (source_id or pages) else None)}
+        self.callouts.append(entry)
+        self.items.append({"check": f"callout: {scope}", "status": "warn",
+                           "detail": detail})
 
     @property
     def failed(self):
@@ -72,91 +101,108 @@ class Audit:
         return [i for i in self.items if i["status"] == "warn"]
 
 
-def audit_scope(spec, geometry, audit):
-    """Scope ledger + preflight resolution + planned-vs-completed."""
-    page_count = validate_source_and_geometry(spec, geometry)
-    pages_by_no = {p["page"]: p for p in geometry["pages"]}
-    disp = {e["page"]: e for e in spec["scope"]["pages"]}
-    missing = [p for p in range(1, page_count + 1) if p not in disp]
+def audit_scope(spec, geometry_map, audit):
+    """Scope ledger + preflight resolution + tolerant sheet identity.
+    Returns pages_by_no keyed (source_id, page)."""
+    validate_source_and_geometry(spec, geometry_map)
+    pages_by_no = {}
+    for sid, geo in geometry_map.items():
+        for p in geo["pages"]:
+            pages_by_no[(sid, p["page"])] = p
+    disp = {(e.get("source_id") or spec["_sources"][0]["source_id"],
+             e["page"]): e for e in spec["scope"]["pages"]}
+    declared_pages = {(s["source_id"], p["page"]) for s in spec["_sources"]
+                      for p in geometry_map.get(s["source_id"],
+                                                {"pages": []})["pages"]}
+    missing = sorted(k for k in declared_pages if k not in disp)
     if missing:
-        audit.add("scope complete", "fail",
-                  f"pages {missing} have no disposition - every source page"
-                  " must be measured, intentionally_skipped (with reason), or"
-                  " blocked")
+        audit.add_callout(
+            "coverage", f"pages {missing} have NO scope disposition - every"
+            " inventoried item on them is recorded unresolved (blank"
+            " quantities + this callout), never silently dropped",
+            blank_fields=["all quantities"], pages=[k[1] for k in missing])
     for e in spec["scope"]["pages"]:
+        key = (e.get("source_id"), e["page"])
         pno = e["page"]
-        gp = pages_by_no.get(pno)
+        gp = pages_by_no.get(key)
         cls = gp["preflight"]["class"] if gp else "not_extracted"
-        if e["disposition"] == "blocked":
-            audit.add("blocked page", "fail",
-                      f"page {pno} is blocked: {e.get('reason', '')} - blocked"
-                      " pages prevent completion")
-        elif e["disposition"] == "measured":
+        if e["disposition"] == "measured":
             if gp is None:
                 audit.add("measured page", "fail",
-                          f"page {pno} is measured but its geometry was never"
-                          " extracted")
-            elif cls not in pl.VECTOR_CLASSES:
-                audit.add("measurable page", "fail",
-                          f"page {pno} is class {cls!r}, not vector-measurable"
-                          f" ({'; '.join(gp['preflight']['class_reasons'])})"
-                          " - text presence never establishes vector"
-                          " suitability")
+                          f"page {pno} of source {key[0]!r} is measured but"
+                          " its geometry was never extracted")
             else:
-                audit.add("measured page", "pass",
-                          f"page {pno} ({gp.get('sheet') or '?'}, class {cls},"
-                          f" rot {gp['identity']['rotation']}) expects"
-                          f" {len(e['expected_regions'])} region(s)")
+                # V3: page class is advisory; per-region measurability is
+                # decided by content regions + route in measure.py
+                regions = gp.get("content_regions") or []
+                vec = [r for r in regions if r.get("kind") == "vector"]
+                audit.add(
+                    "measured page", "pass",
+                    f"page {pno} ({gp.get('sheet') or '?'}, class {cls},"
+                    f" rot {gp['identity']['rotation']}) expects"
+                    f" {len(e['expected_regions'])} region(s);"
+                    f" {len(vec)} vector content region(s),"
+                    f" {len(regions) - len(vec)} raster region(s)")
+        elif e["disposition"] == "superseded":
+            audit.add("superseded page", "pass",
+                      f"page {pno} superseded: {e.get('reason', '')[:110]}")
         else:
             audit.add("skipped page", "pass",
-                      f"page {pno} intentionally_skipped: {e.get('reason', '')[:110]}")
-    # duplicate/revision conflicts: at most one measured page per sheet id
-    sheets = {}
-    for gp in geometry["pages"]:
-        if gp.get("sheet"):
-            sheets.setdefault(gp["sheet"], []).append(gp)
-    for sheet, group in sorted(sheets.items()):
-        fps = {gp["preflight"]["fingerprint"] for gp in group}
-        measured = [gp["page"] for gp in group
-                    if disp.get(gp["page"], {}).get("disposition") == "measured"]
-        if len(fps) > 1:
-            if len(measured) > 1:
-                audit.add("revision resolved", "fail",
-                          f"sheet {sheet} appears on pages {sorted(measured)}"
-                          " with DIFFERENT content and more than one is"
-                          " measured - pick the authoritative revision")
-            else:
-                audit.add("revision resolved", "pass",
-                          f"sheet {sheet} conflict pages"
-                          f" {[gp['page'] for gp in group]} have exactly one"
-                          f" measured page {measured or 'NONE'}; others must be"
-                          " skipped with a supersession reason")
-        elif len(measured) > 1:
-            audit.add("revision resolved", "fail",
-                      f"sheet {sheet} pages {sorted(measured)} are identical"
-                      " duplicates but more than one is measured")
+                      f"page {pno} intentionally_skipped:"
+                      f" {e.get('reason', '')[:110]}")
+    # tolerant sheet identity per source (callouts, never silent drops)
+    index_sheets = (spec.get("sheet_index") or {}).get("lists") or []
+    for sid, geo in geometry_map.items():
+        scope_by_page = {e["page"]: e for e in spec["scope"]["pages"]
+                         if (e.get("source_id")
+                             or spec["_sources"][0]["source_id"]) == sid}
+        sheet_identity.audit_identity(
+            geo["pages"], scope_by_page, index_sheets,
+            lambda scope, detail, _sid=sid: audit.add_callout(
+                scope, detail, source_id=_sid))
     return pages_by_no
 
 
 def audit_planned_vs_completed(spec, results, pages_by_no, audit):
-    """Expected region ids per measured page must match completed exactly."""
+    """Expected region ids per measured page must match completed exactly
+    (per source page; missing = unresolved callout, unplanned = fail)."""
     base_ids = {r["region_id"] for r in results if r["kind"] == "base"}
     recheck_ids = {r["region_id"] for r in results if r["kind"] == "recheck"}
+    unresolved_ids = {r["region_id"] for r in results
+                      if r.get("status") == "unresolved"}
     for e in spec["scope"]["pages"]:
         if e["disposition"] != "measured":
             continue
         expected = set(e["expected_regions"])
-        on_page = {r["region_id"] for r in results if r["page"] == e["page"]}
+        on_page = {r["region_id"] for r in results
+                   if r["page"] == e["page"]
+                   and (r.get("source_id") == e.get("source_id") or
+                        e.get("source_id") is None)}
         got_base = on_page & base_ids
-        missing = expected - got_base
+        missing = expected - got_base - unresolved_ids
         extra = got_base - expected
-        if missing or extra:
+        if unresolved_ids & expected:
+            audit.add_callout(
+                "coverage",
+                f"page {e['page']}: planned region(s)"
+                f" {sorted(unresolved_ids & expected)} could not be measured"
+                " - their quantity fields stay blank",
+                blank_fields=["area_sf", "edge_lf"], pages=[e["page"]])
+        if missing:
+            # planned regions with no result record: treated as unresolved
+            # (blank quantities + callout), never silently dropped
+            audit.add_callout(
+                "coverage",
+                f"page {e['page']}: planned region(s) {sorted(missing)}"
+                " produced no measurement record - recorded unresolved"
+                " (blank quantities)",
+                blank_fields=["area_sf", "edge_lf"], pages=[e["page"]])
+        if extra:
             audit.add("planned vs completed", "fail",
-                      f"page {e['page']}: planned {sorted(expected)},"
-                      f" completed {sorted(got_base)}"
-                      + (f"; MISSING {sorted(missing)}" if missing else "")
-                      + (f"; UNPLANNED {sorted(extra)}" if extra else ""))
-        else:
+                      f"page {e['page']}: UNPLANNED region(s) measured:"
+                      f" {sorted(extra)} - measuring scope you did not plan"
+                      " cannot be excused after the fact")
+        if not missing and not extra:
             qa = sorted(on_page & recheck_ids)
             audit.add("planned vs completed", "pass",
                       f"page {e['page']}: all {len(expected)} planned region(s)"
@@ -164,8 +210,13 @@ def audit_planned_vs_completed(spec, results, pages_by_no, audit):
 
 
 def audit_schedule(spec, results, audit):
-    """Every type/variant measured exactly once; totals reconcile."""
+    """Every type/variant measured or disclosed-unresolved; totals
+    reconcile; declared evidence conflicts become callouts."""
     sched = spec.get("schedule")
+    for problem in spec.get("_schedule_problems") or []:
+        audit.add_callout("schedule evidence conflict", problem,
+                          blank_fields=[],
+                          pages=[sched.get("page") if sched else None])
     if sched is None:
         audit.add("schedule", "pass",
                   "individual_rooms mode: no multiplier schedule; each region"
@@ -187,10 +238,13 @@ def audit_schedule(spec, results, audit):
                       f"type {name}: all {t['count']} unit(s) are declared as"
                       " variants; no standard region needed")
         elif not std:
-            audit.add("schedule coverage", "fail",
-                      f"type {name}: schedule count {t['count']} but NO"
-                      " standard region measured - v1 shipped deleted scopes"
-                      " because nothing cross-checked this")
+            audit.add_callout(
+                f"schedule coverage type {name}",
+                f"schedule count {t['count']} but NO standard region measured"
+                " - the type's SF stays blank and its count is excluded from"
+                " extensions (never defaulted to 1)",
+                blank_fields=["area_sf", "extended_sf"],
+                pages=[sched.get("page")])
         else:
             audit.add("schedule coverage", "pass",
                       f"type {name}: count {t['count']} = {std_units} standard"
@@ -202,9 +256,12 @@ def audit_schedule(spec, results, audit):
     for v in sched.get("variants", []):
         vr = [r for r in base if r["type"] == v["type"] and r["variant"] == v["name"]]
         if not vr:
-            audit.add("variant coverage", "fail",
-                      f"variant {v['name']} of type {v['type']}: declared"
-                      f" count {v['count']} but no region measured for it")
+            audit.add_callout(
+                f"variant coverage {v['name']}",
+                f"variant {v['name']} of type {v['type']}: declared count"
+                f" {v['count']} but no region measured - its SF stays blank",
+                blank_fields=["area_sf", "extended_sf"],
+                pages=[sched.get("page")])
         else:
             audit.add("variant coverage", "pass",
                       f"variant {v['name']} of type {v['type']}: count"
@@ -231,10 +288,13 @@ def reconcile_totals(sched, audit):
     unit_total += sum(v["count"] for v in sched.get("variants", [])
                       if not v["included_in_parent_total"])
     if "project" in totals and totals["project"] != unit_total:
-        audit.add("schedule reconciliation", "fail",
-                  f"allocated unit count {unit_total} != stated project total"
-                  f" {totals['project']} - double-counted ADA-style subsets or"
-                  " missed rows")
+        audit.add_callout(
+            "schedule reconciliation",
+            f"allocated unit count {unit_total} != stated project total"
+            f" {totals['project']} - resolve from evidence (floor rows, ADA"
+            " columns, addenda); the per-row quoted counts stay authoritative"
+            " until contradicted, and the disagreement is disclosed here",
+            blank_fields=[], pages=[sched.get("page")])
     else:
         audit.add("schedule reconciliation", "pass",
                   f"allocated unit count {unit_total}"
@@ -253,33 +313,157 @@ def reconcile_totals(sched, audit):
         for fl, stated in per_floor.items():
             got = floors.get(fl)
             if got != stated:
-                audit.add("floor reconciliation", "fail",
-                          f"floor {fl!r}: allocated {got} != stated"
-                          f" {stated}")
+                audit.add_callout(
+                    f"floor reconciliation {fl}",
+                    f"floor {fl!r}: allocated {got} != stated {stated} -"
+                    " resolve from the floor rows or withhold the difference",
+                    blank_fields=[], pages=[sched.get("page")])
             else:
                 audit.add("floor reconciliation", "pass",
                           f"floor {fl!r}: allocated {got} == stated {stated}")
     return unit_total
 
 
+LEDGER_STATES = {"measured", "package_excluded", "superseded", "unresolved"}
+
+
+def build_coverage_ledger(spec, results, audit):
+    """Reconcile EVERY inventoried item to exactly one ledger state:
+    measured | package_excluded | superseded | unresolved (P0.1).
+
+    Inventory: schedule types/variants (repeated mode), individual rooms
+    (individual mode), and the region/page level. Assemblies and pieces
+    extend this in the V3 schema; package exclusion comes from the profile
+    or job policy.
+    """
+    ledger = []
+    excluded_types = set((spec.get("policy") or {}).get(
+        "package_excluded_types") or [])
+    by_type = {}
+    for r in results:
+        if r["kind"] != "base":
+            continue
+        by_type.setdefault((r.get("type"), r.get("variant")), []).append(r)
+
+    def region_state(r):
+        if r.get("status") == "unresolved":
+            return "unresolved"
+        return "measured"
+
+    if spec.get("mode") == "individual_rooms":
+        for r in results:
+            if r["kind"] == "base":
+                ledger.append({
+                    "item": r["region_id"], "kind": "room",
+                    "source": {"source_id": r.get("source_id"),
+                               "pages": [r["page"]]},
+                    "state": region_state(r),
+                    "detail": (r.get("unresolved_reason", "")[:120]
+                               if r.get("status") == "unresolved"
+                               else f"{r['area_sf']:.2f} SF measured"),
+                })
+    else:
+        sched = spec.get("schedule") or {"types": []}
+        seen = set()
+        for t in sched.get("types", []):
+            name = t["type"]
+            if name in excluded_types:
+                ledger.append({"item": f"type {name}", "kind": "type",
+                               "state": "package_excluded",
+                               "source": {"pages": [sched.get("page")]},
+                               "detail": "count known but excluded by the"
+                                         " package rules; reported separately"})
+            else:
+                rows = by_type.get((name, None), [])
+                measured_rows = [r for r in rows if r.get("status") !=
+                                 "unresolved"]
+                state = ("measured" if measured_rows else "unresolved")
+                ledger.append({"item": f"type {name} x{t['count']}",
+                               "kind": "type",
+                               "source": {"pages": [sched.get("page")]},
+                               "state": state,
+                               "detail": (f"{len(measured_rows)} region(s)"
+                                          " measured with schedule evidence"
+                                          if measured_rows else
+                                          "schedule count present but no"
+                                          " region measured - SF blank")})
+            seen.add((name, None))
+        for v in sched.get("variants", []):
+            key = (v["type"], v["name"])
+            rows = by_type.get(key, [])
+            measured_rows = [r for r in rows
+                             if r.get("status") != "unresolved"]
+            ledger.append({
+                "item": f"variant {v['type']}:{v['name']} x{v['count']}",
+                "kind": "variant",
+                "source": {"pages": [sched.get("page")]},
+                "state": ("measured" if measured_rows else "unresolved"),
+                "detail": (f"{len(measured_rows)} region(s) measured"
+                           if measured_rows else
+                           "declared but no region measured - SF blank"),
+            })
+            seen.add(key)
+        for r in results:
+            if r["kind"] != "base":
+                continue
+            key = (r.get("type"), r.get("variant"))
+            ledger.append({
+                "item": r["region_id"], "kind": "region",
+                "source": {"source_id": r.get("source_id"),
+                           "pages": [r["page"]]},
+                "state": region_state(r),
+                "detail": (r.get("unresolved_reason", "")[:120]
+                           if r.get("status") == "unresolved"
+                           else f"{r['area_sf']:.2f} SF"),
+            })
+    bad = [e for e in ledger if e["state"] not in LEDGER_STATES]
+    if bad:
+        audit.add("coverage ledger", "fail",
+                  f"ledger entries with an invalid state: {bad}")
+    states = {}
+    for e in ledger:
+        states[e["state"]] = states.get(e["state"], 0) + 1
+    audit.add("coverage ledger", "pass",
+              f"every inventoried item reconciled: {states}")
+    return ledger
+
+
 def audit_region_checks(spec, results, calibrations, audit,
                         recheck_tolerance=RECHECK_TOLERANCE_PCT):
     """Per-region QA: ranges, calibration coverage, recheck deviations,
-    duplicate/overlap within counted instances."""
+    duplicate/overlap within counted instances. Regions the recovery path
+    marked `unresolved` contribute callouts (blank quantities), not fails."""
     for r in results:
-        key = (r["page"], r["viewport"])
+        key = (r.get("source_id"), r["page"], r["viewport"])
         cal = calibrations.get(key)
+        if r.get("status") == "unresolved":
+            audit.add_callout(
+                f"region {r['region_id']}", r.get("unresolved_reason",
+                "unresolved"), blank_fields=r.get("blank_fields",
+                ["area_sf"]), pages=[r["page"]], source_id=r.get("source_id"))
+            continue
         if cal is None:
             audit.add("region calibration", "fail",
-                      f"region {r['region_id']}: no calibration for page"
-                      f" {r['page']} viewport {r['viewport']!r}")
+                      f"region {r['region_id']}: no calibration for source"
+                      f" {r.get('source_id')!r} page {r['page']} viewport"
+                      f" {r['viewport']!r}")
         if not r["expected_range_ok"]:
-            audit.add("expected range", "fail",
-                      f"region {r['region_id']}: {r['area_sf']:.2f} SF outside"
-                      f" expected {r['expected_sf_range']} - wrong calibration"
-                      " or wrong boundary")
-        else:
-            audit.add("expected range", "pass",
+            # V3: a range breach means the number cannot be trusted - the
+            # region is downgraded to unresolved (blank) instead of shipping
+            # a suspect quantity. The agent fixes the span/boundary and
+            # re-runs; the callout names what is withheld.
+            r["status"] = "unresolved"
+            r["unresolved_reason"] = (
+                f"measured {r['area_sf']:.2f} SF outside expected"
+                f" {r['expected_sf_range']} - quantity withheld pending"
+                " span/boundary investigation")
+            r["blank_fields"] = ["area_sf", "edge_lf", "splash_lf"]
+            audit.add_callout(
+                f"region {r['region_id']}", r["unresolved_reason"],
+                blank_fields=r["blank_fields"], pages=[r["page"]],
+                source_id=r.get("source_id"))
+            continue
+        audit.add("expected range", "pass",
                       f"region {r['region_id']}: {r['area_sf']:.2f} SF within"
                       f" {r['expected_sf_range']} (factor"
                       f" {r['factor_pt_per_ft']:.4f} pt/ft, policy"
@@ -292,9 +476,22 @@ def audit_region_checks(spec, results, calibrations, audit,
         audit.add("instance overlap", "fail", e)
     for w in ov_warn:
         audit.add("instance overlap", "warn", w)
-    base_by_id = {r["region_id"]: r for r in results if r["kind"] == "base"}
+    base_by_id = {r["region_id"]: r for r in results if r["kind"] == "base"
+                  and r.get("status") != "unresolved"}
+    unresolved_base_ids = {r["region_id"] for r in results
+                           if r["kind"] == "base"
+                           and r.get("status") == "unresolved"}
     for r in results:
         if r["kind"] != "recheck":
+            continue
+        if r.get("status") == "unresolved":
+            continue
+        if r.get("of") in unresolved_base_ids:
+            audit.add_callout(
+                f"recheck {r['region_id']}",
+                f"base region {r.get('of')!r} is unresolved - the recheck"
+                " has nothing to compare against and is excluded from QA",
+                blank_fields=["recheck_deviation"], pages=[r["page"]])
             continue
         base = base_by_id.get(r.get("of"))
         if base is None:
@@ -316,25 +513,52 @@ def audit_region_checks(spec, results, calibrations, audit,
 
 
 def aggregate_types(spec, results, audit):
-    """Build the per-type totals. Returns (types, project_total_sf)."""
-    base = [r for r in results if r["kind"] == "base"]
-    rechecks = [r for r in results if r["kind"] == "recheck"]
+    """Build the per-type totals. Returns (types, project_total_sf).
+
+    V3 fixes the individual_rooms crash (reporting expected grouped rows
+    with a 'rows' key; V2's flat list raised KeyError 'rows') and excludes
+    unresolved regions from extensions (their SF is blank + callout).
+    """
+    base = [r for r in results if r["kind"] == "base"
+            and r.get("status") != "unresolved"]
+    unresolved = [r for r in results if r.get("status") == "unresolved"]
+    rechecks = [r for r in results if r["kind"] == "recheck"
+                and r.get("status") != "unresolved"]
+    if unresolved:
+        audit.add_callout(
+            "totals", f"{len(unresolved)} region(s) unresolved"
+            f" ({[r['region_id'] for r in unresolved]}) - excluded from"
+            " extensions; their quantities stay blank")
     if not base:
-        audit.add("measured scope", "fail", "no base regions were measured")
+        audit.add("measured scope", "fail",
+                  "no measurable regions completed - nothing to total"
+                  " (if calibration exists nowhere in the set this is a"
+                  " stop, not a zero)")
         return [], 0.0
     if spec.get("mode") == "individual_rooms":
-        rows = []
+        groups = {}
         total = 0.0
         for r in sorted(base, key=lambda r: r["region_id"]):
-            rows.append({"room_type": r["type"], "variant": r["variant"],
-                         "region_id": r["region_id"], "sf": r["area_sf"],
-                         "count": 1, "extended_sf": round(r["area_sf"], 2),
-                         "regions": [r]})
+            groups.setdefault(r["type"], []).append(r)
             total += r["area_sf"]
+        types = []
+        for name in sorted(groups):
+            rows = [{"room_type": name, "variant": r["variant"],
+                     "region_id": r["region_id"], "sf": r["area_sf"],
+                     "count": 1, "extended_sf": round(r["area_sf"], 2),
+                     "regions": [r]} for r in groups[name]]
+            types.append({"room_type": name, "schedule_count": len(rows),
+                          "std_units": len(rows),
+                          "sf_per_unit": round(
+                              sum(r["area_sf"] for r in groups[name]), 4),
+                          "extended_sf": round(
+                              sum(r["area_sf"] for r in groups[name]), 2),
+                          "rows": rows})
+        total = round(total, 2)
         audit.add("totals", "pass",
-                  f"individual_rooms: {len(rows)} room(s) summed independently"
+                  f"individual_rooms: {len(base)} room(s) summed independently"
                   f" = {total:.2f} SF (count 1 each, by mode declaration)")
-        return rows, round(total, 2)
+        return types, total
     sched = spec["schedule"]
     types = []
     total = 0.0

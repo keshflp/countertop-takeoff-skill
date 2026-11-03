@@ -10,7 +10,7 @@ Builds both fixtures into build/test/, measures them with dynamically-built
 V2 job specs (source digest computed at runtime), and asserts:
 
   positive
-    - original fixture: 168.75 SF exactly, factor 18, status ready, exit 0
+    - original fixture: 168.75 SF exactly, factor 18, status complete, exit 0
     - messy gross:      990.00 SF exactly (per-viewport factors 18 / 9),
                         ADA variant allocated without double-counting,
                         CSV grand total 990.00, exit 0
@@ -18,11 +18,16 @@ V2 job specs (source digest computed at runtime), and asserts:
     - CSV shape: base rows carry the extension; recheck rows never extended;
                  one totals row per type + grand total
     - audit pack: PNG overlays exist for every passing case; receipt records
-  negative (each must exit non-zero with a specific reason)
-    - missing type, missing region, duplicate region, invalid count,
-      unresolved scan, unresolved revision, wrong calibration, single-span
-      calibration, hatch contamination, open boundary, seed on boundary,
-      empty measured page, stated-total mismatch
+  degradation (V3 graduated degradation replaces V2 whole-job refusals;
+  each case exits 0 with status complete_with_callouts, blanks the affected
+  quantities, and names them in CALLOUTS - replacements listed inline)
+    - unresolved scan page, unresolved revision, single-span calibration,
+      hatch contamination, open boundary, seed on boundary, missing type,
+      missing region, wrong calibration (range breach), stated-total
+      mismatch
+  refusal (structural / catastrophic stops - still exit 2)
+    - duplicate region, invalid count, negative count, empty measured page,
+      source-hash mismatch (integrity stop)
 
 Exits 0 only if every check passes; prints a case -> verdict matrix.
 """
@@ -312,8 +317,8 @@ def positives(pdfs, geo):
     check("original: 168.75 SF total",
           res and abs(res["totals"]["project_sf"] - 168.75) < 1e-9,
           str(res and res["totals"]))
-    check("original: status ready", res and res["status"] == "ready",
-          str(res and res["status"]))
+    check("original: status complete (V3: ready -> complete superseded)",
+          res and res["status"] == "complete", str(res and res["status"]))
     factors = {r["region_id"]: r["factor_pt_per_ft"] for r in res["regions"]}
     check("original: factor 18 everywhere",
           all(abs(v - 18.0) < 1e-9 for v in factors.values()), str(factors))
@@ -340,7 +345,9 @@ def positives(pdfs, geo):
           res["totals"]["unit_count"] == 20
           and any(r["variant"] == "ADA" for r in res["regions"]),
           str(res["totals"]))
-    check("messy gross: status ready", res["status"] == "ready")
+    check("messy gross: status complete_with_callouts"
+          " (V3: the A-201 rev conflict is a disclosed callout)",
+          res["status"] == "complete_with_callouts", str(res["status"]))
 
     # 3) CSV shape: base rows extended, rechecks separate, totals rows
     rows = read_csv_rows("t_messy")
@@ -451,7 +458,44 @@ def profile_tests(pdfs, geo):
 
 
 # ---------------------------------------------------------------- negative
+# V3 split the old refusal matrix in two:
+#   degradation - recoverable findings at the affected region/viewport/count:
+#                 exit 0, run_status complete_with_callouts, affected fields
+#                 BLANK, named in CALLOUTS (each case lists its V2->V3
+#                 supersession)
+#   refusal     - structural malformation or a catastrophic stop: exit 2
+def expect_degradation(pdfs, geo, name, mutate, callout_part, blank_ids,
+                       want_total=None, ledger_part=None):
+    spec = spec_messy(pdfs, geo)
+    mutate(spec)
+    rc, res, err = run_measure(spec, f"n_{name}")
+    csv_path = os.path.join(BUILD, f"n_{name}.csv")
+    ok_rc = rc == 0
+    ok_status = bool(res) and res.get("run_status") == "complete_with_callouts"
+    callouts = " | ".join(
+        c["scope"] + ": " + c["reason"]
+        for c in ((res.get("callouts") or []) if res else []))
+    ok_reason = callout_part.lower() in callouts.lower()
+    blanks = {r["region_id"] for r in ((res.get("regions") or []) if res else [])
+              if r.get("status") == "unresolved"}
+    ok_blank = all(bid in blanks for bid in blank_ids)
+    ok_csv = os.path.exists(csv_path)  # degraded runs still deliver the rest
+    ok_total = want_total is None or (
+        res and abs(res["totals"]["project_sf"] - want_total) < 1e-9)
+    ledger_txt = json.dumps(res.get("coverage_ledger") or []) if res else ""
+    ok_ledger = ledger_part is None or ledger_part.lower() in ledger_txt.lower()
+    check(f"degrade {name} (V3 replaces V2 refuse-{name})",
+          ok_rc and ok_status and ok_reason and ok_blank and ok_csv
+          and ok_total and ok_ledger,
+          f"rc={rc} status={ok_status} reason_ok={ok_reason}"
+          f" blanks={sorted(blanks)} want_blank={blank_ids}"
+          f" csv={ok_csv} total_ok={ok_total} ledger_ok={ok_ledger}"
+          f" err={err[:160]}"
+          f" callouts={callouts[:220]}")
+
+
 def expect_refusal(pdfs, geo, name, mutate, reason_part):
+    """Structural/catastrophic cases that STILL refuse (exit 2, no csv)."""
     spec = spec_messy(pdfs, geo)
     mutate(spec)
     rc, res, err = run_measure(spec, f"n_{name}")
@@ -475,13 +519,20 @@ def negative_tests(pdfs, geo):
             s["regions"] = [r for r in s["regions"] if not pred(r)]
         return m
 
-    expect_refusal(pdfs, geo, "missing_type", drop_regions(
+    # --- degradation (V3 graduated degradation; each case supersedes a V2
+    #     whole-job refusal; supersessions listed in the final summary) ---
+    # V2 refuse missing_type -> V3: type B count has no region; SF blank
+    expect_degradation(pdfs, geo, "missing_type", drop_regions(
         lambda r: r["type"] == "B" and r["kind"] == "base"),
-        "no standard region measured")
+        "no standard region measured", [],
+        want_total=614.0,  # A(55x10) + ADA(32x2); B excluded blank
+        ledger_part='"type B x8"')
 
-    expect_refusal(pdfs, geo, "missing_region", drop_regions(
+    # V2 refuse missing_region -> V3: planned region with no record =
+    # unresolved callout, the rest delivers
+    expect_degradation(pdfs, geo, "missing_region", drop_regions(
         lambda r: r["region_id"] == "A:vanity"),
-        "missing ['a:vanity']")
+        "produced no measurement record", [], want_total=870.0)
 
     def dup(s):
         src = next(r for r in s["regions"] if r["region_id"] == "B:kitchen")
@@ -498,18 +549,25 @@ def negative_tests(pdfs, geo):
         s["schedule"]["variants"][0]["count"] = -1
     expect_refusal(pdfs, geo, "negative_count", neg_count, "positive integer")
 
+    # V2 refuse unresolved_scan -> V3: the raster page's planned region
+    # cannot produce a record; disclosed unresolved, job completes
     def scan_measured(s):
         for e in s["scope"]["pages"]:
             if e["page"] == 6:
                 e["disposition"] = "measured"
                 e["expected_regions"] = ["clubroom:counter"]
-    expect_refusal(pdfs, geo, "unresolved_scan", scan_measured, "searchable_raster")
+    expect_degradation(pdfs, geo, "unresolved_scan", scan_measured,
+                       "produced no measurement record", [],
+                       want_total=990.0)
 
+    # V2 refuse unresolved_revision -> V3: missing dispositions become a
+    # coverage callout (never a silent drop)
     def no_revision_disposition(s):
         s["scope"]["pages"] = [e for e in s["scope"]["pages"]
                                if e["page"] not in (2, 5)]
-    expect_refusal(pdfs, geo, "unresolved_revision", no_revision_disposition,
-                   "no disposition")
+    expect_degradation(pdfs, geo, "unresolved_revision",
+                       no_revision_disposition, "no scope disposition", [],
+                       want_total=990.0)
 
     def wrong_calibration(s):
         for c in s["calibrations"]:
@@ -517,41 +575,54 @@ def negative_tests(pdfs, geo):
                 c["spans"] = [
                     {"label": "6'-0\"", "word_ids": [46], "seg_ids": [49]},
                     {"label": "2'-0\"", "word_ids": [47], "seg_ids": [52]}]
-    expect_refusal(pdfs, geo, "wrong_calibration", wrong_calibration,
-                   "outside expected")
+    # V2 refuse wrong_calibration -> V3: range breach withholds the number
+    expect_degradation(pdfs, geo, "wrong_calibration", wrong_calibration,
+                       "outside expected",
+                       ["A:kitchen", "A:island", "A:kitchen@recheck"],
+                       want_total=560.0)  # A:vanity 120 + ADA 64 + B 376
 
     def single_span(s):
         for c in s["calibrations"]:
             if c["page"] == 5 and c["viewport"] == "unit-plan":
                 c["spans"] = c["spans"][:1]
-    expect_refusal(pdfs, geo, "single_span", single_span,
-                   "at least 2 independent dimension spans")
+    # V2 refuse single_span -> V3: that viewport degrades; others deliver
+    expect_degradation(pdfs, geo, "single_span", single_span,
+                       "calibration", ["A:kitchen", "A:island"],
+                       want_total=560.0)
 
     def hatch(s):
         r = next(r for r in s["regions"] if r["region_id"] == "A:vanity")
         r["boundary"]["seg_ids"].append(42)
-    expect_refusal(pdfs, geo, "hatch_contamination", hatch, "not a single closed")
+    # V2 refuse hatch_contamination -> V3: region unresolved + callout
+    expect_degradation(pdfs, geo, "hatch_contamination", hatch,
+                       "not a single closed", ["A:vanity"], want_total=870.0)
 
     def open_shell(s):
         r = next(r for r in s["regions"] if r["region_id"] == "A:kitchen")
         r["boundary"]["seg_ids"] = [7, 8, 9]
-    expect_refusal(pdfs, geo, "open_boundary", open_shell, "not a single closed")
+    expect_degradation(pdfs, geo, "open_boundary", open_shell,
+                       "not a single closed", ["A:kitchen"], want_total=740.0)
 
     def seed_on_edge(s):
         r = next(r for r in s["regions"] if r["region_id"] == "A:kitchen")
         r["seed"] = [652.0, 160.0]
-    expect_refusal(pdfs, geo, "seed_on_boundary", seed_on_edge, "strictly interior")
+    expect_degradation(pdfs, geo, "seed_on_boundary", seed_on_edge,
+                       "strictly interior", ["A:kitchen"], want_total=740.0)
 
     def empty_page(s):
         for e in s["scope"]["pages"]:
             if e["page"] == 5:
                 e["expected_regions"] = []
-    expect_refusal(pdfs, geo, "empty_measured_page", empty_page, "expected_regions")
+    # an empty measured page is spec malformation (the v1 hole) - still refuses
+    expect_refusal(pdfs, geo, "empty_measured_page", empty_page,
+                   "expected_regions")
 
     def bad_total(s):
         s["schedule"]["stated_totals"]["project"] = 21
-    expect_refusal(pdfs, geo, "stated_total_mismatch", bad_total,
-                   "stated_totals")
+    # V2 refuse stated_total_mismatch -> V3: evidence conflict disclosed as
+    # a callout; the quoted per-row counts stay authoritative
+    expect_degradation(pdfs, geo, "stated_total_mismatch", bad_total,
+                       "stated project total", [], want_total=990.0)
 
     def bad_hash(s):
         s["source"]["sha256"] = "0" * 64

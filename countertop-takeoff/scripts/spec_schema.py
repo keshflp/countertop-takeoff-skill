@@ -1,47 +1,25 @@
-"""Job-spec schema validation for the V2 countertop takeoff.
+"""Job-spec schema validation for the countertop takeoff (V3).
 
-The V2 job spec is an EVIDENCE document: the agent records where every count
-came from (row text + word boxes on a page/sheet of a hashed source), which
-pages enter or leave the approved scope and why, which dimension spans and
-boundary segments to use, and the gross-area policy. Code then measures.
+The job spec is an EVIDENCE document: the agent records where every count
+came from (row text + word boxes, or an image-schedule crop + cell boxes, on
+a page of a hashed source), which pages enter or leave the scope and why,
+which dimension spans and boundary segments to use, and the gross-area
+policy. Code then measures.
 
-Schema (documented in references/job-spec-v2.md):
-{
-  "schema": "countertop-takeoff/v2",
-  "source": {"pdf": "<path>", "sha256": "<64 hex>"},
-  "geometry": "<path to extract_geometry.py output>",
-  "mode": "repeated_types" | "individual_rooms",
-  "policy": {"gross_area": "gross" | "net_of_declared_cutouts",
-             "declarations": [{"kind": "...", "detail": "..."}]},   # optional
-  "schedule": {                                                   # repeated only
-    "page": 1, "sheet": "A-001",
-    "types":   [{"type": "A", "count": 3, "row_text": "...", "word_boxes": [...],
-                 "rows": [{"floor": "1", "count": 3, "row_text": "..."}]}],
-    "variants": [{"type": "A", "name": "ADA", "count": 1,
-                  "included_in_parent_total": false, "row_text": "...",
-                  "word_boxes": [...]}],
-    "stated_totals": {"per_floor": {"1": 5, "2": 5}, "project": 10}  # optional
-  },
-  "scope": {"pages": [
-      {"page": 1, "sheet": "A-001", "disposition": "intentionally_skipped",
-       "reason": "..."},
-      {"page": 2, "sheet": "A-101", "disposition": "measured",
-       "expected_regions": ["A:kitchen", "A:vanity"]},
-      {"page": 9, "disposition": "blocked", "reason": "..."}  # blocks export
-  ]},
-  "calibrations": [{"page": 2, "viewport": "main", "spans": [
-      {"label": "10'-0\"", "word_ids": [29], "seg_ids": [14], "real_ft": 10.0},
-      ... 2+ agreeing spans required ]}],
-  "regions": [
-      {"region_id": "A:kitchen", "kind": "base", "type": "A", "variant": null,
-       "page": 2, "sheet": "A-101", "viewport": "main",
-       "boundary": {"seg_ids": [4, 5, 6, 7, 8, 9]}, "seed": [160, 390],
-       "expected_sf_range": [25, 40],
-       "cutouts": [{"label": "sink", "seg_ids": [...]}]},              # optional
-      {"region_id": "A:kitchen@recheck", "kind": "recheck",
-       "of": "A:kitchen", ...}
-  ]
-}
+V3 additions over V2 (documented in references/job-spec-v3.md):
+  - sources[]: multiple hashed inputs (PDF plan set, DXF exports, rasters),
+    each with a stable source_id; pages are keyed (source_id, page_number)
+  - tolerant sheet identity evidence (sheet_identity module + audit callouts)
+  - bounded viewports (viewport_box) per calibration entry
+  - schedule evidence may be text-based (word boxes) or image-based (a
+    rendered crop hash + displayed cell boxes transcribed by vision)
+  - assemblies[] + pieces[] with edge/splash/cutout runs for the two BoQ
+    views; package rules (company profile defaults, job overrides)
+  - graduated degradation: audit findings are callouts unless one of the
+    three catastrophic stop conditions applies
+
+V2 specs (schema "countertop-takeoff/v2", single source) remain valid: they
+run unchanged with an implicit source_id of the first declared source.
 
 Every numeric field is checked finite; every count is a positive integer.
 Structural violations raise SpecError (hard stop, exit 2).
@@ -53,8 +31,13 @@ import os
 import re
 
 SCHEMA_TAG = "countertop-takeoff/v2"
+SCHEMA_TAG_V3 = "countertop-takeoff/v3"
+SCHEMA_TAGS = {SCHEMA_TAG, SCHEMA_TAG_V3}
+DEFAULT_SOURCE_ID = "plans"
+SOURCE_KINDS = {"pdf", "cad", "image"}
 MODES = {"repeated_types", "individual_rooms"}
-DISPOSITIONS = {"measured", "intentionally_skipped", "blocked"}
+DISPOSITIONS = {"measured", "intentionally_skipped", "superseded",
+                "unresolved"}
 REGION_KINDS = {"base", "recheck"}
 GROSS_POLICIES = {"gross", "net_of_declared_cutouts"}
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -109,21 +92,76 @@ def word_boxes(lst, what):
 
 
 def validate_source(spec):
-    src = spec.get("source")
-    require(isinstance(src, dict), "missing 'source' object")
-    require(isinstance(src.get("pdf"), str) and src["pdf"],
-            "source.pdf must name the source PDF")
-    require(isinstance(src.get("sha256"), str)
-            and SHA_RE.match(src["sha256"]),
-            "source.sha256 must be the 64-hex digest of the source PDF")
-    require(isinstance(spec.get("geometry"), str) and spec["geometry"],
-            "'geometry' must name the extract_geometry.py output")
+    """Validate sources. V3 allows sources[] (multi-source); V2's single
+    `source` object is accepted and normalized to a one-entry sources list
+    stored in spec['_sources'] (source_id defaults to 'plans')."""
+    sources = spec.get("sources")
+    if sources is not None:
+        require(isinstance(sources, list) and sources,
+                "sources must be a non-empty list when present")
+        ids = set()
+        norm = []
+        for i, s in enumerate(sources):
+            require(isinstance(s, dict), f"sources[{i}] must be an object")
+            sid = s.get("source_id")
+            require(isinstance(sid, str) and sid.strip(),
+                    f"sources[{i}].source_id must be a non-empty string")
+            require(sid not in ids, f"duplicate source_id {sid!r}")
+            ids.add(sid)
+            path = s.get("path") or s.get("pdf")
+            require(isinstance(path, str) and path,
+                    f"sources[{i}] ({sid}): path must name the source file")
+            require(isinstance(s.get("sha256"), str)
+                    and SHA_RE.match(s["sha256"]),
+                    f"sources[{i}] ({sid}): sha256 must be the 64-hex digest")
+            kind = s.get("kind") or ("pdf" if path.lower().endswith(".pdf")
+                                     else "cad" if path.lower().endswith(
+                                         (".dxf", ".dwg")) else "image")
+            require(kind in SOURCE_KINDS,
+                    f"sources[{i}] ({sid}): kind must be one of"
+                    f" {sorted(SOURCE_KINDS)}")
+            norm.append({"source_id": sid, "path": path, "sha256": s["sha256"],
+                         "kind": kind})
+        spec["_sources"] = norm
+    else:
+        src = spec.get("source")
+        require(isinstance(src, dict), "missing 'source' object (or the V3"
+                " 'sources' list)")
+        require(isinstance(src.get("pdf"), str) and src["pdf"],
+                "source.pdf must name the source PDF")
+        require(isinstance(src.get("sha256"), str)
+                and SHA_RE.match(src["sha256"]),
+                "source.sha256 must be the 64-hex digest of the source PDF")
+        spec["_sources"] = [{"source_id": DEFAULT_SOURCE_ID,
+                             "path": src["pdf"], "sha256": src["sha256"],
+                             "kind": "pdf"}]
+    require(isinstance(spec.get("geometry"), (str, dict))
+            and spec["geometry"],
+            "'geometry' must name the extract_geometry.py output (a path, or"
+            " a {source_id: path} object for multi-source jobs)")
+    geo = spec["geometry"]
+    if isinstance(geo, dict):
+        ids = {s["source_id"] for s in spec["_sources"]}
+        for k, v in geo.items():
+            require(k in ids, f"geometry key {k!r} is not a declared"
+                    " source_id")
+            require(isinstance(v, str) and v, f"geometry[{k!r}] must be a"
+                    " path")
+    return spec["_sources"]
+
+
+def source_ids(spec):
+    return [s["source_id"] for s in spec["_sources"]]
+
+
+def default_source_id(spec):
+    return spec["_sources"][0]["source_id"]
 
 
 def validate_mode_and_policy(spec):
-    require(spec.get("schema") == SCHEMA_TAG,
-            f"schema must be {SCHEMA_TAG!r} (got {spec.get('schema')!r})"
-            " - V2 job specs are not V1 job specs")
+    require(spec.get("schema") in SCHEMA_TAGS,
+            f"schema must be one of {sorted(SCHEMA_TAGS)} (got"
+            f" {spec.get('schema')!r}) - V1 job specs are not accepted")
     mode = spec.get("mode")
     require(mode in MODES, f"mode must be one of {sorted(MODES)}"
             " - the takeoff refuses to infer it")
@@ -210,12 +248,19 @@ def validate_scope(spec):
     pages = scope.get("pages")
     require(isinstance(pages, list) and pages,
             "scope.pages must list every source page's disposition")
+    known = set(source_ids(spec))
     seen = set()
     for entry in pages:
         require(isinstance(entry, dict), "scope entry must be an object")
         pno = pos_int(entry.get("page"), "scope page")
-        require(pno not in seen, f"page {pno} appears twice in scope.pages")
-        seen.add(pno)
+        sid = entry.get("source_id") or default_source_id(spec)
+        require(sid in known, f"scope page {pno}: source_id {sid!r} is not a"
+                " declared source")
+        entry["source_id"] = sid
+        key = (sid, pno)
+        require(key not in seen,
+                f"source {sid!r} page {pno} appears twice in scope.pages")
+        seen.add(key)
         disp = entry.get("disposition")
         require(disp in DISPOSITIONS,
                 f"page {pno}: disposition must be one of {sorted(DISPOSITIONS)}")
@@ -341,9 +386,9 @@ def validate_regions(spec, sched):
         ids.add(rid)
     for r in regions:
         rid = r["region_id"]
-        for k in ("assembly", "material"):
+        for k in ("assembly", "material", "piece"):
             require(k not in r or isinstance(r[k], str),
-                    f"{rid}: {k} must be a string (identity only in V2)")
+                    f"{rid}: {k} must be a string")
     for r in regions:
         rid = r["region_id"]
         kind = r.get("kind", "base")
@@ -366,6 +411,12 @@ def validate_regions(spec, sched):
             require(v in names, f"{rid}: variant {v!r} not declared for type"
                     f" {rtype!r} in the schedule")
         pos_int(r.get("page"), f"{rid}: page")
+        if r.get("source_id") is not None:
+            require(r["source_id"] in source_ids(spec),
+                    f"{rid}: source_id {r['source_id']!r} is not a declared"
+                    " source")
+        else:
+            r["source_id"] = default_source_id(spec)
         seg_ids((r.get("boundary") or {}).get("seg_ids"),
                 f"{rid}: boundary.seg_ids")
         seed = r.get("seed")
@@ -392,8 +443,11 @@ def validate_spec(spec):
     validate_mode_and_policy(spec)
     scope = validate_scope(spec)
     sched = validate_schedule(spec)
-    if sched is not None:
-        for p in validate_schedule_consistency(sched):
-            raise SpecError("schedule evidence is inconsistent: " + p)
+    # V3: internal evidence conflicts (rows vs counts, floors vs project
+    # totals) are real drawing conflicts - disclosed as callouts by the
+    # audit, not spec refusals. Structurally MALFORMED evidence (counts
+    # that are not positive integers, missing row quotes) still refuses.
+    spec["_schedule_problems"] = (validate_schedule_consistency(sched)
+                                  if sched is not None else [])
     regions = validate_regions(spec, sched)
     return {"scope": scope, "schedule": sched, "regions": regions}
