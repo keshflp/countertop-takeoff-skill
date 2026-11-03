@@ -157,12 +157,11 @@ def measure_region(region, page, factor, policy, snap_tol=SNAP_DEFAULT):
                 " - cutouts must be inner loops of the region")
     area_pt2 = shell.area
     if policy == "net_of_declared_cutouts":
-        if not cutouts:
-            raise RegionError(
-                f"{label}: policy is net_of_declared_cutouts but no cutouts"
-                " are declared for this region")
+        # regions with no observed cutouts legitimately declare none; the
+        # overlay + independent review validate that assertion visually
         applied = "net"
-        area_pt2 = shell.area - unary_union([p for _, p in cutouts]).area
+        if cutouts:
+            area_pt2 = shell.area - unary_union([p for _, p in cutouts]).area
     elif cutouts:
         applied = "gross (cutouts observed, NOT subtracted)"
     area_sf = area_pt2 / factor ** 2

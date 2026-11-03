@@ -129,7 +129,6 @@ def finish(spec, geometry, calibrations, types, total, audit_obj, results,
                                      audit_obj, review_status)
     print()
     print(report)
-    when = report_out.runtime_versions()["generated_utc"]
     if args.report:
         report_out.write_report(args.report, report)
         print(f"wrote {args.report}")
@@ -140,10 +139,6 @@ def finish(spec, geometry, calibrations, types, total, audit_obj, results,
         report_out.write_json(args.json_path, payload)
         print(f"wrote {args.json_path}")
     if audit_obj.failed:
-        stale = (report_out.quarantine_stale_export(args.csv_path, when)
-                 if args.csv_path else None)
-        if stale:
-            print(f"quarantined stale export: {stale}")
         raise TakeoffError(
             f"audit FAILED ({len(audit_obj.failed)} item(s)); diagnostics are"
             " in the report/results JSON - fix the job spec and re-run; the"
@@ -171,7 +166,16 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    return run_pipeline(args)
+    try:
+        return run_pipeline(args)
+    except TakeoffError:
+        # ANY refusal must not leave an older export looking current
+        if args.csv_path:
+            when = report_out.runtime_versions()["generated_utc"]
+            stale = report_out.quarantine_stale_export(args.csv_path, when)
+            if stale:
+                print(f"quarantined stale export: {stale}", file=sys.stderr)
+        raise
 
 
 if __name__ == "__main__":
