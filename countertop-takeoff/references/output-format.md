@@ -1,4 +1,4 @@
-# Output format spec (V4)
+# Output format spec (V5)
 
 Exact formats produced by the V4 pipeline. Consumers (the agent's report,
 the audit pack, the estimate, later phases) rely on these, not prose.
@@ -51,7 +51,8 @@ Jobs WITHOUT assemblies keep the V2 shape:
 Jobs WITH assemblies derive every row from the ONE resolved model (P0.1):
 - `base` — one row per PIECE (blank SF/extensions stay blank; notes carry
   the state + the named blanks)
-- `type_total` — one per active type
+- `type_total` — one per active type; an ALL-unknown type totals as
+  `__blank__` (never 0.00)
 - `excluded_package_total` — one row with the excluded package SF,
   documented as NEVER added into the grand total
 - `grand_total` — equals the project total and BOTH BoQ view totals
@@ -59,6 +60,18 @@ Jobs WITH assemblies derive every row from the ONE resolved model (P0.1):
 
 On a failed run the CSV is not written, and any pre-existing export file is
 renamed `<name>.stale-<utc>` so an old export can't look current.
+
+## 2b. Stale-output handling + stopped diagnostics (V5, P0.1)
+
+On ANY stop (the three data stops, spec refusals, unexpected crashes),
+measure.py quarantines EVERY superseded artifact — CSVs, the report,
+results.json, and estimate/proposal outputs — as `<name>.stale-<utc>`, and
+writes a CURRENT stopped diagnostic results JSON
+(`run_status: "stopped"`, `stopped_early: true`, the stop reason) over the
+results path when this run had not already written one. Old artifacts can
+never look current. `audit_pack.py --record-receipt` refuses a receipt on
+a quarantined file, refuses a stopped run, names any superseded sibling
+files in the receipt, and binds the receipt to the results sha256.
 
 ## 3. Results JSON (`--json`) — the evidence package
 
@@ -85,7 +98,9 @@ renamed `<name>.stale-<utc>` so an old export can't look current.
                "material_canonical": null}],
   "types": [{"room_type": "A", "schedule_count": 3, "std_units": 3,
              "sf_per_unit": 38.25, "extended_sf": 114.75, "rows": [...]}],
-  "totals": {"project_sf": 168.75, "unit_count": 5},
+  "totals": {"project_sf": 168.75, "unit_count": 5,
+             "known_subtotal_sf": 168.75, "project_sf_complete": true,
+             "unknown_contribution_count": 0, "assembly_ea": null},
   "audit": [{"check": "...", "status": "pass|warn|fail", "detail": "..."}],
   "run_status": "complete | complete_with_callouts | stopped",
   "callouts": [{"scope", "reason", "blank_fields", "source"}],
@@ -103,16 +118,22 @@ After an independent audit, `audit_pack.py --record-receipt` adds:
 ```json
 "review": {"status": "independent_audit_recorded", "reviewer": "...",
            "verdict": "approved|rejected", "notes": "...",
-           "pack_dir": "...", "recorded_utc": "..."},
+           "pack_dir": "...", "results_sha256": "...",
+           "superseded_results_files": [...],
+           "recorded_utc": "..."},
 "review_status": "independent_audit_approved"
 ```
 
 ## 4. Audit pack (`audit_pack.py --pack DIR`)
 
-- `<region_id>_full.png` / `<region_id>_closeup.png` per measured region:
-  base page render (recorded rotation applied) + translucent measured shell,
-  region id, area, ACTUAL factor, policy, seed marker, calibration span
-  highlights, declared cutouts
+- `<source>__<region>-<digest>_full.png` / `..._closeup.png` per measured
+  region (V5: collision-resistant, SOURCE-QUALIFIED filenames —
+  `same:counter` and `same/counter` never collide): base page render
+  (recorded rotation applied) + translucent measured shell, region id,
+  area, ACTUAL factor, policy, seed marker, calibration span highlights,
+  declared cutouts. Relative paths resolve against the RESULTS file's own
+  location; a corrupt geometry payload degrades per-source with a
+  disclosed GEOMETRY NOTE instead of aborting the pack
 - `index.md`: run summary (run status, review status, totals), the CALLOUTS
   the reviewer must confirm, plus what to check: raw sheets, schedule
   evidence, omissions, overlays. Unresolved regions render a marker page
@@ -130,7 +151,8 @@ After an independent audit, `audit_pack.py --record-receipt` adds:
 Three files, all from ONE computation over the assembly BoQ + rate
 profile:
 
-- `estimate.json` — schema `countertop-takeoff/v4 estimate`; currency,
+- `estimate.json` — schema `countertop-takeoff/v5 estimate`; scope_complete
+  flag, unknown_scope (omitted in-scope items), currency,
   sha256 of the results JSON + rate profile, `lines[]` (item_code,
   description with inch dims, assembly_ids, qty_ea, unit_price,
   line_total, rate_reference {item_code, includes, uom},
@@ -139,14 +161,27 @@ profile:
   unknown), `unknown_amounts`, `exclusions` (package-excluded assemblies,
   never priced), `callouts`, and the arithmetic block (Decimal exact,
   ROUND_HALF_UP to whole cents per line, single-currency rule)
-- `estimate.md` — header (company, timestamp, currency, provenance);
-  table `Item code | Description | QTY EA | Unit price | Total`; priced
-  subtotal; exclusions; CALLOUTS; grand total — BLANK while any in-scope
-  amount is unknown
-- `estimate.pdf` — minimal stdlib render of estimate.md (Courier text
-  pages). The AGENT HOST's document tooling may render a richer PDF from
-  the same md instead; the contract is that the PDF carries the SAME
-  grand total as md + json
+- `estimate.md` — header (company, timestamp, currency, scope-completeness
+  flag, provenance); table `Item code | Description | QTY EA | Unit price |
+  Total` (long descriptions wrap into continuation rows — amounts never
+  split); priced subtotal; exclusions; CALLOUTS (incl. omitted in-scope
+  scope as UNKNOWN amounts); grand total — BLANK while any in-scope amount
+  is unknown; per-line arithmetic with EXACT rate precision (55.555 stays
+  55.555, never 55.56)
+- `estimate.pdf` — PyMuPDF render of estimate.md: first line below the
+  page top, wrapped + paginated (grand total on the last page), and every
+  rendered amount RE-READ from the PDF and checked against estimate.json
+  before the file ships. The AGENT HOST's document tooling may render a
+  richer PDF from the same md instead; the contract is that the PDF carries
+  the SAME grand total as md + json
+- `proposal.json` / `proposal.md` / `proposal.pdf` (`scripts/proposal.py`,
+  V5 P1.3) — proposal-lite built FROM the corrected estimate: schema
+  `countertop-takeoff/v5 proposal`; provenance binds the estimate sha256
+  AND the results sha256 (mismatch refuses); package summaries grouped
+  from the data; UNCHANGED EA quantities and exact rates; exclusions from
+  the estimate + open items; supplied terms; blank signature lines; totals
+  carried verbatim (blank preserved) — never invented percentages, tax,
+  or payable balances; json/md/pdf agreement enforced like estimates
 
 ## 6. Side files (regenerable, gitignored)
 

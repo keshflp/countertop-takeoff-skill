@@ -1,6 +1,6 @@
 ---
 name: countertop-takeoff
-version: 4.0.0
+version: 5.0.0
 description: >-
   Countertop takeoffs (SF, edge feet, splash, cutouts) from plan PDFs, DXF,
   and rasters. Preflights the pack, transcribes bitmap schedules with
@@ -13,7 +13,7 @@ description: >-
   quantity requests on plan sets.
 ---
 
-# Countertop Takeoff (V4: one resolved quantity model, evidence-bound)
+# Countertop Takeoff (V5: safe publishing, evidence identity, complete-scope estimates)
 
 You are doing a countertop takeoff on a drawing set for a countertop
 subcontractor. Run to completion, then notify once — no approval gates, no
@@ -118,12 +118,30 @@ pricing schema — rates[] pin `match.assembly_kind` plus dims/finish, uom
 EA, unit_price, includes[]): `uv run scripts/estimate.py
 build/results.json --profile <rate-profile.json> --out-md
 build/estimate.md --out-json build/estimate.json --out-pdf
-build/estimate.pdf` (or add `--estimate-profile` to the measure command).
-Each in-scope assembly prices EA × exact rate; unmatched or ambiguous
-rates and withheld quantities stay BLANK behind callouts; the grand total
-is BLANK while any in-scope amount is unknown. The .pdf is a minimal
-stdlib render of estimate.md — render a richer PDF from the same md with
-the host's document tooling if you have one; the grand total must agree.
+build/estimate.pdf` (or add `--estimate-profile` to the measure command;
+`--estimate-md/--estimate-json/--estimate-pdf` set EXPLICIT output paths —
+an estimate may never overwrite its own evidence package, and paths that
+would alias the results/report de-alias automatically). Each in-scope
+assembly prices EA × exact rate; unmatched or ambiguous rates and withheld
+quantities stay BLANK behind callouts; omitted in-scope scope (a room
+covered by NO assembly) is an UNKNOWN amount — priced lines survive, the
+grand total stays BLANK, and the callout names what is missing. A
+`stopped` run or a results file without `assembly_boq` refuses to be
+priced. The .pdf is a PyMuPDF render of estimate.md whose rendered amounts
+are re-checked against estimate.json — render a richer PDF from the same
+md with the host's document tooling if you have one; the grand total must
+agree.
+
+### Step 5c. Proposal-lite (when the shop asks for a customer-facing quote)
+`uv run scripts/proposal.py build/results.json --estimate
+build/estimate.json --profile <rate-profile.json> --out-md
+build/proposal.md --out-json build/proposal.json --out-pdf
+build/proposal.pdf` builds a branded proposal/BoQ from the CORRECTED
+estimate: fixed layout, short cover note, package summaries grouped FROM
+THE DATA, unchanged EA quantities and exact rates, exclusions assembled
+from the estimate's exclusions + open items, the profile's SUPPLIED terms,
+and blank signature lines. Never invent percentages, tax treatment, or
+payable balances. json/md/pdf totals must agree (the script enforces it).
 
 ### Steps 6–7. Audit pack, independent audit, deliver
 `uv run scripts/audit_pack.py build/results.json --pack build/audit_pack`
@@ -134,7 +152,8 @@ auditor is available, deliver with the receipt status disclosed
 (`independent_audit_unavailable`) — disclosed, not hidden, not a blocker.
 Then deliver report, CSVs (piece BoQ + assembly BoQ — same resolved
 records, NEVER summed), results.json, audit pack, receipt, estimate (when
-priced), and ONE final summary: totals, what is BLANK and why (CALLOUTS),
+priced), proposal (when quoted), and ONE final summary: totals (with the
+known-subtotal + completeness flags), what is BLANK and why (CALLOUTS),
 and the coverage ledger (every inventoried item: measured | included_scope
 | package_excluded | superseded | unresolved). FF&E-deferred finishes
 carry "brand/color TBD" flags.
@@ -142,7 +161,8 @@ carry "brand/color TBD" flags.
 ## Method & output details
 Method, calibration bands, boundary closure, curve tolerance:
 `references/method.md` · V3/V4 schema: `references/job-spec-v3.md` · output
-formats (incl. estimate): `references/output-format.md` · company profile
-+ rate profile (v2 pricing schema): `references/company-profile.md` · CAD
-landscape + optional CAD-MCP escalation (docs only):
-`references/cad-context.md`
+formats (incl. estimate + proposal): `references/output-format.md` ·
+company profile + rate profile (v2 pricing schema, terms):
+`references/company-profile.md` · QuickBooks import groundwork (docs only,
+no integration): `references/quickbooks-mapping.md` · CAD landscape +
+optional CAD-MCP escalation (docs only): `references/cad-context.md`
