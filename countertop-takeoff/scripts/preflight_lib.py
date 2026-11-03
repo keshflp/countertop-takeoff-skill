@@ -70,7 +70,6 @@ def pymupdf_rect(rect):
     import pymupdf
     return pymupdf.Rect(rect)
 
-
 def page_identity(doc, page):
     """Identity + metadata for one page (displayed-space sizes)."""
     disp_w, disp_h = page.rect.width, page.rect.height
@@ -103,7 +102,7 @@ def image_stats(page, doc):
     """Raster images drawn on the page: bbox (displayed), pixel size, digest."""
     out = []
     for info in page.get_image_info() or []:
-        bbox = rotated_rect(page, pymupdf.Rect(info["bbox"]))
+        bbox = rotated_rect(page, pymupdf_rect(info["bbox"]))
         xref = info.get("xref") or 0
         digest = None
         if xref:
