@@ -1,42 +1,166 @@
 {
-  "pdf": "examples/fixture.pdf",
+  "schema": "countertop-takeoff/v2",
+  "source": {
+    "pdf": "examples/fixture.pdf",
+    "sha256": "c211e10bc4fddf718a01bae097b18780e0acf9a196f08c6981cc235f6182a9bf"
+  },
   "geometry": "build/fixture.geometry.json",
-  "schedule": { "sheet": "A-001", "counts": { "A": 3, "B": 2 } },
-  "jobs": [
+  "mode": "repeated_types",
+  "policy": {
+    "gross_area": "gross",
+    "declarations": [
+      {
+        "kind": "plan_spec_conflict",
+        "detail": "Schedule notes say kitchen counters 25 IN. DEEP, but both plans dimension 2'-6\" (30 in.) counter depth. Area is measured from drawn geometry per method.md; the conflict is flagged for the reviewer."
+      }
+    ]
+  },
+  "schedule": {
+    "page": 1,
+    "sheet": "A-001",
+    "types": [
+      {
+        "type": "A",
+        "count": 3,
+        "row_text": "A | 1 BED / 1 BATH | 3",
+        "word_boxes": [
+          { "t": "A", "x0": 126.998, "y0": 218.325, "x1": 133.001, "y1": 230.691 },
+          { "t": "1", "x0": 207.488, "y0": 218.325, "x1": 212.492, "y1": 230.691 },
+          { "t": "BED", "x0": 214.993, "y0": 218.325, "x1": 233.498, "y1": 230.691 },
+          { "t": "3", "x0": 377.498, "y0": 218.325, "x1": 382.502, "y1": 230.691 }
+        ]
+      },
+      {
+        "type": "B",
+        "count": 2,
+        "row_text": "B | 2 BED / 2 BATH | 2",
+        "word_boxes": [
+          { "t": "B", "x0": 126.998, "y0": 246.325, "x1": 133.001, "y1": 258.691 },
+          { "t": "2", "x0": 207.488, "y0": 246.325, "x1": 212.492, "y1": 258.691 },
+          { "t": "BED", "x0": 214.993, "y0": 246.325, "x1": 233.498, "y1": 258.691 },
+          { "t": "2", "x0": 377.498, "y0": 246.325, "x1": 382.502, "y1": 258.691 }
+        ]
+      }
+    ],
+    "variants": [],
+    "stated_totals": { "project": 5 }
+  },
+  "scope": {
+    "pages": [
+      {
+        "page": 1,
+        "sheet": "A-001",
+        "disposition": "intentionally_skipped",
+        "reason": "Unit schedule sheet - counts recorded under schedule evidence; no countertop linework (class text_only)."
+      },
+      {
+        "page": 2,
+        "sheet": "A-101",
+        "disposition": "measured",
+        "expected_regions": ["A:kitchen", "A:vanity"]
+      },
+      {
+        "page": 3,
+        "sheet": "A-102",
+        "disposition": "measured",
+        "expected_regions": ["B:kitchen", "B:vanity"]
+      }
+    ]
+  },
+  "calibrations": [
     {
-      "room_type": "A",
-      "instance": "Unit 101",
       "page": 2,
-      "sheet": "A-101",
-      "regions": [
-        { "name": "kitchen", "bbox": [60, 345, 262, 462], "seed": [160, 390],
-          "expected_sf_range": [25, 40] },
-        { "name": "vanity", "bbox": [60, 480, 155, 530], "seed": [100, 505],
-          "expected_sf_range": [5, 10] }
+      "viewport": "main",
+      "spans": [
+        { "label": "10'-0\"", "word_ids": [29], "seg_ids": [14] },
+        { "label": "2'-6\"", "word_ids": [30], "seg_ids": [17] },
+        { "label": "20'-0\"", "word_ids": [31], "seg_ids": [20] }
       ]
     },
     {
-      "room_type": "A",
-      "instance": "Unit 101 recheck",
+      "page": 3,
+      "viewport": "main",
+      "spans": [
+        { "label": "8'-0\"", "word_ids": [29], "seg_ids": [12] },
+        { "label": "2'-6\"", "word_ids": [30], "seg_ids": [15] },
+        { "label": "20'-0\"", "word_ids": [31], "seg_ids": [18] }
+      ]
+    }
+  ],
+  "regions": [
+    {
+      "region_id": "A:kitchen",
+      "kind": "base",
+      "type": "A",
+      "variant": null,
       "page": 2,
       "sheet": "A-101",
-      "spot_check_of": "Unit 101",
-      "regions": [
-        { "name": "kitchen", "bbox": [58, 342, 264, 465], "seed": [160, 390] },
-        { "name": "vanity", "bbox": [58, 478, 157, 532], "seed": [100, 505] }
-      ]
+      "viewport": "main",
+      "boundary": { "seg_ids": [4, 5, 6, 7, 8, 9] },
+      "seed": [160, 390],
+      "expected_sf_range": [25, 40]
     },
     {
-      "room_type": "B",
-      "instance": "Unit 201",
+      "region_id": "A:vanity",
+      "kind": "base",
+      "type": "A",
+      "variant": null,
+      "page": 2,
+      "sheet": "A-101",
+      "viewport": "main",
+      "boundary": { "seg_ids": [10, 11, 12, 13] },
+      "seed": [100, 505],
+      "expected_sf_range": [5, 10]
+    },
+    {
+      "region_id": "A:kitchen@recheck",
+      "kind": "recheck",
+      "of": "A:kitchen",
+      "type": "A",
+      "variant": null,
+      "page": 2,
+      "sheet": "A-101",
+      "viewport": "main",
+      "boundary": { "seg_ids": [4, 5, 6, 7, 8, 9] },
+      "seed": [200, 380],
+      "expected_sf_range": [25, 40]
+    },
+    {
+      "region_id": "A:vanity@recheck",
+      "kind": "recheck",
+      "of": "A:vanity",
+      "type": "A",
+      "variant": null,
+      "page": 2,
+      "sheet": "A-101",
+      "viewport": "main",
+      "boundary": { "seg_ids": [10, 11, 12, 13] },
+      "seed": [110, 510],
+      "expected_sf_range": [5, 10]
+    },
+    {
+      "region_id": "B:kitchen",
+      "kind": "base",
+      "type": "B",
+      "variant": null,
       "page": 3,
       "sheet": "A-102",
-      "regions": [
-        { "name": "kitchen", "bbox": [60, 345, 225, 415], "seed": [140, 382],
-          "expected_sf_range": [15, 30] },
-        { "name": "vanity", "bbox": [60, 480, 155, 530], "seed": [100, 505],
-          "expected_sf_range": [5, 10] }
-      ]
+      "viewport": "main",
+      "boundary": { "seg_ids": [4, 5, 6, 7] },
+      "seed": [140, 382],
+      "expected_sf_range": [15, 30]
+    },
+    {
+      "region_id": "B:vanity",
+      "kind": "base",
+      "type": "B",
+      "variant": null,
+      "page": 3,
+      "sheet": "A-102",
+      "viewport": "main",
+      "boundary": { "seg_ids": [8, 9, 10, 11] },
+      "seed": [100, 505],
+      "expected_sf_range": [5, 10]
     }
   ]
 }
