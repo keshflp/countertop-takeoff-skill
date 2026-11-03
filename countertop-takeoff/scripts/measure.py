@@ -48,9 +48,9 @@ from datetime import datetime, timezone
 from shapely.geometry import LineString, MultiLineString, Point
 from shapely.ops import polygonize, unary_union
 
-# Matches a whole word like 10'-0", 10'0", 10'6.5", 10', 2'-6"
+# Matches a whole word like 10'-0", 10'0", 10'-6.5", 10'6", 10'
 DIM_WORD_RE = re.compile(
-    r"^\s*(\d{1,3})\s*'\s*(\d{1,2}(?:\.\d+)?)?\s*(?:\"|''|”)?\s*$"
+    r"^\s*(\d{1,3})\s*'\s*-?\s*(\d{1,2}(?:\.\d+)?)?\s*(?:\"|''|”)?\s*$"
 )
 SCALE_LINE_RE = re.compile(r"\bscale\b", re.I)
 
@@ -369,8 +369,8 @@ def parse_args(argv=None):
     ap.add_argument("--json", dest="json_path", help="write full results JSON here")
     ap.add_argument("--snap", type=float, default=0.05,
                     help="endpoint snap tolerance in pt (default 0.05)")
-    ap.add_argument("--pad", type=float, default=8.0,
-                    help="calibration search pad around a label bbox, pt (default 8)")
+    ap.add_argument("--pad", type=float, default=12.0,
+                    help="calibration search pad around a label bbox, pt (default 12)")
     ap.add_argument("--spot-tolerance", type=float, default=2.0,
                     help="spot-check deviation tolerance, percent (default 2.0)")
     ap.add_argument("--spread-fail", type=float, default=5.0,

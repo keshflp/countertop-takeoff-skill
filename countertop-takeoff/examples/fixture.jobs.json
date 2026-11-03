@@ -1,0 +1,42 @@
+{
+  "pdf": "examples/fixture.pdf",
+  "geometry": "build/fixture.geometry.json",
+  "schedule": { "sheet": "A-001", "counts": { "A": 3, "B": 2 } },
+  "jobs": [
+    {
+      "room_type": "A",
+      "instance": "Unit 101",
+      "page": 2,
+      "sheet": "A-101",
+      "regions": [
+        { "name": "kitchen", "bbox": [60, 345, 262, 462], "seed": [160, 390],
+          "expected_sf_range": [25, 40] },
+        { "name": "vanity", "bbox": [60, 480, 155, 530], "seed": [100, 505],
+          "expected_sf_range": [5, 10] }
+      ]
+    },
+    {
+      "room_type": "A",
+      "instance": "Unit 101 recheck",
+      "page": 2,
+      "sheet": "A-101",
+      "spot_check_of": "Unit 101",
+      "regions": [
+        { "name": "kitchen", "bbox": [58, 342, 264, 465], "seed": [160, 390] },
+        { "name": "vanity", "bbox": [58, 478, 157, 532], "seed": [100, 505] }
+      ]
+    },
+    {
+      "room_type": "B",
+      "instance": "Unit 201",
+      "page": 3,
+      "sheet": "A-102",
+      "regions": [
+        { "name": "kitchen", "bbox": [60, 345, 225, 415], "seed": [140, 382],
+          "expected_sf_range": [15, 30] },
+        { "name": "vanity", "bbox": [60, 480, 155, 530], "seed": [100, 505],
+          "expected_sf_range": [5, 10] }
+      ]
+    }
+  ]
+}
