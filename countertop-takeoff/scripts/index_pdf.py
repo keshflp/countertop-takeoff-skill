@@ -116,6 +116,8 @@ def preflight_page(doc, page):
     words = pl.words_of_page(page)
     stats = pl.drawing_stats(page)
     images = pl.image_stats(page, doc)
+    segs = pl.segments_of_page(page)
+    regions = pl.content_regions(page, images, segs, words)
     page_area = float(page.rect.width * page.rect.height) or 1.0
     img_area = 0.0
     for im in images:
@@ -124,6 +126,8 @@ def preflight_page(doc, page):
     cover_pct = min(100.0, img_area / page_area * 100.0)
     cls = pl.classify_page(stats["segment_count"], cover_pct, len(text))
     revisions = sorted({m.upper() for m in REVISION_RE.findall(text)})
+    rt_pts = [(w["x0"], w["y0"]) for w in words[:200]]
+    rt_ok, rt_bad = pl.transform_roundtrip_ok(rt_pts, page.rect)
     return {
         "page": page.number + 1,
         "sheet": detect_sheet(text),
@@ -134,7 +138,12 @@ def preflight_page(doc, page):
         "dim_count": len(dim_labels(text)),
         "flags": text_flags(text),
         "identity": pl.page_identity(doc, page),
+        "transforms": pl.coordinate_transforms(page),
+        "transform_check": {"ok": rt_ok,
+                            "offenders": [[round(p[0], 2), round(p[1], 2)]
+                                          for p in rt_bad]},
         "word_count": len(words),
+        "content_regions": regions,
         "preflight": {
             "op_counts": stats["op_counts"],
             "segment_count": stats["segment_count"],

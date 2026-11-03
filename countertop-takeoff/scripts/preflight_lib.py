@@ -2,32 +2,45 @@
 # requires-python = ">=3.9"
 # dependencies = ["pymupdf==2.1"]
 # ///
-"""Shared drawing-pack preflight primitives (V2).
+"""Shared drawing-pack preflight primitives (V3).
 
-ONE implementation of page statistics, fingerprints, and content classes, used
-by index_pdf.py (pack QA report), extract_geometry.py (records the same values
-into the geometry JSON) and measure.py (validates job specs against them).
-Sharing the code guarantees the digests and classes recorded by different
-tools always agree.
+ONE implementation of page statistics, fingerprints, content classes and
+content REGIONS, used by index_pdf.py (pack QA report), extract_geometry.py
+(records the same values into the geometry JSON) and measure.py (validates
+job specs against them). Sharing the code guarantees the digests and classes
+recorded by different tools always agree.
 
 Coordinate convention
 ---------------------
 All bboxes/points are in DISPLAYED page space: what a renderer shows, i.e.
-page rotation applied. Helpers below transform content-space values with
-``page.rotation_matrix`` so callers never handle rotation themselves.
+page rotation applied AND the crop box as origin. Helpers below transform
+content-space values with ``page.rotation_matrix`` so callers never handle
+rotation themselves. Every tool output records the source->display transform
+(``coordinate_transforms``) and pixel images carry their displayed bbox so
+pixel-space crops can be mapped back (the round trip is verified by
+``transform_roundtrip_ok``).
 
 Text presence NEVER establishes vector suitability: a searchable raster page
 (OCR'd scan) has a full text layer and zero usable linework. Classification
 therefore weighs image coverage against flattened segment counts, and the
-result is recorded with its reasons so an auditor can re-check it.
+result is recorded with its reasons so an auditor can re-check it. Since V3,
+classification ALSO happens per content REGION inside a sheet: a pasted
+raster schedule table under a vector header must neither disappear (it is
+recorded as a raster region the agent can render and transcribe) nor
+disqualify unrelated vector geometry (regions outside the raster bbox stay
+measurable).
 """
 
 import hashlib
 import json
 
-# Classification thresholds (documented in references/method.md, section 2).
-IMAGE_COVER_VECTOR_MAX = 0.20   # <= this coverage can still be a vector page
-IMAGE_COVER_FULL = 0.60         # >= this coverage dominates the page
+# Classification thresholds, in PERCENT of page area (0-100). V2 defined
+# these as fractions (0.20/0.60) but compared them against the percent value
+# ``image_cover_pct``, so every page with < 20% image coverage looked like a
+# vector page and pages 20-60% were misclassed; the units now match the
+# values compared against them (documented in references/method.md, section 2).
+IMAGE_COVER_VECTOR_MAX = 20.0   # <= this coverage (percent) can still be a vector page
+IMAGE_COVER_FULL = 60.0         # >= this coverage (percent) dominates the page
 MIN_VECTOR_SEGMENTS = 10        # fewer flattened segments = no usable linework
 MIN_TEXT_CHARS = 200            # searchable-raster heuristic needs real text
 
@@ -70,6 +83,41 @@ def pymupdf_rect(rect):
     import pymupdf
     return pymupdf.Rect(rect)
 
+
+def coordinate_transforms(page):
+    """Record the source->display convention explicitly (V3).
+
+    ``display`` is what renderers show: crop-box origin + rotation applied.
+    Recorded per page so crop-offset surprises are visible and so pixel
+    crops (rendered in displayed space) can be mapped back to displayed
+    points 1:1 at a known zoom.
+    """
+    crop = page.cropbox
+    media = page.mediabox
+    return {
+        "space": "displayed",
+        "rotation_deg": int(page.rotation or 0),
+        "displayed_width": round(page.rect.width, 3),
+        "displayed_height": round(page.rect.height, 3),
+        "cropbox_origin": [round(crop.x0, 3), round(crop.y0, 3)],
+        "mediabox_origin": [round(media.x0, 3), round(media.y0, 3)],
+        "crop_offset_pt": [round(crop.x0 - media.x0, 3),
+                           round(crop.y0 - media.y0, 3)],
+        "transform": "displayed = content-space * page.rotation_matrix"
+                     " (crop box applied); rendered pixels at zoom Z map to"
+                     " displayed points as px / Z",
+    }
+
+
+def transform_roundtrip_ok(points, page_rect, tol_pt=1.0):
+    """Round-trip check: displayed-space points must fall inside the
+    displayed page rect (catches crop-offset / double-rotation bugs).
+    Returns (ok, offenders)."""
+    offenders = [p for p in points
+                 if not (-tol_pt <= p[0] <= page_rect.width + tol_pt
+                         and -tol_pt <= p[1] <= page_rect.height + tol_pt)]
+    return (not offenders), offenders[:4]
+
 def page_identity(doc, page):
     """Identity + metadata for one page (displayed-space sizes)."""
     disp_w, disp_h = page.rect.width, page.rect.height
@@ -99,9 +147,20 @@ def words_of_page(page):
 
 
 def image_stats(page, doc):
-    """Raster images drawn on the page: bbox (displayed), pixel size, digest."""
+    """Raster images drawn on the page: bbox (displayed), pixel size, digest.
+
+    V3 fix: ``get_image_info(xrefs=True)`` is required. Without xrefs the
+    probe showed xref 0 for every placement, so every digest was None and
+    two DIFFERENT rasters contributed the same '?' to the page fingerprint
+    (duplicate/revision detection silently blind to raster changes). With
+    xrefs we hash the actual stored pixels of each placement.
+    """
     out = []
-    for info in page.get_image_info() or []:
+    try:
+        infos = page.get_image_info(xrefs=True) or []
+    except Exception:
+        infos = page.get_image_info() or []
+    for info in infos:
         bbox = rotated_rect(page, pymupdf_rect(info["bbox"]))
         xref = info.get("xref") or 0
         digest = None
@@ -111,7 +170,8 @@ def image_stats(page, doc):
             except Exception:
                 digest = None
         out.append({"bbox": bbox, "pixel_width": info.get("width"),
-                    "pixel_height": info.get("height"), "stream_sha": digest})
+                    "pixel_height": info.get("height"),
+                    "xref": xref or None, "stream_sha": digest})
     return out
 
 
@@ -205,7 +265,8 @@ def page_fingerprint(page, images):
 
 
 def classify_page(segment_count, image_cover_pct, text_chars):
-    """Classify page content. Text never implies vector suitability."""
+    """Classify page content from PERCENT image coverage.
+    Text never implies vector suitability."""
     reasons = []
     if image_cover_pct >= IMAGE_COVER_FULL:
         if segment_count >= MIN_VECTOR_SEGMENTS:
@@ -243,3 +304,100 @@ def classify_page(segment_count, image_cover_pct, text_chars):
         reasons.append(f"little content: {segment_count} segments,"
                        f" {text_chars} chars, {image_cover_pct:.0f}% image")
     return {"class": cls, "reasons": reasons}
+
+
+def _rects_overlap(a, b, pad=0.0):
+    return not (a[2] + pad < b[0] or b[2] + pad < a[0]
+                or a[3] + pad < b[1] or b[3] + pad < a[1])
+
+
+def _point_in_rect(p, r, pad=0.0):
+    return (r[0] - pad <= p[0] <= r[2] + pad and r[1] - pad <= p[1] <= r[3] + pad)
+
+
+def content_regions(page, images, segments, words):
+    """Classify content REGIONS inside one sheet (V3).
+
+    A page can mix a pasted raster table and unrelated vector linework. The
+    page-level class alone either hides the raster (so the schedule bitmap
+    under a vector 'ROOM DISTRIBUTION' header is never read) or condemns the
+    whole sheet as hybrid (so unrelated vector geometry becomes unmeasurable).
+    Both are wrong. This splits the sheet into:
+
+      raster regions  - merged image bboxes; carry pixel digest + how many
+                        text words sit inside (few/no words under a schedule
+                        title => suspected bitmap table for vision reading)
+      vector regions  - bounding box of the segments OUTSIDE every raster
+                        region; measurable when class == 'vector'
+
+    Returns a list sorted raster-first. Region bboxes are displayed-space.
+    """
+    regions = []
+    merged = []
+    for im in images:
+        bb = im["bbox"]
+        hit = None
+        for m in merged:
+            if _rects_overlap(bb, m["bbox"], pad=2.0):
+                hit = m
+                break
+        if hit:
+            hit["bbox"] = [min(hit["bbox"][0], bb[0]), min(hit["bbox"][1], bb[1]),
+                           max(hit["bbox"][2], bb[2]), max(hit["bbox"][3], bb[3])]
+            hit["images"].append(im)
+        else:
+            merged.append({"bbox": list(bb), "images": [im]})
+    raster_boxes = []
+    for m in merged:
+        words_in = [w for w in words if _point_in_rect(
+            ((w["x0"] + w["x1"]) / 2.0, (w["y0"] + w["y1"]) / 2.0), m["bbox"])]
+        # effective resolution: best single image's pixel density over its
+        # own displayed bbox (inches = points / 72)
+        ppis = []
+        for i in m["images"]:
+            bb = i["bbox"]
+            w_in = max(0.01, (bb[2] - bb[0]) / 72.0)
+            h_in = max(0.01, (bb[3] - bb[1]) / 72.0)
+            if i.get("pixel_width") and i.get("pixel_height"):
+                ppis.append(min(i["pixel_width"] / w_in,
+                                i["pixel_height"] / h_in))
+        ppi = max(ppis) if ppis else 0.0
+        regions.append({
+            "kind": "raster", "bbox": [round(v, 2) for v in m["bbox"]],
+            "image_count": len(m["images"]),
+            "stream_shas": sorted({i.get("stream_sha") or "?"
+                                   for i in m["images"]}),
+            "words_inside": len(words_in),
+            "pixels_per_inch": round(ppi, 1),
+            "suspect_table": len(words_in) <= 2,
+            "class": "raster",
+            "note": "render a legible crop of this region and read it with"
+                    " vision; do not measure its pixels as vectors",
+        })
+        raster_boxes.append(m["bbox"])
+    outside = [s for s in segments
+               if not any(_point_in_rect(((s[0] + s[2]) / 2.0,
+                                          (s[1] + s[3]) / 2.0), rb, pad=1.0)
+                          for rb in raster_boxes)]
+    if outside:
+        xs = [s[0] for s in outside] + [s[2] for s in outside]
+        ys = [s[1] for s in outside] + [s[3] for s in outside]
+        vbbox = [round(min(xs), 2), round(min(ys), 2),
+                 round(max(xs), 2), round(max(ys), 2)]
+        inside_words = [w for w in words
+                        if not any(_point_in_rect(
+                            ((w["x0"] + w["x1"]) / 2.0,
+                             (w["y0"] + w["y1"]) / 2.0), rb)
+                            for rb in raster_boxes)]
+        regions.append({
+            "kind": "vector", "bbox": vbbox,
+            "segment_count": len(outside),
+            "words_inside": len(inside_words),
+            "class": ("vector" if len(outside) >= MIN_VECTOR_SEGMENTS
+                      else "sparse_vector"),
+            "note": ("vector linework OUTSIDE the raster region(s);"
+                     " measurable with its own calibration"
+                     if len(outside) >= MIN_VECTOR_SEGMENTS else
+                     "only stray vector marks outside the raster region(s)"),
+        })
+    return regions

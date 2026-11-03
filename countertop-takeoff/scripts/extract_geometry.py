@@ -99,20 +99,29 @@ def page_record(doc, pno):
     text = page.get_text("text") or ""
     stats = pl.drawing_stats(page)
     images = pl.image_stats(page, doc)
+    regions = pl.content_regions(page, images, raw_segs, words)
     page_area = float(page.rect.width * page.rect.height) or 1.0
     img_area = sum(max(0.0, im["bbox"][2] - im["bbox"][0])
                    * max(0.0, im["bbox"][3] - im["bbox"][1]) for im in images)
     cover_pct = min(100.0, img_area / page_area * 100.0)
     cls = pl.classify_page(stats["segment_count"], cover_pct, len(text))
+    rt_pts = [(s[0], s[1]) for s in raw_segs[:200]] \
+        + [(w["x0"], w["y0"]) for w in words[:100]]
+    rt_ok, rt_bad = pl.transform_roundtrip_ok(rt_pts, page.rect)
     return {
         "page": pno,
         "sheet": detect_sheet(text),
         "identity": pl.page_identity(doc, page),
+        "transforms": pl.coordinate_transforms(page),
+        "transform_check": {"ok": rt_ok,
+                            "offenders": [[round(p[0], 2), round(p[1], 2)]
+                                          for p in rt_bad]},
         "coordinate_space": "displayed",
         "segment_count": len(segments),
         "word_count": len(words),
         "segments": segments,
         "words": words,
+        "content_regions": regions,
         "preflight": {
             "op_counts": stats["op_counts"],
             "segment_bounds": stats["segment_bounds"],
