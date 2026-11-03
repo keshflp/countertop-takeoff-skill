@@ -234,7 +234,7 @@ Prove the toolchain works on any machine:
 ```console
 uv run examples/make_fixture.py --out build/smoke.pdf
 uv run scripts/index_pdf.py build/smoke.pdf
-uv run scripts/extract_geometry.py build/smoke.pdf --pages 2,3 --out build/smoke.geometry.json
+uv run scripts/extract_geometry.py build/smoke.pdf --pages 2,3 --out build/fixture.geometry.json
 uv run scripts/measure.py examples/fixture.jobs.json --report build/smoke_report.md --csv build/smoke.csv
 ```
 
