@@ -47,12 +47,85 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 
 BLANK = "__blank__"
 LINES_PER_PDF_PAGE = 46
+_CURRENCY_SYMBOLS = "$€£¥"
+
+
+def parse_money(v, what="unit_price"):
+    """Exact Decimal from a number or a currency-formatted string (P0.3).
+
+    Accepts plain numbers and unambiguous currency strings:
+    `$1,234.56`, `1,234.56`, `1.234,56`, `1234.56`, `-12.5`.
+    When both separators appear, the LAST one is the decimal separator.
+    Ambiguous strings (`1.234` under US/EU conventions) produce a CLEAR
+    error telling the operator to write a plain number - never a raw
+    Decimal traceback.
+    """
+    if isinstance(v, bool) or v is None:
+        raise SystemExit(f"ERROR: {what} must be a number, got {v!r}")
+    if isinstance(v, Decimal):
+        return v
+    if isinstance(v, int):
+        return Decimal(v)
+    if isinstance(v, float):
+        if v != v or v in (float("inf"), float("-inf")):
+            raise SystemExit(f"ERROR: {what} must be finite, got {v!r}")
+        return Decimal(repr(v))
+    if not isinstance(v, str):
+        raise SystemExit(f"ERROR: {what} must be a number, got"
+                         f" {type(v).__name__} {v!r}")
+    s = v.strip()
+    for sym in _CURRENCY_SYMBOLS:
+        s = s.replace(sym, "")
+    s = s.strip()
+    neg = s.startswith("-")
+    if neg or s.startswith("+"):
+        s = s[1:].strip()
+    if not re.fullmatch(r"[\d.,]+", s):
+        raise SystemExit(
+            f"ERROR: {what} {v!r} is not a parseable amount - use a plain"
+            " number (optionally currency-formatted like '$1,234.56')")
+    if "," in s and "." in s:
+        dec_sep = "." if s.rfind(".") > s.rfind(",") else ","
+        thou_sep = "," if dec_sep == "." else "."
+        s = s.replace(thou_sep, "").replace(dec_sep, ".")
+    elif "," in s:
+        if re.search(r",\d{1,2}$", s):
+            s = s.replace(".", "").replace(",", ".")   # decimal comma
+        elif re.search(r",\d{3}(\D|$)", s):
+            s = s.replace(",", "")                    # thousands groups
+        else:
+            raise SystemExit(
+                f"ERROR: {what} {v!r} is ambiguous - write a plain number"
+                " like 1234.56")
+    elif "." in s and re.search(r"\.\d{3}$", s):
+        raise SystemExit(
+            f"ERROR: {what} {v!r} is ambiguous (decimal point or thousands"
+            " separator?) - write a plain number like 1234.56 or 1234")
+    if not re.fullmatch(r"\d+(\.\d+)?", s):
+        raise SystemExit(
+            f"ERROR: {what} {v!r} is not a parseable amount - use a plain"
+            " number like 1234.56")
+    d = Decimal(s)
+    return -d if neg else d
+
+
+def rate_amount(r, what):
+    """Parse a rate's numeric amount; negatives and garbage refuse with a
+    useful diagnostic (P0.3), never a raw Decimal traceback."""
+    code = r.get("item_code")
+    d = parse_money(r.get(what), what=f"rates[{code}] {what}")
+    if d < 0:
+        raise SystemExit(
+            f"ERROR: rates[{code}] {what} is negative ({d}) - prices cannot"
+            " be negative; fix the profile")
+    return d
 
 
 def sha256_file(path):
@@ -90,19 +163,51 @@ def load_profile(path):
         raise SystemExit(f"ERROR: profile {path} carries no rates[] - the"
                          " v4 estimate prices EA x rate (see"
                          " references/company-profile.md)")
-    currency = profile.get("currency")
     for i, r in enumerate(rates):
+        if not isinstance(r, dict):
+            raise SystemExit(f"ERROR: profile rates[{i}] must be an object")
         for k in ("item_code", "match", "uom", "unit_price"):
             if k not in r:
                 raise SystemExit(f"ERROR: profile rates[{i}] missing {k!r}")
         if r["uom"] != "EA":
             raise SystemExit(f"ERROR: profile rates[{i}] uom must be 'EA'")
-        cur = r.get("currency")
-        if cur and currency and cur != currency:
-            raise SystemExit(f"ERROR: mixed currencies in profile"
-                             f" (rates[{i}] {cur!r} vs profile {currency!r})"
-                             " - currency consistency is enforced")
+        rate_amount(r, "unit_price")
+    currency = effective_currency(profile, rates, path)
     return profile, rates, currency
+
+
+def effective_currency(profile, rates, path):
+    """ONE effective currency across all rates (P0.3): a rate without a
+    currency inherits the profile currency; when the profile currency is
+    absent, every rate must declare the SAME currency explicitly - USD+EUR
+    mixing refuses with the offending codes named."""
+    profile_currency = profile.get("currency")
+    if profile_currency is not None and \
+            (not isinstance(profile_currency, str)
+             or not profile_currency.strip()):
+        raise SystemExit(f"ERROR: profile {path}: currency must be a"
+                         " non-empty string when present")
+    resolved = {}
+    for i, r in enumerate(rates):
+        cur = r.get("currency") or profile_currency
+        if cur is None:
+            raise SystemExit(
+                f"ERROR: rates[{i}] ({r.get('item_code')}) declares no"
+                " currency and the profile has none - one effective currency"
+                " is required (declare profile.currency or rate currencies)")
+        resolved.setdefault(cur, []).append(str(r.get("item_code")))
+    if len(resolved) > 1:
+        detail = "; ".join(f"{cur}: {codes}" for cur, codes in
+                           sorted(resolved.items()))
+        raise SystemExit(
+            "ERROR: mixed currencies in the profile refuse - ONE effective"
+            f" currency is required ({detail})")
+    if profile_currency is not None and resolved \
+            and next(iter(resolved)) != profile_currency:
+        raise SystemExit(
+            f"ERROR: a rate currency disagrees with the profile currency"
+            f" {profile_currency!r} - currency consistency is enforced")
+    return next(iter(resolved)) if resolved else profile_currency
 
 
 def rate_matches(rate, assembly):
@@ -349,8 +454,28 @@ def render_pdf(text, out_path, title="Countertop Estimate"):
 
 
 
+def reject_aliases(results_path, profile_path, out_md, out_json, out_pdf):
+    """P0.1: an estimate output may never alias the evidence it reads -
+    the `--json build/results.json --estimate-profile X` combo used to
+    make the estimate overwrite its own results.json."""
+    protected = {"results": os.path.abspath(results_path),
+                 "rate profile": os.path.abspath(profile_path)}
+    for label, p in (("out-md", out_md), ("out-json", out_json),
+                     ("out-pdf", out_pdf)):
+        if not p:
+            continue
+        for what, q in protected.items():
+            if os.path.abspath(p) == q:
+                raise SystemExit(
+                    f"ERROR: {label} {p!r} aliases the {what} - the"
+                    " estimate must never overwrite its own evidence; pass"
+                    " distinct output paths (measure.py --estimate-* flags"
+                    " de-alias automatically)")
+
+
 def build_estimate(results_path, profile_path, out_md=None, out_json=None,
                    out_pdf=None):
+    reject_aliases(results_path, profile_path, out_md, out_json, out_pdf)
     results = json.load(open(results_path, encoding="utf-8"))
     profile, rates, currency = load_profile(profile_path)
     lines, callouts, exclusions = build_lines(results, rates)

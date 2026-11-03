@@ -57,6 +57,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.dirname(HERE)
@@ -168,6 +169,81 @@ def callout_text(res):
                       for c in ((res or {}).get("callouts") or []))
 
 
+# --------------------------------------------- P0.1 publish safety
+def publish_safety_tests(rate_profile):
+    # (1) `--json results.json --estimate-profile` must NOT overwrite the
+    #     evidence package with the estimate (V5 regression)
+    spec = orig_spec()
+    jobs = os.path.join(BUILD, "v5_alias.jobs.json")
+    res = os.path.join(BUILD, "v5_alias.json")
+    json.dump(spec, open(jobs, "w", encoding="utf-8"), indent=1)
+    rc = measure.main([jobs, "--json", res, "--estimate-profile",
+                       rate_profile])
+    payload = json.load(open(res, encoding="utf-8"))
+    est = json.load(open(os.path.join(BUILD, "estimate.json"),
+                         encoding="utf-8"))
+    check("publish: --json results.json + --estimate-profile keeps the"
+          " results intact (estimate on a distinct path)",
+          rc == 0 and "run_status" in payload
+          and est.get("schema").endswith("estimate"),
+          f"rc={rc} results_schema={payload.get('schema')}")
+    # (2) estimate.py refuses an explicit alias outright
+    try:
+        estimate_mod.build_estimate(res, rate_profile, out_json=res)
+        refused = False
+    except SystemExit as exc:
+        refused = "aliases" in str(exc)
+    check("publish: estimate.py rejects input/output path aliasing",
+          refused, "no refusal")
+
+    # (3) stale-output handling covers results.json + report + estimates;
+    #     an early integrity stop writes a CURRENT stopped diagnostic
+    csvp = os.path.join(BUILD, "v5_stale.csv")
+    repp = os.path.join(BUILD, "v5_stale.report.md")
+    estj = os.path.join(BUILD, "v5_stale.estimate.json")
+    rc = measure.main([jobs, "--json", res, "--report", repp,
+                       "--csv", csvp, "--estimate-profile", rate_profile,
+                       "--estimate-json", estj])
+    check("publish: good run wrote all artifacts", rc == 0
+          and os.path.exists(repp) and os.path.exists(csvp)
+          and os.path.exists(estj) and os.path.exists(res))
+    t_stop = time.time()
+    bad = json.load(open(jobs, encoding="utf-8"))
+    if "sources" in bad:
+        bad["sources"][0]["sha256"] = "0" * 64
+    else:
+        bad["source"]["sha256"] = "0" * 64
+    json.dump(bad, open(jobs, "w", encoding="utf-8"), indent=1)
+    try:
+        measure.main([jobs, "--json", res, "--report", repp,
+                      "--csv", csvp, "--estimate-profile", rate_profile,
+                      "--estimate-json", estj])
+        rc2 = 0
+    except TakeoffError:
+        rc2 = 2
+    stale = [f for f in os.listdir(BUILD) if f.startswith("v5_stale")
+             and ".stale-" in f]
+    diag = json.load(open(res, encoding="utf-8"))
+    check("publish: early integrity stop quarantines csv/report/estimate"
+          " AND writes a CURRENT stopped diagnostic over results.json",
+          rc2 == 2 and not os.path.exists(csvp)
+          and not os.path.exists(repp) and not os.path.exists(estj)
+          and len(stale) >= 3
+          and diag.get("run_status") == "stopped"
+          and diag.get("stopped_early") is True
+          and os.path.getmtime(res) >= t_stop - 1.0,
+          f"rc={rc2} stale={stale} status={diag.get('run_status')}")
+    check("publish: the stopped diagnostic names the stop reason",
+          "hash mismatch" in (diag.get("stopped_reason") or ""),
+          str(diag.get("stopped_reason"))[:120])
+    # the quarantined results file carries the superseded marker
+    stale_res = [f for f in os.listdir(BUILD)
+                 if f.startswith("v5_alias.json.stale-")]
+    check("publish: the superseded results file is renamed with a stale"
+          " marker (never current-looking)",
+          len(stale_res) == 1, str(stale_res))
+
+
 def main():
     global ORIG_PDFS, ORIG_GEO
     shutil.rmtree(BUILD, ignore_errors=True)
@@ -175,7 +251,9 @@ def main():
     build_fixtures()
     ORIG_PDFS = {"orig": os.path.join(BUILD, "orig.pdf")}
     ORIG_GEO = {"orig": os.path.join(BUILD, "orig.geometry.json")}
+    rate_profile = os.path.join(HERE, "example.rate-profile.json")
     intake_tests_v5()
+    publish_safety_tests(rate_profile)
     print()
     failed = [r for r in RESULTS if not r[1]]
     for name, ok, detail in RESULTS:

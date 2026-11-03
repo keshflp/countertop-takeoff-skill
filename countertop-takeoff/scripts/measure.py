@@ -27,6 +27,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import audit as audit_mod  # noqa: E402
@@ -191,6 +192,53 @@ def audit_intake_manifest(spec, audit_obj, base_dir):
                   f"manifest {os.path.basename(path)}:"
                   f" {len(manifest.get('sources') or [])} source(s)"
                   " requested, disclosed above when not resolved")
+
+
+def estimate_output_paths(args):
+    """P0.1: the estimate's output paths are EXPLICIT and can never alias
+    the run's own evidence (results.json/report/CSVs). Priority: the
+    explicit --estimate-* flags, then an `<stem>.estimate` derived from the
+    report/json location - and when that stem would alias an input/output
+    of THIS run, fall back to `<dir>/estimate.*`."""
+    if getattr(args, "estimate_md", None) or \
+            getattr(args, "estimate_json", None) or \
+            getattr(args, "estimate_pdf", None):
+        base = (getattr(args, "estimate_json", None)
+                or getattr(args, "estimate_md", None)
+                or getattr(args, "estimate_pdf", None))
+        stem = os.path.splitext(base)[0]
+    else:
+        base = args.report or args.json_path or "build/estimate"
+        stem = os.path.splitext(base)[0].replace("report", "estimate")
+    taken = {os.path.normcase(os.path.abspath(p)) for p in
+             (args.report, args.json_path, args.csv_path, args.piece_csv,
+              args.assembly_csv) if p}
+    outs = {"md": stem + ".md", "json": stem + ".json",
+            "pdf": stem + ".pdf"}
+    if any(os.path.normcase(os.path.abspath(p)) in taken
+           for p in outs.values()):
+        d = os.path.dirname(args.json_path or args.report or "build")
+        stem = os.path.join(d or ".", "estimate")
+        outs = {"md": stem + ".md", "json": stem + ".json",
+                "pdf": stem + ".pdf"}
+    return outs
+
+
+def stop_diagnostic_payload(exc_text):
+    """A CURRENT stopped diagnostic (P0.1): written over a stale results
+    path on an early stop so old artifacts never look current."""
+    return {
+        "schema": "countertop-takeoff/v3 results",
+        "run_status": "stopped",
+        "status": "stopped",
+        "stopped_early": True,
+        "stopped_reason": str(exc_text)[:2000],
+        "totals": {"project_sf": None, "unit_count": None},
+        "regions": [], "callouts": [],
+        "runtime_versions": report_out.runtime_versions(),
+        "note": "early stop: the previous file at this path was quarantined"
+                " as stale; no quantities were produced by this run",
+    }
 
 
 def run_pipeline(args):
@@ -413,15 +461,13 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
         print(f"wrote {args.assembly_csv} (assembly BoQ:"
               f" {len(assembly_rows)} row(s))")
     if args.estimate_profile:
-        # P1.1: assembly-EA estimate from the SAME resolved records
+        # P1.1: assembly-EA estimate from the SAME resolved records; P0.1:
+        # explicit, de-aliased output paths
+        outs = estimate_output_paths(args)
         import estimate as estimate_mod
-        base = args.report or args.json_path or "build/estimate"
-        stem = os.path.splitext(base)[0].replace("report", "estimate")
         payload = estimate_mod.build_estimate(
             args.json_path or args.report, args.estimate_profile,
-            out_md=stem + ".md",
-            out_json=stem + ".json",
-            out_pdf=stem + ".pdf")
+            out_md=outs["md"], out_json=outs["json"], out_pdf=outs["pdf"])
         print(f"estimate grand total:"
               + (f" {payload['grand_total']}"
                  if payload["grand_total"] is not None else " BLANK"
@@ -451,33 +497,70 @@ def parse_args(argv=None):
                     help="company profile with rates[] (P1.1): after a"
                          " successful measure, also build the assembly-EA"
                          " estimate next to the report")
+    ap.add_argument("--estimate-md", dest="estimate_md", default=None,
+                    help="explicit estimate.md output path (P0.1: defaults"
+                         " next to the report/json, never aliasing them)")
+    ap.add_argument("--estimate-json", dest="estimate_json", default=None,
+                    help="explicit estimate.json output path (P0.1)")
+    ap.add_argument("--estimate-pdf", dest="estimate_pdf", default=None,
+                    help="explicit estimate.pdf output path (P0.1)")
     return ap.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
+    t0 = time.time()
 
-    def quarantine_exports():
-        # ANY stop must not leave an older export looking current.
+    def quarantine_exports(write_stopped=False, exc_text=""):
+        # ANY stop must not leave an OLDER artifact looking current (P0.1:
+        # this covers results.json, the report, the estimates and the
+        # receipts-bearing files - not just the CSVs). An early stop also
+        # writes a CURRENT stopped diagnostic over the results path.
         when = report_out.runtime_versions()["generated_utc"]
-        for path in (args.csv_path, getattr(args, "piece_csv", None),
-                     getattr(args, "assembly_csv", None)):
+        outs = estimate_output_paths(args) if args.estimate_profile else {}
+        paths = [args.csv_path, getattr(args, "piece_csv", None),
+                 getattr(args, "assembly_csv", None), args.report,
+                 args.json_path, outs.get("md"), outs.get("json"),
+                 outs.get("pdf")]
+        quarantined = []
+        for path in paths:
             if path and os.path.exists(path):
+                if os.path.getmtime(path) >= t0:
+                    continue  # written by THIS run - it IS the current truth
                 stale = report_out.quarantine_stale_export(path, when)
                 if stale:
-                    print(f"quarantined stale export: {stale}", file=sys.stderr)
+                    quarantined.append(stale)
+                    print(f"quarantined stale artifact: {stale}",
+                          file=sys.stderr)
+        if write_stopped and args.json_path \
+                and not os.path.exists(args.json_path):
+            # the stale file (if any) was renamed away above; a fresh run
+            # that already wrote its own stopped results keeps them
+            report_out.write_json(args.json_path,
+                                  stop_diagnostic_payload(exc_text))
+            print(f"wrote CURRENT stopped diagnostic: {args.json_path}",
+                  file=sys.stderr)
+        return quarantined
 
     try:
         return run_pipeline(args)
-    except TakeoffError:
-        quarantine_exports()
+    except TakeoffError as exc:
+        # A diagnostic written by THIS run (the normal stopped path) is
+        # current; anything older is superseded and must be replaced.
+        stale_json = (args.json_path and os.path.exists(args.json_path)
+                      and os.path.getmtime(args.json_path) < t0)
+        quarantine_exports(write_stopped=(stale_json
+                                          or not (args.json_path and
+                                                  os.path.exists(
+                                                      args.json_path))),
+                           exc_text=exc)
         raise
     except Exception as exc:  # noqa: BLE001 - quarantine survives ANY crash
         quarantine_exports()
         import traceback
         traceback.print_exc()
         raise TakeoffError(
-            f"unexpected pipeline failure (exports quarantined): {exc!r}") \
+            f"unexpected pipeline failure (artifacts quarantined): {exc!r}") \
             from exc
 
 
