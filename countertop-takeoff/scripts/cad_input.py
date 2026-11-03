@@ -2,12 +2,28 @@
 # requires-python = ">=3.9"
 # dependencies = ["ezdxf==1.4.2"]
 # ///
-"""Supplied native-CAD input: DXF adapter (V3 measurement route 2).
+"""Supplied native-CAD input: DXF adapter (V4 measurement route 2).
 
 Route order (P0.6): (1) vector PDF geometry, (2) supplied native CAD via
 THIS adapter, (3) calibrated image-space measurement, (4) optional CAD-MCP
 escalation - see references/cad-context.md (documentation only, never a
 runtime dependency).
+
+V4 correctness fixes (P0.4):
+  - metre conversion FIXED: 1 m = 1/0.3048 ft (was 3.048 - a 25 SF
+    rectangle computed 0.25 SF)
+  - $INSUNITS table corrected: 8 = MICROINCHES (not microns); mils, miles,
+    km, microns, decimeters, US survey feet added
+  - MINSERT rectangular arrays are EXPANDED row x col (ezdxf's
+    virtual_entities() yields only the first insert); arrays above the
+    expansion cap are skipped with a named callout
+  - layer-0 children inherit the INSERT's EFFECTIVE layer; layer filtering
+    happens AFTER block expansion, never before
+  - polyline bulges become disclosed arc approximations: chords are added
+    per curve so the AREA error stays <= 0.5% of the curve's own sector
+    (the tolerance is recorded in the payload and disclosed as a callout)
+  - entities with non-standard OCS transforms (extrusion != +Z) are named
+    local exclusions (op + handle recorded, never silently measured)
 
 DWG is NOT directly supported by this skill. Convert DWG -> DXF with the
 free ODA File Converter (https://www.opendesign.com) first, then run this
@@ -36,22 +52,41 @@ Usage:
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+ARC_AREA_TOL = 0.005      # max chord-approximation area error per curve (0.5%)
+ARC_MIN_SEGMENTS = 8      # never fewer than 8 chords per curve
+ARC_MAX_SEGMENTS = 4096   # subdivision cap (degenerate arcs)
+MINSERT_CAP = 10000       # max expanded cells per MINSERT array
+# $INSUNITS -> drawing units per REAL FOOT. 8 is MICROINCHES (1e-6 in),
+# NOT microns; 13 is microns. 6 (metres) is 1/0.3048 ft per m - the V3
+# value 3.048 was decimetres per foot and made every metric file 10x off.
 INSUNITS_PER_FT = {
-    1: 12.0,            # inches
-    2: 1.0,             # feet
-    4: 304.8,           # mm
-    5: 30.48,           # cm
-    6: 3.048,           # m
-    8: 1000.0 / 3.048,  # microns (rare) -> treat as mm*1000
+    1: 12.0,                    # inches
+    2: 1.0,                     # feet
+    3: 5280.0,                  # miles
+    4: 304.8,                   # millimeters
+    5: 30.48,                   # centimeters
+    6: 1.0 / 0.3048,            # meters  (3.280839895... ft per m)
+    7: 1000.0 / 0.3048,         # kilometers
+    8: 12_000_000.0,            # MICROINCHES (12 in x 1e6)
+    9: 12_000.0,                # mils (0.001 in)
+    10: 36.0,                   # yards
+    13: 304_800.0,              # microns
+    14: 3.048,                  # decimeters
+    20: 1200.0 / 3937.0,        # US survey feet
 }
-DECLARED_PER_FT = {"in": 12.0, "ft": 1.0, "mm": 304.8, "cm": 30.48, "m": 3.048}
-ARC_SEGMENTS = 16          # chords per arc/bitmap curve
+INSUNITS_NAMES = {1: "in", 2: "ft", 3: "mile", 4: "mm", 5: "cm", 6: "m",
+                  7: "km", 8: "microinch", 9: "mil", 10: "yd",
+                  13: "micron", 14: "dm",
+                  20: "us_survey_ft"}
+DECLARED_PER_FT = {"in": 12.0, "ft": 1.0, "mm": 304.8, "cm": 30.48,
+                   "m": 1.0 / 0.3048}
 UNSUPPORTED_OPS = {"HATCH", "DIMENSION", "LEADER", "MLINE", "3DSOLID",
                    "REGION", "BODY", "IMAGE", "WIPEOUT", "OLE2FRAME"}
 
@@ -75,8 +110,7 @@ def resolve_units(doc, declared):
     except Exception:
         insunits = 0
     if insunits in INSUNITS_PER_FT:
-        name = {1: "in", 2: "ft", 4: "mm", 5: "cm", 6: "m",
-                8: "micron"}.get(insunits, f"insunits-{insunits}")
+        name = INSUNITS_NAMES.get(insunits, f"insunits-{insunits}")
         return name, INSUNITS_PER_FT[insunits], True, None
     if declared:
         if declared not in DECLARED_PER_FT:
@@ -96,66 +130,140 @@ def resolve_units(doc, declared):
     sys.exit(2)
 
 
-def flatten_entity(ent, segs, texts, unsupported, units_per_ft):
+def arc_chord_count(angle_rad, tol=ARC_AREA_TOL):
+    """Minimum chord count so the chord polygon's AREA error vs the true
+    arc sector stays <= tol (relative). Solved from the exact deficit
+    n*(theta/n - sin(theta/n)) / theta; capped for degenerate input."""
+    theta = abs(float(angle_rad))
+    if theta <= 1e-9:
+        return ARC_MIN_SEGMENTS
+    n = ARC_MIN_SEGMENTS
+    while n < ARC_MAX_SEGMENTS:
+        seg = theta / n
+        deficit = n * (seg - math.sin(seg)) / theta
+        if deficit <= tol:
+            return n
+        n += 1
+    return ARC_MAX_SEGMENTS
+
+
+def arc_segments(center, radius, a0, a1, segs, emit_meta, ccw=True):
+    """Emit chords for an arc from a0 to a1 (radians). CCW arcs run a0->a1;
+    CW arcs run a1->a0 (same chord ring, reversed direction)."""
+    sweep = (a1 - a0) % (2.0 * math.pi) if ccw else -((a0 - a1) % (2.0 * math.pi))
+    n = arc_chord_count(abs(sweep) if abs(sweep) > 1e-9 else 2.0 * math.pi)
+    prev = None
+    steps = max(2, n)
+    for k in range(steps + 1):
+        a = a0 + sweep * k / steps
+        p = (center[0] + radius * math.cos(a),
+             center[1] + radius * math.sin(a))
+        if prev is not None:
+            emit_meta(prev, p)
+        prev = p
+    return n
+
+
+def effective_layer_of(ent, parent_layer):
+    """Block children drawn on layer '0' inherit the INSERT's effective
+    layer (P0.4); anything else keeps its own layer."""
+    layer = ent.dxf.layer if ent.dxf.hasattr("layer") else "?"
+    if layer.strip().upper() == "0":
+        return parent_layer
+    return layer
+
+
+def _has_bad_extrusion(ent):
+    """True when the entity carries a non-standard OCS extrusion (not
+    +Z): measuring it as flat 2D geometry would be a silent transform."""
+    try:
+        if not ent.dxf.hasattr("extrusion"):
+            return False
+        e = ent.dxf.extrusion
+        vec = (float(e[0]), float(e[1]), float(e[2]))
+        return abs(vec[0]) > 1e-9 or abs(vec[1]) > 1e-9 or vec[2] < 0.999
+    except Exception:
+        return False
+
+
+def flatten_entity(ent, segs, texts, unsupported, units_per_ft,
+                   parent_layer="0", offset=(0.0, 0.0), arc_stats=None):
     """One entity -> segments (drawing units) / word records. Block inserts
-    are expanded via virtual_entities so transforms apply. Entity handles
-    and layers are recorded on every segment."""
+    are expanded via virtual_entities so transforms apply; MINSERT arrays
+    are expanded row x col with the array offsets rotated onto the insert's
+    axes. Segments carry their EFFECTIVE layer (layer-0 children inherit
+    the insert's layer) and an optional array-cell offset."""
     op = ent.dxftype()
     handle = ent.dxf.handle if ent.dxf.hasattr("handle") else "?"
-    layer = ent.dxf.layer if ent.dxf.hasattr("layer") else "?"
+    layer = effective_layer_of(ent, parent_layer)
 
     def emit(p1, p2):
-        segs.append({"x0": round(p1[0], 6), "y0": round(p1[1], 6),
-                     "x1": round(p2[0], 6), "y1": round(p2[1], 6),
+        segs.append({"x0": round(p1[0] + offset[0], 6),
+                     "y0": round(p1[1] + offset[1], 6),
+                     "x1": round(p2[0] + offset[0], 6),
+                     "y1": round(p2[1] + offset[1], 6),
                      "layer": layer, "handle": handle})
 
+    if _has_bad_extrusion(ent) and op not in ("INSERT",):
+        unsupported.append({"op": op, "handle": handle,
+                            "layer": layer,
+                            "reason": "non-standard OCS extrusion (transform)"
+                                     " not measured - named local exclusion"})
+        return
     if op == "LINE":
         emit((ent.dxf.start.x, ent.dxf.start.y),
              (ent.dxf.end.x, ent.dxf.end.y))
     elif op in ("LWPOLYLINE", "POLYLINE"):
+        bulged = False
+        if op == "LWPOLYLINE":
+            try:
+                bulged = any(abs(float(p[2])) > 1e-12
+                             for p in ent.get_points("xyb"))
+            except Exception:
+                bulged = False
+        if bulged:
+            # P0.4: bulged vertices are ARCS. ezdxf's virtual_entities()
+            # yields them as LINE/ARC entities - flatten each arc with the
+            # disclosed 0.5%-area-error chord tolerance.
+            try:
+                for sub in ent.virtual_entities():
+                    if sub.dxftype() == "LINE":
+                        emit((sub.dxf.start.x, sub.dxf.start.y),
+                             (sub.dxf.end.x, sub.dxf.end.y))
+                    elif sub.dxftype() == "ARC":
+                        _emit_arc(sub, emit, arc_stats)
+            except Exception as exc:
+                unsupported.append({"op": op, "handle": handle,
+                                    "layer": layer,
+                                    "reason": f"bulge expansion failed: {exc}"})
+            return
         try:
             pts = [tuple(p)[:2] for p in ent.vertices()] if op == "LWPOLYLINE" \
                 else [tuple(v.dxf.location)[:2] for v in ent.vertices]
         except Exception:
-            unsupported.append({"op": op, "handle": handle,
+            unsupported.append({"op": op, "handle": handle, "layer": layer,
                                 "reason": "could not read vertices"})
             return
         closed = bool(getattr(ent, "closed", False)) or op == "POLYLINE" \
             and ent.dxf.hasattr("flags") and (ent.dxf.flags & 1)
         n = len(pts)
         if n < 2:
-            unsupported.append({"op": op, "handle": handle,
+            unsupported.append({"op": op, "handle": handle, "layer": layer,
                                 "reason": "fewer than 2 vertices"})
             return
         last = n if closed else n - 1
         for i in range(last):
             emit(pts[i], pts[(i + 1) % n])
     elif op == "ARC":
-        import math
-        c = (ent.dxf.center.x, ent.dxf.center.y)
-        r = ent.dxf.radius
-        a0 = math.radians(ent.dxf.start_angle)
-        a1 = math.radians(ent.dxf.end_angle)
-        if a1 <= a0:
-            a1 += 2 * math.pi
-        prev = None
-        for k in range(ARC_SEGMENTS + 1):
-            a = a0 + (a1 - a0) * k / ARC_SEGMENTS
-            p = (c[0] + r * math.cos(a), c[1] + r * math.sin(a))
-            if prev is not None:
-                emit(prev, p)
-            prev = p
+        _emit_arc(ent, emit, arc_stats)
     elif op == "CIRCLE":
-        import math
         c = (ent.dxf.center.x, ent.dxf.center.y)
         r = ent.dxf.radius
-        prev = None
-        for k in range(ARC_SEGMENTS + 1):
-            a = 2 * math.pi * k / ARC_SEGMENTS
-            p = (c[0] + r * math.cos(a), c[1] + r * math.sin(a))
-            if prev is not None:
-                emit(prev, p)
-            prev = p
+        used = arc_segments(c, r, 0.0, 2.0 * math.pi, None, emit)
+        if arc_stats is not None:
+            arc_stats.append({"op": "CIRCLE", "handle": handle,
+                              "chords": used,
+                              "area_error_pct": ARC_AREA_TOL * 100.0})
     elif op in ("TEXT", "MTEXT"):
         try:
             if op == "TEXT":
@@ -179,12 +287,41 @@ def flatten_entity(ent, segs, texts, unsupported, units_per_ft):
             unsupported.append({"op": op, "handle": handle,
                                 "reason": "could not read text"})
     elif op == "INSERT":
+        # P0.4: expand MINSERT rectangular arrays row x col. ezdxf's
+        # virtual_entities() yields only ONE cell; the array offsets are
+        # applied here, rotated onto the insert's own axes. Skipped arrays
+        # (cap) and failed expansions become named callouts.
         try:
-            for virtual in ent.virtual_entities():
-                flatten_entity(virtual, segs, texts, unsupported, units_per_ft)
-        except Exception as exc:
-            unsupported.append({"op": op, "handle": handle,
-                                "reason": f"block expansion failed: {exc}"})
+            rows = max(1, int(ent.dxf.get("row_count", 1) or 1))
+            cols = max(1, int(ent.dxf.get("column_count", 1) or 1))
+            rspace = float(ent.dxf.get("row_spacing", 0.0) or 0.0)
+            cspace = float(ent.dxf.get("column_spacing", 0.0) or 0.0)
+            rot = math.radians(float(ent.dxf.get("rotation", 0.0) or 0.0))
+        except Exception:
+            rows, cols, rspace, cspace, rot = 1, 1, 0.0, 0.0, 0.0
+        cells = rows * cols
+        if cells > MINSERT_CAP:
+            unsupported.append({"op": "MINSERT", "handle": handle,
+                                "layer": layer,
+                                "reason": f"array {rows}x{cols} above the"
+                                          f" expansion cap ({MINSERT_CAP})"
+                                          " - skipped, named exclusion"})
+            return
+        cos_r, sin_r = math.cos(rot), math.sin(rot)
+        for r in range(rows):
+            for c in range(cols):
+                dx, dy = c * cspace, r * rspace
+                off = (dx * cos_r - dy * sin_r, dx * sin_r + dy * cos_r)
+                try:
+                    for virtual in ent.virtual_entities():
+                        flatten_entity(virtual, segs, texts, unsupported,
+                                       units_per_ft, parent_layer=layer,
+                                       offset=off, arc_stats=arc_stats)
+                except Exception as exc:
+                    unsupported.append({"op": "MINSERT", "handle": handle,
+                                        "layer": layer,
+                                        "reason": f"block expansion failed:"
+                                                  f" {exc}"})
     elif op == "SPLINE":
         try:
             prev = None
@@ -214,6 +351,23 @@ def flatten_entity(ent, segs, texts, unsupported, units_per_ft):
     else:
         unsupported.append({"op": op, "handle": handle,
                             "reason": "unhandled entity type"})
+
+
+def _emit_arc(arc_ent, emit, arc_stats):
+    """Flatten one ARC entity with the disclosed 0.5% chord tolerance.
+    DXF arcs run CCW from start_angle to end_angle (end may wrap)."""
+    c = (arc_ent.dxf.center.x, arc_ent.dxf.center.y)
+    r = arc_ent.dxf.radius
+    a0 = math.radians(arc_ent.dxf.start_angle)
+    a1 = math.radians(arc_ent.dxf.end_angle)
+    if abs((a1 - a0) % (2.0 * math.pi)) < 1e-12:
+        a1 = a0 + 2.0 * math.pi  # full circle encoded as 0..360
+    used = arc_segments(c, r, a0, a1, None, emit, ccw=True)
+    if arc_stats is not None:
+        arc_stats.append({"op": "ARC", "handle": arc_ent.dxf.handle
+                          if arc_ent.dxf.hasattr("handle") else "?",
+                          "chords": used,
+                          "area_error_pct": ARC_AREA_TOL * 100.0})
 
 
 def main(argv=None):
@@ -246,12 +400,22 @@ def main(argv=None):
         wanted_layers = {lnorm.strip().upper()
                          for lnorm in args.layers.split(",") if lnorm.strip()}
     msp = doc.modelspace()
-    segs, texts, unsupported = [], [], []
+    all_segs, all_words, unsupported, arc_stats = [], [], [], []
     for ent in msp:
-        if wanted_layers is not None and \
-                ent.dxf.layer.upper() not in wanted_layers:
-            continue
-        flatten_entity(ent, segs, texts, unsupported, units_per_ft)
+        # P0.4: NO layer filtering here - block children on layer '0'
+        # inherit the insert's effective layer, so filtering happens
+        # AFTER expansion on the effective layer recorded per segment.
+        flatten_entity(ent, all_segs, all_words, unsupported, units_per_ft,
+                       arc_stats=arc_stats)
+    if wanted_layers is not None:
+        segs = [s for s in all_segs if s["layer"].strip().upper()
+                in wanted_layers]
+        texts = [w for w in all_words if w["layer"].strip().upper()
+                 in wanted_layers]
+        dropped = len(all_segs) - len(segs)
+    else:
+        segs, texts = all_segs, all_words
+        dropped = 0
     segments = [dict(s, id=i, path=i, op="l", w=0.0)
                 for i, s in enumerate(segs)]
     words = [dict(w, id=i) for i, w in enumerate(texts)]
@@ -273,6 +437,26 @@ def main(argv=None):
                       " (handles recorded; the drawing's measurable"
                       " linework is unaffected)",
             "blank_fields": ["geometry of unsupported entities"],
+            "source": {"pages": [1]}})
+    if arc_stats:
+        # P0.4: curved entities are chord approximations - the tolerance
+        # is DISCLOSED, not hidden (area error <= 0.5% per curve).
+        callouts.append({
+            "scope": "cad arcs",
+            "reason": f"{len(arc_stats)} curved entit(y/ies) approximated by"
+                      f" chords; chord count solved per curve for area error"
+                      f" <= {ARC_AREA_TOL * 100:.1f}% of the curve's own"
+                      " sector (tolerance recorded in the payload)",
+            "blank_fields": [],
+            "source": {"pages": [1]}})
+    if dropped:
+        callouts.append({
+            "scope": "cad layers",
+            "reason": f"{dropped} expanded segment(s) on layers outside"
+                      f" {sorted(wanted_layers)} excluded AFTER block"
+                      " expansion (layer-0 children resolved to their"
+                      " insert's effective layer first)",
+            "blank_fields": [],
             "source": {"pages": [1]}})
     payload = {
         "pdf": args.dxf,
@@ -324,6 +508,12 @@ def main(argv=None):
         }],
         "callouts": callouts,
         "unsupported_entities": unsupported,
+        "arc_approximation": {
+            "tolerance": f"area error <= {ARC_AREA_TOL * 100:.1f}% per"
+                         " curved entity (chord count solved from the exact"
+                         " polygon deficit)",
+            "curves": arc_stats,
+        } if arc_stats else None,
     }
     out = args.out or os.path.splitext(args.dxf)[0] + ".cad.json"
     out_dir = os.path.dirname(out)

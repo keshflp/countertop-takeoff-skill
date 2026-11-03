@@ -31,20 +31,21 @@ RECHECK_TOLERANCE_PCT = 2.0
 def validate_source_and_geometry(spec, geometry_map):
     """The frozen sources: each source file on disk and its geometry
     payload must both carry the declared digest (integrity mismatch = one
-    of the three catastrophic stops)."""
+    of the three catastrophic stops). V4: CAD and image sources are
+    re-hashed TOO - a moved/edited DXF must never silently produce results
+    from cached geometry (P0.4)."""
     for src in spec["_sources"]:
         want = src["sha256"]
         path = src["path"]
-        if src["kind"] == "pdf" and not os.path.exists(path):
+        if not os.path.exists(path):
             raise SpecError(f"source file not found: {path}")
-        if src["kind"] == "pdf":
-            actual = pl.file_sha256(path)
-            if actual != want:
-                raise SpecError(
-                    f"source file hash mismatch ({src['source_id']}):"
-                    f" approved {want[:16]}..., on disk {actual[:16]}... - the"
-                    " scope is frozen to digests; re-run intake/preflight if"
-                    " the file changed")
+        actual = pl.file_sha256(path)
+        if actual != want:
+            raise SpecError(
+                f"source file hash mismatch ({src['source_id']}):"
+                f" approved {want[:16]}..., on disk {actual[:16]}... - the"
+                " scope is frozen to digests; re-run intake/preflight if"
+                " the file changed")
         geo = geometry_map.get(src["source_id"])
         if geo is None:
             raise SpecError(
