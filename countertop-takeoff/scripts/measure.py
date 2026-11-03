@@ -72,6 +72,106 @@ def load_json(path):
         return json.load(f)
 
 
+# --------------------------------------------------------------- calibration
+
+def parse_dim_word(word):
+    """Return real length in feet for a word like 10'-0", else None."""
+    m = DIM_WORD_RE.match(word)
+    if not m:
+        return None
+    feet = int(m.group(1))
+    inches = float(m.group(2)) if m.group(2) else 0.0
+    real_ft = feet + inches / 12.0
+    return real_ft if real_ft >= 0.5 else None
+
+
+def group_words_into_lines(words):
+    """Cluster words into text lines by vertical midpoint (2 pt tolerance)."""
+    lines = []
+    for w in sorted(words, key=lambda w: (w["y0"] + w["y1"]) / 2.0):
+        mid = (w["y0"] + w["y1"]) / 2.0
+        for line in lines:
+            if abs(line["mid"] - mid) <= 2.0:
+                line["words"].append(w)
+                line["mid"] = sum(
+                    (x["y0"] + x["y1"]) / 2.0 for x in line["words"]
+                ) / len(line["words"])
+                break
+        else:
+            lines.append({"mid": mid, "words": [w]})
+    return lines
+
+
+def find_calibration(page, pad, filter_text=None):
+    """Match dimension labels to vector segments on ONE page.
+
+    A label matches the longest segment whose midpoint falls inside the
+    label's bbox expanded by `pad` points. Returns per-label scales.
+    """
+    segments = page["segments"]
+    labels, unmatched = [], []
+    want = normalize_dim_text(filter_text) if filter_text else None
+    for line in group_words_into_lines(page["words"]):
+        line_text = " ".join(w["t"] for w in line["words"])
+        if SCALE_LINE_RE.search(line_text):
+            continue  # skip "SCALE: 1/4\" = 1'-0\"" notes, they are not dimensions
+        for w in line["words"]:
+            real_ft = parse_dim_word(w["t"])
+            if real_ft is None:
+                continue
+            if want and normalize_dim_text(w["t"]) != want:
+                continue
+            bx0, by0 = w["x0"] - pad, w["y0"] - pad
+            bx1, by1 = w["x1"] + pad, w["y1"] + pad
+            cands = []
+            for s in segments:
+                mx, my = (s["x0"] + s["x1"]) / 2.0, (s["y0"] + s["y1"]) / 2.0
+                if bx0 <= mx <= bx1 and by0 <= my <= by1:
+                    length = ((s["x1"] - s["x0"]) ** 2 + (s["y1"] - s["y0"]) ** 2) ** 0.5
+                    if length >= 3.0:
+                        cands.append((length, s))
+            if not cands:
+                unmatched.append({"label": w["t"], "real_ft": real_ft,
+                                  "page": page["page"]})
+                continue
+            length, seg = max(cands, key=lambda c: c[0])
+            labels.append({
+                "page": page["page"], "sheet": page.get("sheet"),
+                "label": w["t"], "real_ft": real_ft,
+                "seg_len_pt": round(length, 4),
+                "pt_per_ft": round(length / real_ft, 6),
+            })
+    return labels, unmatched
+
+
+def normalize_dim_text(text):
+    return text.replace(" ", "").replace("”", '"').replace("''", '"') if text else None
+
+
+def calibrate_page(page, pad, filter_text=None, spread_fail=5.0):
+    """Return the page's pt-per-ft scale plus every label that contributed."""
+    labels, unmatched = find_calibration(page, pad, filter_text)
+    if not labels:
+        raise MeasureError(
+            f"CALIBRATION FAILED on page {page['page']}"
+            f" (sheet {page.get('sheet') or '?'}): no labeled dimension could be"
+            f" matched to a vector segment."
+            + (f" Tried label '{filter_text}'." if filter_text else "")
+            + " The skill must stop rather than guess - see references/method.md."
+        )
+    scales = [lb["pt_per_ft"] for lb in labels]
+    scale = statistics.median(scales)
+    spread = (max(scales) - min(scales)) / scale * 100.0
+    if spread > spread_fail:
+        raise MeasureError(
+            f"CALIBRATION CONFLICT on page {page['page']}: labels disagree by"
+            f" {spread:.2f}% (limit {spread_fail}%). Scales: {scales}."
+            " Check which dimension belongs to what; do not average blindly."
+        )
+    return {"scale_pt_per_ft": scale, "labels": labels,
+            "unmatched": unmatched, "spread_pct": round(spread, 3)}
+
+
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("jobs", help="job spec JSON (see module docstring)")
@@ -98,7 +198,16 @@ def run_pipeline(args):
     print(f"jobs spec : {args.jobs}")
     print(f"geometry  : {spec['geometry']}  ({len(pages)} pages loaded)")
     print(f"jobs      : {len(jobs)} instance(s) to measure")
-    # STUB: calibration, region measurement and report land in the next commits.
+    # STUB: calibration check + region measurement land in the next commits.
+    for page_no in sorted({j["page"] for j in jobs}):
+        if page_no not in pages:
+            raise MeasureError(
+                f"page {page_no} is not in the geometry file; re-run"
+                f" extract_geometry.py with --pages {page_no}")
+        calib = calibrate_page(pages[page_no], args.pad,
+                               spread_fail=args.spread_fail)
+        print(f"calibration page {page_no}: {calib['scale_pt_per_ft']:.4f} pt/ft"
+              f"  ({len(calib['labels'])} labels, spread {calib['spread_pct']:.2f}%)")
     raise MeasureError("pipeline not implemented yet")
 
 
