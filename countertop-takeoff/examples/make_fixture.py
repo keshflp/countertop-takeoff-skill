@@ -19,6 +19,7 @@ Usage:
 """
 
 import argparse
+import os
 import pymupdf
 
 PT_PER_FT = 18.0  # 1/4" = 1'-0"
@@ -171,6 +172,9 @@ def main():
         "creationDate": "D:20250101000000",
         "modDate": "D:20250101000000",
     })
+    out_dir = os.path.dirname(args.out)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     doc.save(args.out, no_new_id=True)
 
     # ------------------------------------------------------- KNOWN TRUTH -----

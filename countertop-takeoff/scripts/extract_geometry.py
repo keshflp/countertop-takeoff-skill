@@ -148,6 +148,9 @@ def main():
     doc.close()
 
     out = args.out or os.path.splitext(args.pdf)[0] + ".geometry.json"
+    out_dir = os.path.dirname(out)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     payload = {
         "pdf": args.pdf,
         "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),

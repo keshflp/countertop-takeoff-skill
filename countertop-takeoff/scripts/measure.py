@@ -517,13 +517,16 @@ def run_pipeline(args):
     print()
     print(report)
     if args.report:
+        os.makedirs(os.path.dirname(args.report) or ".", exist_ok=True)
         with open(args.report, "w", encoding="utf-8") as f:
             f.write(report)
         print(f"wrote {args.report}")
     if args.csv_path:
+        os.makedirs(os.path.dirname(args.csv_path) or ".", exist_ok=True)
         write_csv(args.csv_path, spec, types)
         print(f"wrote {args.csv_path}")
     if args.json_path:
+        os.makedirs(os.path.dirname(args.json_path) or ".", exist_ok=True)
         write_results_json(args.json_path, spec, calibrations, types, audit, args)
         print(f"wrote {args.json_path}")
     failed = [i for i in audit if i["status"] == "fail"]
