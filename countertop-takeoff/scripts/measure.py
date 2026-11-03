@@ -45,6 +45,9 @@ import statistics
 import sys
 from datetime import datetime, timezone
 
+from shapely.geometry import LineString, MultiLineString, Point
+from shapely.ops import polygonize, unary_union
+
 # Matches a whole word like 10'-0", 10'0", 10'6.5", 10', 2'-6"
 DIM_WORD_RE = re.compile(
     r"^\s*(\d{1,3})\s*'\s*(\d{1,2}(?:\.\d+)?)?\s*(?:\"|''|”)?\s*$"
@@ -189,6 +192,96 @@ def parse_args(argv=None):
     return ap.parse_args(argv)
 
 
+# ------------------------------------------------- region polygon assembly
+
+def snap(value, snap_tol):
+    return round(value / snap_tol) * snap_tol if snap_tol > 0 else value
+
+
+def segments_in_bbox(segments, bbox):
+    """Keep segments whose BOTH endpoints lie inside the bbox (small eps)."""
+    x0, y0, x1, y1 = bbox
+    eps = 1e-6
+    out = []
+    for s in segments:
+        if (x0 - eps <= s["x0"] <= x1 + eps and x0 - eps <= s["x1"] <= x1 + eps
+                and y0 - eps <= s["y0"] <= y1 + eps
+                and y0 - eps <= s["y1"] <= y1 + eps):
+            out.append(s)
+    return out
+
+
+def assemble_faces(segments, snap_tol):
+    """Node the linework and return closed faces (polygons) it encloses."""
+    lines = []
+    for s in segments:
+        p0 = (snap(s["x0"], snap_tol), snap(s["y0"], snap_tol))
+        p1 = (snap(s["x1"], snap_tol), snap(s["y1"], snap_tol))
+        if p0 != p1:
+            lines.append(LineString([p0, p1]))
+    if not lines:
+        return []
+    merged = unary_union(MultiLineString(lines))
+    return list(polygonize(merged))
+
+
+def measure_region(page, region, scale_pt_per_ft, snap_tol):
+    """Measure one region: closed polygon inside bbox containing the seed.
+
+    Returns region dict with area_sf. Raises MeasureError when the region
+    cannot be measured honestly.
+    """
+    name = region["name"]
+    bbox, seed = region["bbox"], region["seed"]
+    segs = segments_in_bbox(page["segments"], bbox)
+    if not segs:
+        raise MeasureError(
+            f"region '{name}' on page {page['page']}: bbox {bbox} contains no"
+            " vector segments. Re-draw the bbox around the countertop linework.")
+    faces = assemble_faces(segs, snap_tol)
+    point = Point(seed)
+    containing = [f for f in faces if f.covers(point)]
+    if not containing:
+        nearest = min((f.distance(point) for f in faces), default=None)
+        raise MeasureError(
+            f"region '{name}' on page {page['page']}: seed {seed} is not inside"
+            f" any closed loop ({len(faces)} loops found, nearest "
+            f"{nearest:.1f} pt away). Move the seed INSIDE the countertop outline"
+            " or widen the bbox so the outline closes.")
+    face = min(containing, key=lambda f: (f.area, f.length))
+    area_sf = face.area / (scale_pt_per_ft ** 2)
+    edge_lf = face.length / scale_pt_per_ft  # informational, phase-2 scope
+    bbox_area_sf = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) / (scale_pt_per_ft ** 2)
+    notes = []
+    if len(containing) > 1:
+        notes.append(f"{len(containing)} nested loops contain seed; took smallest")
+    if area_sf > bbox_area_sf * 1.001:
+        raise MeasureError(
+            f"region '{name}': measured {area_sf:.2f} SF exceeds its bbox"
+            f" ({bbox_area_sf:.2f} SF) - wrong scale or wrong bbox. Stopping.")
+    result = {
+        "name": name,
+        "bbox": bbox,
+        "seed": seed,
+        "segments_in_bbox": len(segs),
+        "loops_found": len(faces),
+        "vertices": len(face.exterior.coords) - 1,
+        "area_pt2": round(face.area, 4),
+        "area_sf": round(area_sf, 2),
+        "edge_lf_info": round(edge_lf, 2),
+        "bbox_area_sf": round(bbox_area_sf, 2),
+    }
+    expected = region.get("expected_sf_range")
+    if expected:
+        ok = expected[0] <= area_sf <= expected[1]
+        result["expected_sf_range"] = expected
+        result["expected_range_ok"] = ok
+        if not ok:
+            notes.append(f"SF {area_sf:.2f} outside expected range {expected}")
+    result["notes"] = notes
+    return result
+
+
 def run_pipeline(args):
     base_dir = os.path.dirname(os.path.abspath(args.jobs))
     spec = load_json(args.jobs)
@@ -198,7 +291,8 @@ def run_pipeline(args):
     print(f"jobs spec : {args.jobs}")
     print(f"geometry  : {spec['geometry']}  ({len(pages)} pages loaded)")
     print(f"jobs      : {len(jobs)} instance(s) to measure")
-    # STUB: calibration check + region measurement land in the next commits.
+    # STUB: region measurement + report land in the next commits.
+    calibrations = {}
     for page_no in sorted({j["page"] for j in jobs}):
         if page_no not in pages:
             raise MeasureError(
@@ -208,7 +302,29 @@ def run_pipeline(args):
                                spread_fail=args.spread_fail)
         print(f"calibration page {page_no}: {calib['scale_pt_per_ft']:.4f} pt/ft"
               f"  ({len(calib['labels'])} labels, spread {calib['spread_pct']:.2f}%)")
-    raise MeasureError("pipeline not implemented yet")
+        calibrations[page_no] = calib
+    measured_jobs = []
+    for job in jobs:
+        page = pages[job["page"]]
+        scale = calibrations[job["page"]]["scale_pt_per_ft"]
+        calib_text = (job.get("calibration") or {}).get("text")
+        if calib_text:
+            scale = calibrate_page(page, args.pad, filter_text=calib_text,
+                                   spread_fail=args.spread_fail)["scale_pt_per_ft"]
+        regions = [measure_region(page, region, scale, args.snap)
+                   for region in job["regions"]]
+        measured_jobs.append({
+            "room_type": str(job["room_type"]),
+            "instance": job["instance"],
+            "page": job["page"],
+            "sheet": job.get("sheet") or page.get("sheet") or "?",
+            "instance_sf": round(sum(r["area_sf"] for r in regions), 2),
+            "regions": regions,
+        })
+        print(f"measured {job['room_type']}/{job['instance']}:"
+              f" {measured_jobs[-1]['instance_sf']:.2f} SF"
+              f"  ({', '.join(r['name'] + ' ' + format(r['area_sf'], '.2f') + ' SF' for r in regions)})")
+    raise MeasureError("STUB: aggregation and report land in the next commits")
 
 
 def main(argv=None):
