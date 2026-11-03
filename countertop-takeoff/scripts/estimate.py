@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.9"
-# dependencies = []
-# /// 
+# dependencies = ["pymupdf==2.1"]
+# ///
 """Assembly-EA estimate (V4, P1.1): prices assembly EA x exact rate.
 
 Reads a measure.py results JSON (the assembly BoQ carries the RESOLVED EA
@@ -14,12 +14,11 @@ profile pricing schema, references/company-profile.md), and writes:
                          QTY EA | Unit price | Total; priced subtotal;
                          exclusions/callouts; grand total - BLANK when any
                          in-scope amount is unknown
-  build/estimate.pdf   - a minimal text PDF rendered by THIS script from
-                         the estimate.md content (stdlib-only writer, no new
-                         dependencies). The AGENT HOST's document tooling may
-                         render a richer PDF from estimate.md instead; the
-                         contract is: the PDF must carry the SAME grand total
-                         as md + json.
+  build/estimate.pdf   - a PyMuPDF text render of estimate.md (V5, P1.2):
+                         exact rate precision visible, first line below the
+                         page top, wrapped + paginated, and every rendered
+                         amount is re-read from the PDF and checked against
+                         estimate.json before the file ships.
 
 Pricing rules (accuracy hierarchy):
   - a rate matches an assembly ONLY when its match pins the assembly
@@ -53,7 +52,6 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 
 BLANK = "__blank__"
-LINES_PER_PDF_PAGE = 46
 _CURRENCY_SYMBOLS = "$€£¥"
 
 
@@ -413,7 +411,9 @@ def estimate_markdown(payload):
     lines = ["# Countertop Estimate", ""]
     lines.append(f"- company: {payload['company']}")
     lines.append(f"- generated: {payload['generated_utc']}"
-                 f" - currency: **{payload['currency']}**")
+                 f" - currency: **{payload['currency']}**"
+                 + ("" if payload.get("scope_complete")
+                    else " - **scope INCOMPLETE: the grand total is blank**"))
     lines.append(f"- source: results sha256"
                  f" `{payload['results_sha256'][:16]}...`; rate profile"
                  f" `{payload['profile_path']}` (sha256"
@@ -428,9 +428,18 @@ def estimate_markdown(payload):
         total_s = money(D(l["line_total"])) if l["line_total"] is not None \
             else BLANK
         code_s = l["item_code"] or BLANK
-        lines.append(
-            f"| {code_s} | {l['description']}"
-            f" | {qty_s} | {unit_s} | {total_s} |")
+        # V5 (P1.2): wrap a long DESCRIPTION into continuation rows so the
+        # numeric columns stay on the final row - a wrapped row must never
+        # split an amount
+        chunks = [l["description"][i:i + 52]
+                  for i in range(0, len(l["description"]), 52)] or [""]
+        for ci, chunk in enumerate(chunks):
+            last = ci == len(chunks) - 1
+            lines.append(
+                f"| {code_s if ci == 0 else ''} | {chunk}"
+                f" | {qty_s if last else ''}"
+                f" | {unit_s if last else ''}"
+                f" | {total_s if last else ''} |")
     lines.append("")
     lines.append(f"**Priced subtotal: {money(payload['priced_subtotal'])}"
                  f" {payload['currency']}**"
@@ -460,81 +469,83 @@ def estimate_markdown(payload):
                  " Decimal-exact, rounded HALF_UP to whole cents; the grand"
                  " total is the sum of the priced lines and is BLANK while"
                  " any in-scope amount is unknown.")
+    lines.append("")
+    lines.append("Per-line arithmetic (exact rate precision retained):")
+    for l in payload["lines"]:
+        if l.get("arithmetic"):
+            lines.append(f"- {l['item_code']}: {l['arithmetic']}")
+        else:
+            lines.append(f"- {l['item_code'] or BLANK}: no amount (blank -"
+                         " see CALLOUTS)")
     return "\n".join(lines) + "\n"
 
 
-def _pdf_escape(t):
-    return (t.replace("\\", r"\\").replace("(", r"\(")
-            .replace(")", r"\)"))
+# ------------------------------------------------- PDF render (PyMuPDF)
+PDF_MARGIN = 40.0
+PDF_TOP_PT = 64.0        # V5 (P1.2): the first line sits BELOW the page top
+PDF_LEADING = 12.0
+PDF_FONTSIZE = 8.0
+PDF_MAX_LINES = 46       # per page
 
 
-def render_pdf(text, out_path, title="Countertop Estimate"):
-    """Minimal stdlib PDF: Courier text pages rendered from the estimate
-    content (same numbers as md/json; the AGENT HOST may render a richer
-    PDF from estimate.md instead - the contract is the same grand total)."""
-    raw_lines = text.split("\n")
-    pages = [raw_lines[i:i + LINES_PER_PDF_PAGE]
-             for i in range(0, len(raw_lines), LINES_PER_PDF_PAGE)]
-    if not pages:
-        pages = [[""]]
-    objects = []
+def render_pdf(text, out_path, title="Countertop Estimate",
+               expect_amounts=()):
+    """Render the estimate content to PDF with PyMuPDF (V5, P1.2):
+      - the first text line sits below the page top (the title used to
+        clip against the MediaBox edge);
+      - long lines wrap and paginate (every source line's text lands in
+        the extracted text);
+      - after writing, the PDF is REOPENED and every amount string in
+        `expect_amounts` is checked against the extracted text - a
+        rendered amount that disagrees with estimate.json refuses.
+    """
+    import pymupdf
+    usable_w = 612.0 - 2 * PDF_MARGIN
+    char_w = PDF_FONTSIZE * 0.6        # Courier advance width
+    max_chars = int(usable_w / char_w)
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    y = PDF_TOP_PT
+    lines_on_page = 0
 
-    def add(obj):
-        objects.append(obj)
-        return len(objects)
+    def new_page():
+        nonlocal page, y, lines_on_page
+        page = doc.new_page(width=612, height=792)
+        y = PDF_TOP_PT
+        lines_on_page = 0
 
-    font_id = add("<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>")
-    bold_id = add("<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold"
-                  " >>")
-    page_ids = []
-    for page in pages:
-        parts = ["BT", "/F1 8 Tf", "40 800 Td", "14 TL"]
-        for ln in page:
-            parts.append("(" + _pdf_escape(ln) + ") Tj")
-            parts.append("T*")
-        parts.append("ET")
-        stream = "\n".join(parts)
-        cid = add({"stream": stream})
-        pid = add({"page": True, "contents": cid, "font": font_id,
-                   "bold": bold_id})
-        page_ids.append(pid)
-    pages_id = add({"pages": page_ids})
-    catalog_id = add("<< /Type /Catalog /Pages %d 0 R >>" % pages_id)
-    out = bytearray()
-    out += b"%PDF-1.4\n"
-    offsets = []
-    for idx, obj in enumerate(objects, 1):
-        offsets.append(len(out))
-        if isinstance(obj, dict) and "stream" in obj:
-            data = obj["stream"].encode("latin-1", "replace")
-            head = ("%d 0 obj\n<< /Length %d >>\nstream\n" % (idx,
-                    len(data))).encode()
-            out += head + data + b"\nendstream\nendobj\n"
-        elif isinstance(obj, dict) and obj.get("page"):
-            body = ("%d 0 obj\n<< /Type /Page /Parent %d 0 R /Contents %d 0 R"
-                    " /Resources << /Font << /F1 %d 0 R /F2 %d 0 R >> >>"
-                    " /MediaBox [0 0 612 792] >>\nendobj\n"
-                    % (idx, pages_id, obj["contents"], obj["font"],
-                       obj["bold"]))
-            out += body.encode()
-        elif isinstance(obj, dict) and "pages" in obj:
-            kids = " ".join("%d 0 R" % p for p in obj["pages"])
-            body = ("%d 0 obj\n<< /Type /Pages /Kids [%s] /Count %d >>\n"
-                    "endobj\n" % (idx, kids, len(obj["pages"])))
-            out += body.encode()
-        else:
-            body = "%d 0 obj\n%s\nendobj\n" % (idx, obj)
-            out += body.encode()
-    xref_at = len(out)
-    out += ("xref\n0 %d\n" % (len(objects) + 1)).encode()
-    out += b"0000000000 65535 f \n"
-    for off in offsets:
-        out += ("%010d 00000 n \n" % off).encode()
-    out += ("trailer\n<< /Size %d /Root %d 0 R >>\nstartxref\n%d\n%%%%EOF\n"
-            % (len(objects) + 1, catalog_id, xref_at)).encode()
-    with open(out_path, "wb") as f:
-        f.write(bytes(out))
-    return out_path
+    def emit(s):
+        nonlocal y, lines_on_page
+        if lines_on_page >= PDF_MAX_LINES:
+            new_page()
+        wrapped = [s[i:i + max_chars] for i in range(0, len(s), max_chars)] \
+            or [""]
+        for chunk in wrapped:
+            if lines_on_page >= PDF_MAX_LINES:
+                new_page()
+            page.insert_text((PDF_MARGIN, y), chunk, fontname="cour",
+                             fontsize=PDF_FONTSIZE, color=(0, 0, 0))
+            y += PDF_LEADING
+            lines_on_page += 1
+
+    for ln in text.split("\n"):
+        emit(ln)
+    doc.save(out_path)
+    doc.close()
+    # ---- rendered-amount agreement check (P1.2) ----
+    check_doc = pymupdf.open(out_path)
+    extracted = "\n".join(pg.get_text() for pg in check_doc)
+    n_pages = check_doc.page_count
+    check_doc.close()
+    missing = [a for a in expect_amounts if a not in extracted]
+    if missing:
+        raise SystemExit(
+            f"ERROR: rendered PDF amounts disagree with estimate.json -"
+            f" missing from the rendered text: {missing!r}; refusing to"
+            " ship a PDF whose numbers cannot be re-read")
+    if not extracted.strip():
+        raise SystemExit("ERROR: rendered PDF carries no extractable text")
+    return out_path, n_pages, extracted
 
 
 
@@ -613,10 +624,26 @@ def build_estimate(results_path, profile_path, out_md=None, out_json=None,
         d = os.path.dirname(out_pdf)
         if d:
             os.makedirs(d, exist_ok=True)
-        render_pdf(md, out_pdf)
-        print(f"wrote {out_pdf} (minimal stdlib render of estimate.md;"
-              " the agent host may render a richer PDF from the same md -"
-              " the grand total must agree)")
+        # V5 (P1.2): the PDF is re-read after rendering and every amount
+        # (exact rates, line totals, subtotal, grand total / blank marker)
+        # is checked against the estimate payload
+        expect = ["# Countertop Estimate",
+                  f"Priced subtotal: {money(payload['priced_subtotal'])}"]
+        if grand is None:
+            expect.append(f"GRAND TOTAL: {BLANK}")
+        else:
+            expect.append(f"GRAND TOTAL: {money(D(grand))}"
+                          f" {payload['currency']}")
+        for l in lines:
+            if l["line_total"] is not None:
+                expect.append(money(D(l["line_total"])))
+                expect.append(fmt_rate(D(l["unit_price"])))
+            else:
+                expect.append(BLANK)
+        render_pdf(md, out_pdf, expect_amounts=expect)
+        print(f"wrote {out_pdf} (PyMuPDF render of estimate.md; every"
+              " rendered amount re-checked against estimate.json - the"
+              " grand total must agree)")
     print(f"estimate: {len(lines)} line(s), priced subtotal"
           f" {money(subtotal)} {payload['currency']}, grand total"
           + (f" {money(D(grand))}" if grand is not None

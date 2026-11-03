@@ -663,6 +663,223 @@ def uncertainty_tests():
           str(pub_row))
 
 
+# --------------------------- P1.2 audit pack + estimate PDF repairs
+def _fabricated_results(geo_rel=False):
+    """A small results JSON over the messy fixture with two regions whose
+    ids collide under the old sanitizer: `same:counter` vs `same/counter`."""
+    spec = messy_spec()
+    jobs = os.path.join(BUILD, "v5_pack_base.jobs.json")
+    res_path = os.path.join(BUILD, "v5_pack_base.results.json")
+    json.dump(spec, open(jobs, "w", encoding="utf-8"), indent=1)
+    if not os.path.exists(res_path):
+        measure.main([jobs, "--json", res_path])
+    res = json.load(open(res_path, encoding="utf-8"))
+    proto = copy.deepcopy(res["regions"][0])
+    clones = []
+    for rid in ("same:counter", "same/counter"):
+        c = copy.deepcopy(proto)
+        c["region_id"] = rid
+        clones.append(c)
+    res["regions"] = clones
+    if geo_rel:
+        res["geometry"] = "messy.geometry.json"
+        for s in res["sources"]:
+            s["path"] = "messy.pdf"
+        res["source"]["pdf"] = "messy.pdf"
+    out = os.path.join(BUILD, "v5_pack_results.json")
+    json.dump(res, open(out, "w", encoding="utf-8"))
+    return out
+
+
+def audit_pack_tests():
+    # (1) collision-proof, source-qualified proof filenames
+    res_path = _fabricated_results()
+    pack = os.path.join(BUILD, "v5_pack")
+    shutil.rmtree(pack, ignore_errors=True)
+    audit_pack.render_pack(json.load(open(res_path, encoding="utf-8")),
+                           pack, 2.0)
+    pngs = sorted(f for f in os.listdir(pack) if f.endswith(".png"))
+    stems = {f.rsplit("_full", 1)[0].rsplit("_closeup", 1)[0]
+             for f in pngs}
+    index = open(os.path.join(pack, "index.md"), encoding="utf-8").read()
+    check("audit-pack: `same:counter` and `same/counter` land on DISTINCT"
+          " source-qualified proof filenames", len(stems) == 2, str(stems))
+    check("audit-pack: index.md labels carry the source id",
+          "(source plans," in index, index[:200])
+
+    # (2) relative paths resolve against the RESULTS FILE's location
+    res_rel = _fabricated_results(geo_rel=True)
+    pack2 = os.path.join(BUILD, "v5_pack_rel")
+    shutil.rmtree(pack2, ignore_errors=True)
+    cwd = os.getcwd()
+    try:
+        os.chdir(os.path.join(SKILL, "examples"))  # NOT the results dir
+        audit_pack.render_pack(json.load(open(res_rel, encoding="utf-8")),
+                               pack2, 2.0,
+                               base_dir=os.path.dirname(res_rel))
+    finally:
+        os.chdir(cwd)
+    pngs2 = [f for f in os.listdir(pack2) if f.endswith(".png")]
+    sized2 = [f for f in pngs2
+              if os.path.getsize(os.path.join(pack2, f)) > 5000]
+    check("audit-pack: relative geometry/source paths resolve against the"
+          " results file location (overlays render from another cwd)",
+          len(sized2) >= 2, f"{len(sized2)} sized pngs")
+
+    # (3) corrupt geometry recovers per-region instead of aborting
+    bad_geo = os.path.join(BUILD, "v5_corrupt.geometry.json")
+    open(bad_geo, "w", encoding="utf-8").write("{ this is not json")
+    res = json.load(open(res_path, encoding="utf-8"))
+    res["geometry"] = bad_geo
+    res_path_bad = os.path.join(BUILD, "v5_pack_badgeo_results.json")
+    json.dump(res, open(res_path_bad, "w", encoding="utf-8"))
+    pack3 = os.path.join(BUILD, "v5_pack_badgeo")
+    shutil.rmtree(pack3, ignore_errors=True)
+    try:
+        audit_pack.render_pack(json.load(open(res_path_bad,
+                                              encoding="utf-8")),
+                               pack3, 2.0)
+        ok = True
+        err = ""
+    except Exception as exc:  # noqa: BLE001
+        ok = False
+        err = str(exc)
+    index3 = open(os.path.join(pack3, "index.md"),
+                  encoding="utf-8").read() if ok else ""
+    pngs3 = [f for f in os.listdir(pack3) if f.endswith(".png")] if ok \
+        else []
+    check("audit-pack: corrupt geometry recovers per-region (pack"
+          " completes, geometry note disclosed)",
+          ok and len(pngs3) >= 2 and "GEOMETRY NOTE" in index3,
+          f"ok={ok} err={err[:100]}")
+
+    # (4) receipt guards: stale/superseded results files
+    good = os.path.join(BUILD, "v5_receipt.results.json")
+    json.dump({"run_status": "complete"}, open(good, "w",
+                                               encoding="utf-8"))
+    stale_copy = good.replace(".json", ".stale-20990101T000000.json")
+    shutil.copy(good, stale_copy)
+    payload = json.load(open(good, encoding="utf-8"))
+    rc = audit_pack.record_receipt(payload, good, "fresh-agent: v5",
+                                   "approved", "n", "pack")
+    after = json.load(open(good, encoding="utf-8"))
+    check("audit-pack: the receipt DETECTS superseded sibling results files"
+          " and names them",
+          rc == 0 and after["review"]["superseded_results_files"]
+          == [os.path.basename(stale_copy)]
+          and "results_sha256" in after["review"], str(rc))
+    rc2 = audit_pack.record_receipt({}, stale_copy, "fresh-agent: v5",
+                                    "approved", "n", "pack")
+    check("audit-pack: a quarantined (*.stale-*) results file REFUSES a"
+          " receipt", rc2 == 2, str(rc2))
+
+
+def estimate_pdf_tests():
+    # exact rate precision: 3 EA x 55.555 must show 55.555 (not 55.56)
+    import pymupdf
+    spec = orig_spec()
+    spec["assemblies"] = [
+        {"assembly_id": "a-std", "type": "A", "package": "millwork",
+         "quantity_basis": {"mode": "room_type_count", "type": "A"},
+         "pieces": ["p:k", "p:v"],
+         "sources": [{"source_id": "plans", "page": 2}]}]
+    spec["pieces"] = [
+        {"piece_id": "p:k", "assembly_id": "a-std", "route": "geometry",
+         "region_id": "A:kitchen", "edge_runs": []},
+        {"piece_id": "p:v", "assembly_id": "a-std", "route": "geometry",
+         "region_id": "A:vanity", "edge_runs": []}]
+    jobs = os.path.join(BUILD, "v5_pdf.jobs.json")
+    res = os.path.join(BUILD, "v5_pdf.results.json")
+    json.dump(spec, open(jobs, "w", encoding="utf-8"), indent=1)
+    rc = measure.main([jobs, "--json", res])
+    prof = {"profile_version": "2", "company": "Precision Shop",
+            "currency": "USD",
+            "rates": [{"item_code": "P-A",
+                       "match": {"assembly_kind": "A"},
+                       "uom": "EA", "unit_price": 55.555,
+                       "currency": "USD"}]}
+    pp = os.path.join(BUILD, "v5_pdf_profile.json")
+    json.dump(prof, open(pp, "w", encoding="utf-8"))
+    payload = estimate_mod.build_estimate(
+        res, pp, out_md=os.path.join(BUILD, "v5_pdf.md"),
+        out_json=os.path.join(BUILD, "v5_pdf.json"),
+        out_pdf=os.path.join(BUILD, "v5_pdf.pdf"))
+    line = payload["lines"][0]
+    check("estimate-pdf: the line total is Decimal-exact ROUND_HALF_UP"
+          " (3 x 55.555 -> 166.67)",
+          line["qty_ea"] == 3 and line["line_total"] == 166.67,
+          str(line))
+    doc = pymupdf.open(os.path.join(BUILD, "v5_pdf.pdf"))
+    txt = "\n".join(pg.get_text() for pg in doc)
+    n_pages = doc.page_count
+    doc.close()
+    check("estimate-pdf: the EXACT rate 55.555 is visible (never silently"
+          " 55.56)",
+          "55.555" in txt and "3 EA x 55.555 = 166.67" in txt
+          and "55.56" not in txt.replace("55.555", ""), txt[:120])
+    first = next(ln for ln in txt.split("\n") if ln.strip())
+    check("estimate-pdf: the first text line is the title, below the page"
+          " top (extractable, not clipped)",
+          first.strip().startswith("# Countertop Estimate"), repr(first))
+    check("estimate-pdf: every rendered line total agrees with"
+          " estimate.json",
+          all(f"{l['line_total']:,.2f}" in txt
+              for l in payload["lines"] if l["line_total"] is not None)
+          and payload["grand_total"] is not None
+          and f"{payload['grand_total']:,.2f}" in txt, txt[:200])
+
+    # long descriptions wrap; many lines paginate
+    spec = mixed_v5_spec()
+    for i in range(30):
+        aid = f"pad{i}"
+        spec["assemblies"].append(
+            {"assembly_id": aid, "type": "PUB-RECEPTION-VANITY-RUN-WITH-A-"
+             "VERY-LONG-DESCRIPTIVE-TYPE-NAME-FOR-WRAPPING", "package":
+             "public_BOH", "quantity_basis": {"mode": "enumerated"},
+             "pieces": [f"pp:{i}"],
+             "sources": [{"source_id": "plans", "page": 5}]})
+        spec["pieces"].append(
+            {"piece_id": f"pp:{i}", "assembly_id": aid, "route": "stated",
+             "dims_in": {"width": 24, "depth": 30, "thickness": 2,
+                         "height": 36}, "edge_runs": []})
+    jobs = os.path.join(BUILD, "v5_pdf_many.jobs.json")
+    res = os.path.join(BUILD, "v5_pdf_many.results.json")
+    json.dump(spec, open(jobs, "w", encoding="utf-8"), indent=1)
+    rc = measure.main([jobs, "--json", res])
+    prof2 = {"profile_version": "2", "company": "Many Lines",
+             "currency": "USD",
+             "rates": [{"item_code": "M-P",
+                        "match": {"assembly_kind": "PUB-RECEPTION-VANITY-"
+                                  "RUN-WITH-A-VERY-LONG-DESCRIPTIVE-TYPE-"
+                                  "NAME-FOR-WRAPPING"},
+                        "uom": "EA", "unit_price": 10.0,
+                        "currency": "USD"}]}
+    pp2 = os.path.join(BUILD, "v5_pdf_many_profile.json")
+    json.dump(prof2, open(pp2, "w", encoding="utf-8"))
+    payload2 = estimate_mod.build_estimate(
+        res, pp2, out_md=os.path.join(BUILD, "v5_pdf_many.md"),
+        out_json=os.path.join(BUILD, "v5_pdf_many.json"),
+        out_pdf=os.path.join(BUILD, "v5_pdf_many.pdf"))
+    doc = pymupdf.open(os.path.join(BUILD, "v5_pdf_many.pdf"))
+    txt2 = "\n".join(pg.get_text() for pg in doc)
+    n_pages2 = doc.page_count
+    last_page_txt = doc[-1].get_text()
+    doc.close()
+    check("estimate-pdf: long descriptions wrap fully (last description"
+          " chunk extractable)",
+          "NAME-FOR-WRAPPING" in txt2.replace("\n", "").replace(" ", "")
+          or "WRAPPING" in txt2, txt2[:120])
+    check("estimate-pdf: many-line estimates paginate (2+ pages, grand"
+          " total on the LAST page)",
+          n_pages2 >= 2 and "GRAND TOTAL" in last_page_txt,
+          f"pages={n_pages2} last_has_grand={'GRAND TOTAL' in last_page_txt}")
+    check("estimate-pdf: every line total of the paginated estimate agrees"
+          " with estimate.json",
+          all(f"{l['line_total']:,.2f}" in txt2
+              for l in payload2["lines"] if l["line_total"] is not None),
+          f"n_lines={len(payload2['lines'])}")
+
+
 def main():
     global ORIG_PDFS, ORIG_GEO
     shutil.rmtree(BUILD, ignore_errors=True)
@@ -676,6 +893,8 @@ def main():
     identity_tests()
     estimate_scope_tests()
     uncertainty_tests()
+    audit_pack_tests()
+    estimate_pdf_tests()
     print()
     failed = [r for r in RESULTS if not r[1]]
     for name, ok, detail in RESULTS:

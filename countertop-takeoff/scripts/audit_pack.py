@@ -27,6 +27,7 @@ be recorded as `human: <name>` - SKILL.md documents this substitution.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -39,6 +40,16 @@ PAD_PT = 60.0
 SHELL_FILL = (0.05, 0.45, 0.95)
 SPAN_COLOR = (0.95, 0.35, 0.05)
 SEED_COLOR = (0.10, 0.70, 0.20)
+
+
+def resolve_from(path, base_dir):
+    """V5 (P1.2): resolve a recorded path against the RESULTS FILE's own
+    location first - results JSONs carry relative paths and must not depend
+    on the reviewer's working directory."""
+    if not path or os.path.isabs(path) or os.path.exists(path):
+        return path
+    candidate = os.path.join(base_dir, path)
+    return candidate if os.path.exists(candidate) else path
 
 
 def render_overlay(pdf_path, page_no, region, cal, segments, out_base, zoom):
@@ -137,18 +148,26 @@ def clamped(bbox, w, h):
                         min(w, bbox[2] + PAD_PT), min(h, bbox[3] + PAD_PT))
 
 
-def build_index_md(results, pack_dir, files_by_region):
+def build_index_md(results, pack_dir, files_by_region, geo_problems=None):
     src = results.get("source") or {}
     status = results.get("run_status") or results.get("status")
+    totals = results.get("totals") or {}
+    unit_count = totals.get("unit_count")
     lines = [f"# Audit pack - {src.get('pdf', '')}", "",
              f"- source sha256: `{src.get('sha256', '')}`",
              f"- run status: **{status}**; review status:"
              f" {results.get('review_status')}",
              f"- mode: {results.get('mode')}; gross-area policy:"
              f" {results.get('policy', {}).get('gross_area')}",
-             f"- totals: {results.get('totals', {}).get('project_sf', 0):.2f}"
-             f" SF over {results.get('totals', {}).get('unit_count')}"
+             f"- totals: {totals.get('project_sf', 0):.2f}" if isinstance(
+                 totals.get("project_sf"), (int, float)) else
+             f"- totals: {totals.get('project_sf', 0)}"
+             f" SF over {unit_count if unit_count is not None else '?'}"
              " unit(s)", ""]
+    for gp in geo_problems or []:
+        lines += [f"- GEOMETRY NOTE: {gp}"]
+    if geo_problems:
+        lines.append("")
     callouts = results.get("callouts") or []
     if callouts:
         lines += ["## Callouts the reviewer must confirm", ""]
@@ -165,17 +184,22 @@ def build_index_md(results, pack_dir, files_by_region):
              "4. OVERLAYS: seed inside each shell, calibration spans on real",
              "   dimension lines, close-up boundaries plausible.", "",
              "## Regions"]
+    regions_by_id = {x["region_id"]: x for x in results.get("regions", [])}
     for rid, files in files_by_region.items():
-        r = next(x for x in results["regions"] if x["region_id"] == rid)
+        r = regions_by_id.get(rid)
+        if r is None:
+            continue
+        sid = r.get("source_id") or "?"
         if r.get("status") == "unresolved" or r.get("area_sf") is None:
-            lines.append(f"- `{rid}` ({r.get('type')},"
-                         f" {'UNRESOLVED' if r.get('status') == 'unresolved' else 'AREA BLANK'})"
-                         " quantities BLANK on page"
-                         f" {r.get('page')}:"
-                         f" {r.get('unresolved_reason', '')[:90]}")
+            lines.append(
+                f"- `{rid}` (source {sid}, {r.get('type')},"
+                f" {'UNRESOLVED' if r.get('status') == 'unresolved' else 'AREA BLANK'})"
+                " quantities BLANK on page"
+                f" {r.get('page')}:"
+                f" {r.get('unresolved_reason', '')[:90]}")
             lines += [f"  - {os.path.relpath(f, pack_dir)}" for f in files]
             continue
-        lines.append(f"- `{rid}` ({r['type']}"
+        lines.append(f"- `{rid}` (source {sid}, {r['type']}"
                      + (f"/{r['variant']}" if r["variant"] else "")
                      + f", {r['kind']}) {r['area_sf']:.2f} SF on page"
                      f" {r['page']} viewport {r['viewport']}:")
@@ -187,33 +211,76 @@ def safe_name(rid):
     return "".join(c if (c.isalnum() or c in "-_") else "_" for c in rid)
 
 
-def render_pack(results, pack_dir, zoom):
+def proof_base(pack_dir, sid, rid, used):
+    """V5 (P1.2): collision-resistant, SOURCE-QUALIFIED proof filenames.
+    `same:counter` and `same/counter` used to sanitize onto one image;
+    every proof now carries the source id, the sanitized region id AND a
+    short digest of the (source, region) identity."""
+    h = hashlib.sha256(f"{sid or ''}|{rid}".encode("utf-8")).hexdigest()[:8]
+    name = f"{safe_name(sid or 'src')}__{safe_name(rid)}-{h}"
+    base = os.path.join(pack_dir, name)
+    n = 2
+    while os.path.normcase(base) in used:
+        base = os.path.join(pack_dir, f"{name}-{n}")
+        n += 1
+    used.add(os.path.normcase(base))
+    return base
+
+
+def render_pack(results, pack_dir, zoom, base_dir=None):
     os.makedirs(pack_dir, exist_ok=True)
+    if base_dir is None:
+        base_dir = os.path.dirname(os.path.abspath(
+            results.get("_results_path") or "."))
     # V4: multi-source jobs - geometry may be ONE path or {source_id: path};
     # segments and base pages are looked up per (source_id, page), and the
     # calibration per the region's OWN source (source-aware keys).
+    # V5 (P1.2): relative paths resolve against the results file's folder;
+    # a CORRUPT geometry payload degrades per-source (spans unavailable,
+    # marker pages) instead of aborting the pack.
     geo_path = results.get("geometry")
     sources = results.get("sources") or []
     default_sid = (sources[0] or {}).get("source_id") if sources else None
     geo_by_source = {}
+    geo_problems = []
     if isinstance(geo_path, dict):
         for sid, gp in geo_path.items():
-            gp = gp if os.path.isabs(gp) or os.path.exists(gp) else \
-                os.path.join(os.path.dirname(args_results_path(results)), gp)
-            geo_by_source[sid] = json.load(open(gp, encoding="utf-8")) \
-                if os.path.exists(gp) else {"pages": []}
-    elif geo_path and os.path.exists(geo_path):
-        geo = json.load(open(geo_path, encoding="utf-8"))
-        geo_by_source[default_sid] = geo
+            gp = resolve_from(gp, base_dir)
+            try:
+                geo = json.load(open(gp, encoding="utf-8"))
+                if not isinstance(geo, dict):
+                    raise ValueError("geometry payload is not an object")
+            except Exception as exc:  # noqa: BLE001 - degrade per source
+                geo_problems.append(
+                    f"source {sid!r}: geometry unreadable ({exc}) - overlays"
+                    " render without boundary segments")
+                geo = {"pages": []}
+            geo_by_source[sid] = geo
+    elif geo_path:
+        gp = resolve_from(geo_path, base_dir)
+        try:
+            geo = json.load(open(gp, encoding="utf-8"))
+            if not isinstance(geo, dict):
+                raise ValueError("geometry payload is not an object")
+            geo_by_source[default_sid] = geo
+        except Exception as exc:  # noqa: BLE001 - degrade per source
+            geo_problems.append(
+                f"geometry unreadable ({exc}) - overlays render without"
+                " boundary segments")
+            geo_by_source[default_sid] = {"pages": []}
     segs_by_key = {}
     for sid, geo in geo_by_source.items():
         for p in geo.get("pages", []):
-            segs_by_key[(sid, p["page"])] = p["segments"]
-    pdf_by_source = {s["source_id"]: s["path"] for s in sources
-                     if s.get("path")}
+            segs_by_key[(sid, p["page"])] = p.get("segments") or []
+    pdf_by_source = {
+        s["source_id"]: resolve_from(s.get("path"), base_dir)
+        for s in sources if s.get("path")}
     default_pdf = (results.get("source") or {}).get("pdf") \
         or (sources[0] or {}).get("path") if sources else None
+    default_pdf = resolve_from(default_pdf, base_dir) \
+        if default_pdf else None
     files_by_region = {}
+    used_names = set()
     for r in results["regions"]:
         sid = r.get("source_id") or default_sid
         cal = None
@@ -224,7 +291,7 @@ def render_pack(results, pack_dir, zoom):
                 cal = cals[cand]
                 break
         pdf_path = pdf_by_source.get(sid) or default_pdf
-        base = os.path.join(pack_dir, safe_name(r["region_id"]))
+        base = proof_base(pack_dir, sid, r["region_id"], used_names)
         try:
             files = render_overlay(pdf_path, r["page"], r, cal,
                                    segs_by_key.get((sid, r["page"]), []),
@@ -232,20 +299,21 @@ def render_pack(results, pack_dir, zoom):
         except Exception as exc:
             # a page we cannot render (e.g. a CAD source without a raster
             # preview) must not crash the pack - render a marker instead
-            files = [os.path.join(pack_dir,
-                                  safe_name(r["region_id"]) + "_full.png")]
+            files = [base + "_full.png"]
             with open(files[0], "wb") as f:
                 f.write(_marker_png(str(exc)))
         files_by_region[r["region_id"]] = files
         print(f"rendered {r['region_id']}: {len(files)} image(s)")
     index = os.path.join(pack_dir, "index.md")
     with open(index, "w", encoding="utf-8") as f:
-        f.write(build_index_md(results, pack_dir, files_by_region))
+        f.write(build_index_md(results, pack_dir, files_by_region,
+                               geo_problems=geo_problems))
     print(f"wrote {index} ({len(files_by_region)} region(s))")
 
 
 def args_results_path(results):
-    """Best-effort base dir for resolving relative geometry paths."""
+    """Best-effort base dir for resolving relative geometry paths (kept
+    for older callers; render_pack now takes base_dir directly)."""
     return os.path.dirname(results.get("_results_path") or ".")
 
 
@@ -261,8 +329,22 @@ def _marker_png(text):
 
 
 def record_receipt(results, results_path, reviewer, verdict, notes, pack_dir):
-    """Write the independent-audit receipt into the results JSON."""
-    # V4: a `stopped` run must NEVER receive an approved receipt. The guard
+    """Write the independent-audit receipt into the results JSON.
+
+    V5 (P1.2) guard extensions:
+      - a QUARANTINED/SUPERSEDED results file (`*.stale-*`) never receives
+        a receipt - it was left behind by a later run;
+      - superseded sibling files of the same stem are DETECTED and named
+        in the receipt, so a reviewer can never mistake which run they
+        audited; the receipt binds to the file's sha256.
+    """
+    base = os.path.basename(results_path)
+    if ".stale-" in base:
+        print(f"REFUSED: {base!r} is a QUARANTINED (superseded) results file"
+              " left behind by a later run - audit the current results file"
+              " instead. Nothing recorded.")
+        return 2
+    # a `stopped` run must NEVER receive an approved receipt. The guard
     # checks the CURRENT status names (complete / complete_with_callouts /
     # stopped) and the obsolete V2 name `failed` for old files.
     status = results.get("run_status") or results.get("status")
@@ -271,12 +353,26 @@ def record_receipt(results, results_path, reviewer, verdict, notes, pack_dir):
               " failed/were stopped; fix the job spec, re-measure, then"
               " audit. Nothing recorded.")
         return 2
+    stem = base[:-5] if base.endswith(".json") else base
+    directory = os.path.dirname(os.path.abspath(results_path))
+    superseded = sorted(f for f in os.listdir(directory)
+                        if f.startswith(stem + ".stale-"))
+    if superseded:
+        print("WARNING: superseded earlier results file(s) detected next to"
+              f" the current file: {superseded} - the receipt names them so"
+              " the audited run is unambiguous")
+    h = hashlib.sha256()
+    with open(results_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
     receipt = {
         "status": "independent_audit_recorded",
         "reviewer": reviewer,
         "verdict": verdict,
         "notes": notes or "",
         "pack_dir": pack_dir,
+        "results_sha256": h.hexdigest(),
+        "superseded_results_files": superseded,
         "recorded_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     results["review"] = receipt
@@ -305,13 +401,15 @@ def main():
     args = ap.parse_args()
 
     results = json.load(open(args.results, encoding="utf-8"))
+    results["_results_path"] = os.path.abspath(args.results)
     if args.record_receipt:
         if not args.reviewer or not args.verdict:
             print("REFUSED: --record-receipt needs --reviewer and --verdict")
             return 2
         return record_receipt(results, args.results, args.reviewer,
                               args.verdict, args.notes, args.pack)
-    render_pack(results, args.pack, args.zoom)
+    render_pack(results, args.pack, args.zoom,
+                base_dir=os.path.dirname(os.path.abspath(args.results)))
     return 0
 
 
