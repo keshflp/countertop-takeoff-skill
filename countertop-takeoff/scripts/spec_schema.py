@@ -279,8 +279,23 @@ def validate_scope(spec):
     return pages
 
 
+def validate_box_list(lst, what, n=4):
+    require(isinstance(lst, list) and len(lst) == n
+            and all(finite(v) for v in lst),
+            f"{what} must be a list of {n} finite numbers")
+
+
 def validate_schedule(spec):
-    """Validate the schedule evidence block (repeated_types mode only)."""
+    """Validate the schedule evidence block (repeated_types mode only).
+
+    V3 evidence kinds:
+      text  - row_text + word_boxes that reference ACTUAL source words
+              (audit verifies overlap against the extracted words)
+      image - a rendered crop of a bitmap schedule table: crop hash, the
+              displayed cell boxes, headers, per-cell text + confidence,
+              and uncertain cells listed explicitly (P0.3: the real-world
+              schedule was a pasted bitmap under a vector header)
+    """
     sched = spec.get("schedule")
     if spec["mode"] == "individual_rooms":
         require(sched is None,
@@ -293,6 +308,44 @@ def validate_schedule(spec):
     pos_int(sched.get("page"), "schedule.page")
     require(isinstance(sched.get("sheet"), str) and sched["sheet"],
             "schedule.sheet must cite the schedule sheet id")
+    if sched.get("source_id") is not None:
+        require(sched["source_id"] in source_ids(spec),
+                f"schedule.source_id {sched['source_id']!r} is not a declared"
+                " source")
+    else:
+        sched["source_id"] = default_source_id(spec)
+    ev = sched.get("evidence") or {"kind": "text"}
+    require(isinstance(ev, dict) and ev.get("kind") in ("text", "image"),
+            "schedule.evidence.kind must be 'text' or 'image'")
+    sched["evidence"] = ev
+    if ev["kind"] == "image":
+        require(isinstance(ev.get("crop_image"), str) and ev["crop_image"],
+                "image evidence needs crop_image (path of the rendered crop"
+                " the agent read)")
+        require(isinstance(ev.get("crop_sha256"), str)
+                and SHA_RE.match(ev["crop_sha256"]),
+                "image evidence needs crop_sha256 (the 64-hex digest of the"
+                " rendered crop PNG) - the audit re-renders and compares")
+        require(finite(ev.get("render_zoom")) and ev["render_zoom"] > 0,
+                "image evidence needs render_zoom (the zoom used for the"
+                " crop render)")
+        validate_box_list(ev.get("crop_bbox"),
+                          "image evidence crop_bbox (displayed points)")
+        require(isinstance(ev.get("headers"), list) and ev["headers"],
+                "image evidence must record the transcribed headers")
+        cells = ev.get("cells")
+        require(isinstance(cells, list) and cells,
+                "image evidence must record the transcribed cells")
+        for i, c in enumerate(cells):
+            require(isinstance(c, dict) and isinstance(c.get("text"), str),
+                    f"evidence cell {i} needs text")
+            validate_box_list(c.get("box"), f"evidence cell {i} box")
+        unc = ev.get("uncertain_cells")
+        require(unc is None or isinstance(unc, list),
+                "uncertain_cells must be a list of cell indexes")
+        for u in unc or []:
+            require(isinstance(u, int) and 0 <= u < len(cells),
+                    f"uncertain cell {u!r} is not a valid cell index")
     types = sched.get("types")
     require(isinstance(types, list) and types,
             "schedule.types must list every counted type")
@@ -338,7 +391,55 @@ def validate_schedule(spec):
                 pos_int(c, f"stated_totals.per_floor[{k!r}]")
         if "project" in totals:
             pos_int(totals["project"], "stated_totals.project")
+    validate_room_inventory(spec, sched)
     return sched
+
+
+def validate_room_inventory(spec, sched):
+    """V3 room-tag inventory (P0.3): the agent dedupes rooms appearing in
+    both overall and enlarged plans, then records per-type plan-derived
+    counts. The audit reconciles them against the schedule cells; an
+    unexplained mismatch withholds the affected extension (callout).
+    NEVER default a missing count to 1."""
+    inv = sched.get("room_inventory")
+    if inv is None:
+        return None
+    require(isinstance(inv, dict), "room_inventory must be an object")
+    rooms = inv.get("rooms")
+    require(isinstance(rooms, list) and rooms,
+            "room_inventory.rooms must list the tagged rooms")
+    for i, r in enumerate(rooms):
+        require(isinstance(r, dict), f"room_inventory.rooms[{i}] must be an"
+                " object")
+        require(isinstance(r.get("room"), str) and r["room"],
+                f"room_inventory.rooms[{i}].room must be a label")
+        require(isinstance(r.get("type"), str) and r["type"],
+                f"room_inventory.rooms[{i}].type must be a type tag")
+        pos_int(r.get("page"), f"room_inventory.rooms[{i}].page")
+    ptc = inv.get("per_type_counts")
+    require(isinstance(ptc, dict) and ptc,
+            "room_inventory.per_type_counts must map type -> plan-derived"
+            " count")
+    for k, c in ptc.items():
+        pos_int(c, f"room_inventory.per_type_counts[{k!r}]")
+    notes = inv.get("dedupe_notes")
+    require(notes is None or isinstance(notes, list),
+            "room_inventory.dedupe_notes must be a list of strings")
+    for n in notes or []:
+        require(isinstance(n, str) and n.strip(),
+                "room_inventory.dedupe_notes entries must be non-empty")
+    res = inv.get("count_resolutions") or {}
+    require(isinstance(res, dict),
+            "count_resolutions must map type -> resolution")
+    for k, r in res.items():
+        require(isinstance(r, dict) and isinstance(r.get("count"), int)
+                and not isinstance(r["count"], bool) and r["count"] >= 1,
+                f"count_resolutions[{k!r}] must carry an explicit integer"
+                " count with its evidence")
+        require(isinstance(r.get("basis"), str) and r["basis"].strip(),
+                f"count_resolutions[{k!r}] needs a basis (which evidence"
+                " wins and why)")
+    return inv
 
 
 def validate_schedule_consistency(sched):

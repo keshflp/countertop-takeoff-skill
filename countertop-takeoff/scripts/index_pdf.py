@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pymupdf  # noqa: E402  (uv installs it from the header above)
 import preflight_lib as pl  # noqa: E402
+import sheet_identity  # noqa: E402
 
 # --- text patterns (kept in sync with the other scripts) --------------------
 SHEET_RE = re.compile(r"(?im)^\s*SHEET\s*[:#]?\s*([A-Z]{0,3}[-\s]?\d{1,4}[A-Z]?)\s*$")
@@ -46,14 +47,50 @@ DIM_WORD_RE = re.compile(
 )
 UNIT_SCHEDULE_RE = re.compile(r"unit schedule|room schedule|schedule of units|unit type", re.I)
 SCHEDULE_RE = re.compile(r"\bschedule\b", re.I)
+# V3: common schedule TABLE titles - text extraction sees the header and
+# misses a pasted bitmap table underneath, so the title alone must raise a
+# flag that makes the agent render + read the region with vision.
+SCHEDULE_TABLE_TITLE_RE = re.compile(
+    r"room\s+schedule|unit\s+schedule|schedule\s+of\s+units|unit\s+type|"
+    r"room\s+distribution|unit\s+distribution|unit\s+mix|room\s+data|"
+    r"space\s+program|door\s+schedule|window\s+schedule|finish\s+schedule|"
+    r"schedule\s+of\s+finishes|equipment\s+schedule|fixture\s+schedule", re.I)
+SHEET_INDEX_TITLE_RE = re.compile(r"sheet\s+index|drawing\s+index|list\s+of\s+drawings", re.I)
 QTY_RE = re.compile(r"\b(qty|quantity|units|count)\b", re.I)
 TYPE_TAG_RE = re.compile(r"\btype\s+([a-z0-9]{1,4})\b", re.I)
+TYPE_TAG_WORD_RE = re.compile(r"^type$", re.I)
 PLAN_RE = re.compile(r"floor plan|\bplan\b|enlarged", re.I)
 COUNTER_RE = re.compile(r"countertop|counter|vanity|kitchen|cabinet", re.I)
 SPEC_RE = re.compile(r"specification|division\s*\d{1,2}", re.I)
 FINISH_RE = re.compile(r"finish", re.I)
 SCALE_LINE_RE = re.compile(r"\bscale\b", re.I)
 REVISION_RE = re.compile(r"\brev(?:ision)?\s*[.:#-]?\s*([A-Z0-9]{1,4})\b", re.I)
+
+
+def room_tag_boxes(words):
+    """Word-level room/type tags with boxes (V3): 'TYPE A' style pairs and
+    bare room-number tags are inventoried so plan-derived counts can be
+    reconciled against schedule cells (the 3->30 guard)."""
+    tags = []
+    for i, w in enumerate(words):
+        if TYPE_TAG_WORD_RE.match(w["t"]):
+            nxt = words[i + 1] if i + 1 < len(words) else None
+            if nxt and abs(nxt["y0"] - w["y0"]) < (w["y1"] - w["y0"]) * 1.5:
+                tags.append({"tag": nxt["t"].upper(), "kind": "type_tag",
+                             "box": [w["x0"], w["y0"], nxt["x1"], nxt["y1"]]})
+    return tags
+
+
+def extract_index_sheet_numbers(text):
+    """Sheet numbers listed on a drawing-index page (for gap callouts)."""
+    out = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or SCALE_LINE_RE.search(s):
+            continue
+        for m in sheet_identity.LABEL_RE.finditer(s):
+            out.append(m.group(1).replace(" ", "-").upper())
+    return sorted(set(out))
 
 
 def parse_dim_word(word):
@@ -102,6 +139,10 @@ def text_flags(text):
         "unit_schedule": bool(UNIT_SCHEDULE_RE.search(text))
         or bool(SCHEDULE_RE.search(text) and QTY_RE.search(text) and TYPE_TAG_RE.search(text)),
         "schedule": bool(SCHEDULE_RE.search(text)),
+        "schedule_table_title": (sorted(
+            {m.group(0).strip().upper()
+             for m in SCHEDULE_TABLE_TITLE_RE.finditer(text)}) or None),
+        "sheet_index": bool(SHEET_INDEX_TITLE_RE.search(text)),
         "plan": bool(PLAN_RE.search(text)),
         "spec": bool(SPEC_RE.search(text)),
         "finish_schedule": bool(FINISH_RE.search(text) and SCHEDULE_RE.search(text)),
@@ -128,6 +169,7 @@ def preflight_page(doc, page):
     revisions = sorted({m.upper() for m in REVISION_RE.findall(text)})
     rt_pts = [(w["x0"], w["y0"]) for w in words[:200]]
     rt_ok, rt_bad = pl.transform_roundtrip_ok(rt_pts, page.rect)
+    flags = text_flags(text)
     return {
         "page": page.number + 1,
         "sheet": detect_sheet(text),
@@ -136,7 +178,7 @@ def preflight_page(doc, page):
         "height": round(page.rect.height, 2),
         "dim_labels": dim_labels(text),
         "dim_count": len(dim_labels(text)),
-        "flags": text_flags(text),
+        "flags": flags,
         "identity": pl.page_identity(doc, page),
         "transforms": pl.coordinate_transforms(page),
         "transform_check": {"ok": rt_ok,
@@ -144,6 +186,15 @@ def preflight_page(doc, page):
                                           for p in rt_bad]},
         "word_count": len(words),
         "content_regions": regions,
+        "room_tags": room_tag_boxes(words),
+        "schedule_detection": {
+            "title_flags": flags["schedule_table_title"],
+            "suspect_image_tables": [
+                {"bbox": r["bbox"], "pixels_per_inch": r["pixels_per_inch"],
+                 "stream_shas": r["stream_shas"]}
+                for r in regions
+                if r.get("kind") == "raster" and r.get("suspect_table")],
+        },
         "preflight": {
             "op_counts": stats["op_counts"],
             "segment_count": stats["segment_count"],
@@ -160,7 +211,8 @@ def preflight_page(doc, page):
 
 
 def analyze_pack(pages):
-    """Pack-level findings: duplicates, sheet-id conflicts, review needs."""
+    """Pack-level findings: duplicates, sheet-id conflicts, review needs,
+    schedule candidates (V3), drawing-index sheet numbers (V3)."""
     by_fp = {}
     by_sheet = {}
     for p in pages:
@@ -188,10 +240,29 @@ def analyze_pack(pages):
         or any(c["pages"] and p["page"] in c["pages"] for c in sheet_conflicts)
         or any(g and p["page"] in g for g in duplicate_pages)
     ]
+    # V3: schedule candidates = title-flagged pages + suspect bitmap tables
+    schedule_candidates = []
+    index_sheet_numbers = []
+    for p in pages:
+        det = p.get("schedule_detection") or {}
+        entry = {"page": p["page"], "sheet": p.get("sheet"),
+                 "title_flags": det.get("title_flags"),
+                 "suspect_image_tables": det.get("suspect_image_tables") or []}
+        if entry["title_flags"] or entry["suspect_image_tables"]:
+            schedule_candidates.append(entry)
+        if p.get("flags", {}).get("sheet_index"):
+            index_sheet_numbers.extend(
+                extract_index_sheet_numbers(p.get("text") or ""))
     return {
         "duplicate_pages": duplicate_pages,
         "sheet_id_conflicts": sheet_conflicts,
         "pages_needing_disposition": needs_disposition,
+        "schedule_candidates": schedule_candidates,
+        "drawing_index": {
+            "pages": [p["page"] for p in pages
+                      if p.get("flags", {}).get("sheet_index")],
+            "sheet_numbers": sorted(set(index_sheet_numbers)),
+        },
     }
 
 
@@ -241,6 +312,16 @@ def main():
         print()
         print("Unit-schedule candidates :",
               [p["page"] for p in pages if p["flags"]["unit_schedule"]] or "NONE")
+        if findings.get("schedule_candidates"):
+            print("Schedule-table candidates (V3 - render + read with vision"
+                  " if text is missing):")
+            for c in findings["schedule_candidates"]:
+                print(f"  page {c['page']} ({c['sheet']}): titles="
+                      f"{c['title_flags']} bitmap_tables="
+                      f"{[t['bbox'] for t in c['suspect_image_tables']]}")
+        if findings.get("drawing_index", {}).get("sheet_numbers"):
+            print("Drawing-index sheet numbers:",
+                  findings["drawing_index"]["sheet_numbers"])
         print("Vector plan-sheet candidates:",
               [p["page"] for p in pages
                if p["preflight"]["class"] in pl.VECTOR_CLASSES

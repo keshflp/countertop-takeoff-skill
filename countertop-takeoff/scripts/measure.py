@@ -212,6 +212,8 @@ def run_pipeline(args):
                                          audit_obj)
     sched = audit_mod.audit_schedule(spec, results, audit_obj)
     unit_total = audit_mod.reconcile_totals(sched, audit_obj)
+    audit_mod.audit_schedule_evidence(spec, geometry_map, audit_obj)
+    audit_mod.audit_room_reconciliation(spec, audit_obj)
     audit_mod.audit_region_checks(spec, results, calibrations, audit_obj,
                                   args.recheck_tolerance)
     types, total = audit_mod.aggregate_types(spec, results, audit_obj)

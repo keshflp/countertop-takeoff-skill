@@ -327,6 +327,190 @@ def reconcile_totals(sched, audit):
 LEDGER_STATES = {"measured", "package_excluded", "superseded", "unresolved"}
 
 
+def _box_matches_word(b, w):
+    """A recorded evidence box references an actual source word: same text
+    and intersection >= 50% of the smaller box."""
+    if b.get("t") != w["t"]:
+        return False
+    ix = max(0.0, min(b["x1"], w["x1"]) - max(b["x0"], w["x0"]))
+    iy = max(0.0, min(b["y1"], w["y1"]) - max(b["y0"], w["y0"]))
+    inter = ix * iy
+    amin = min((b["x1"] - b["x0"]) * (b["y1"] - b["y0"]),
+               (w["x1"] - w["x0"]) * (w["y1"] - w["y0"]))
+    return amin > 0 and inter / amin >= 0.5
+
+
+def _withhold_type(audit, sched, name, reason):
+    """Mark a type's count unsupported: aggregate_types excludes its
+    extension (blank) and the callout names what was withheld."""
+    for t in sched["types"]:
+        if t["type"] == name:
+            t["_evidence_ok"] = False
+    audit.add_callout(
+        f"schedule count type {name}", reason,
+        blank_fields=["count", "extended_sf"], pages=[sched.get("page")])
+
+
+def audit_schedule_evidence(spec, geometry_map, audit):
+    """P0.3 evidence verification.
+
+    text evidence: every recorded word box must reference an ACTUAL source
+    word (same text, overlapping box) - quoted rows are not free-form.
+    image evidence: the recorded crop hash must match a fresh render of the
+    recorded crop bbox at the recorded zoom (proves WHICH pixels were
+    read); uncertain cells are disclosed. Unsupported counts are withheld
+    (blank) with callouts - never defaulted, never guessed.
+    """
+    sched = spec.get("schedule")
+    if not sched:
+        return
+    ev = sched.get("evidence") or {"kind": "text"}
+    sid = sched.get("source_id") or spec["_sources"][0]["source_id"]
+    geo = geometry_map.get(sid) or {"pages": []}
+    page = next((p for p in geo["pages"] if p["page"] == sched["page"]),
+                None)
+    if ev["kind"] == "text":
+        if page is None:
+            _withhold_all(audit, sched, sid,
+                          f"schedule page {sched['page']} has no extracted"
+                          " words to verify the quoted rows against")
+            return
+        words = page["words"]
+        for t in sched["types"]:
+            boxes = t.get("word_boxes") or []
+            missing = [b.get("t") for b in boxes
+                       if not any(_box_matches_word(b, w) for w in words)]
+            if missing:
+                _withhold_type(
+                    audit, sched, t["type"],
+                    f"evidence boxes {missing} do not reference actual words"
+                    f" on source {sid!r} page {sched['page']} - the count is"
+                    " unsupported and stays blank (fix the quote or re-read)")
+        for v in sched.get("variants", []):
+            boxes = v.get("word_boxes") or []
+            missing = [b.get("t") for b in boxes
+                       if not any(_box_matches_word(b, w) for w in words)]
+            if missing:
+                audit.add_callout(
+                    f"variant evidence {v['name']}",
+                    f"evidence boxes {missing} do not reference actual words"
+                    f" on page {sched['page']} - re-read the variant row",
+                    blank_fields=["count"], pages=[sched.get("page")])
+    else:  # image evidence
+        problems = []
+        if page is None:
+            problems.append(f"schedule page {sched['page']} not extracted")
+        else:
+            got = _render_crop_hash(spec, sid, sched["page"], ev)
+            if got is None:
+                problems.append("crop could not be re-rendered for hash"
+                                " verification")
+            elif got != ev["crop_sha256"]:
+                problems.append(
+                    f"crop hash mismatch: recorded {ev['crop_sha256'][:16]}..."
+                    f", fresh render {got[:16]}... - the transcription does"
+                    " not prove which pixels it read; re-render and"
+                    " re-transcribe")
+        if ev.get("uncertain_cells"):
+            audit.add_callout(
+                "schedule image evidence",
+                f"uncertain cells disclosed: {ev['uncertain_cells']} -"
+                " re-read those cells at higher zoom before relying on them",
+                blank_fields=[], pages=[sched.get("page")])
+        if problems:
+            for t in sched["types"]:
+                _withhold_type(audit, sched, t["type"], "; ".join(problems))
+        else:
+            audit.add("image schedule evidence", "pass",
+                      f"crop hash verified on source {sid!r} page"
+                      f" {sched['page']} ({len(ev.get('cells') or [])} cells"
+                      " transcribed by vision)")
+
+
+def _withhold_all(audit, sched, sid, reason):
+    for t in sched["types"]:
+        t["_evidence_ok"] = False
+    audit.add_callout("schedule evidence", reason,
+                      blank_fields=["count", "extended_sf"],
+                      pages=[sched.get("page")], source_id=sid)
+
+
+def _render_crop_hash(spec, sid, page_no, ev):
+    """Re-render the recorded crop and return its sha256 (None on error)."""
+    try:
+        import pymupdf
+        src = next(s for s in spec["_sources"]
+                   if s["source_id"] == sid and s["kind"] == "pdf")
+        doc = pymupdf.open(src["path"])
+        pg = doc[page_no - 1]
+        clip = pymupdf.Rect(*ev["crop_bbox"])
+        pix = pg.get_pixmap(matrix=pymupdf.Matrix(ev["render_zoom"],
+                                                  ev["render_zoom"]),
+                            clip=clip)
+        data = pix.tobytes("png")
+        doc.close()
+        import hashlib
+        return hashlib.sha256(data).hexdigest()
+    except Exception:
+        return None
+
+
+def audit_room_reconciliation(spec, audit):
+    """P0.3 cross-validation: schedule cells vs plan-derived room-tag
+    counts. The real trap this catches: a schedule cell edited from 3 to 30
+    passed silently when nothing checked the plan tags. An unexplained
+    mismatch withholds the affected extension (callout) unless the agent
+    recorded an explicit count_resolution with its own evidence.
+    NEVER default a missing count to 1."""
+    sched = spec.get("schedule")
+    inv = (sched or {}).get("room_inventory")
+    if not sched or not inv:
+        return
+    ptc = inv.get("per_type_counts") or {}
+    resolutions = inv.get("count_resolutions") or {}
+    rooms = inv.get("rooms") or []
+    seen_types = {t["type"] for t in sched["types"]}
+    # inventory tags pointing at types the schedule never declares
+    stray = sorted({r["type"] for r in rooms if r["type"] not in seen_types})
+    if stray:
+        audit.add_callout(
+            "room inventory", f"plan tags reference type(s) {stray} that the"
+            " schedule does not declare - the schedule may be incomplete;"
+            " inventory them explicitly instead of extending counts",
+            blank_fields=["count"], pages=[sched.get("page")])
+    for t in sched["types"]:
+        name = t["type"]
+        want = ptc.get(name)
+        if want is None:
+            audit.add_callout(
+                f"room reconciliation type {name}",
+                "no plan-derived count recorded for this type - the schedule"
+                " cell is used as-is; record room_inventory.per_type_counts"
+                " for cross-validation",
+                blank_fields=[], pages=[sched.get("page")])
+            continue
+        if want == t["count"]:
+            audit.add("room reconciliation", "pass",
+                      f"type {name}: schedule cell {t['count']} == plan-derived"
+                      f" tag count {want} ({len([r for r in rooms
+                                                if r['type'] == name])}"
+                      " tagged room(s))")
+            continue
+        res = resolutions.get(name)
+        if res and res.get("count") == t["count"]:
+            audit.add("room reconciliation", "pass",
+                      f"type {name}: schedule {t['count']} != plan tags"
+                      f" {want}, RESOLVED by recorded evidence:"
+                      f" {res.get('basis', '')[:90]}")
+        else:
+            _withhold_type(
+                audit, sched, name,
+                f"schedule cell {t['count']} disagrees with the plan-derived"
+                f" room-tag count {want} and no valid count_resolution"
+                " exists - the extension is withheld (blank) until the"
+                " disagreement is resolved from evidence")
+
+
 def build_coverage_ledger(spec, results, audit):
     """Reconcile EVERY inventoried item to exactly one ledger state:
     measured | package_excluded | superseded | unresolved (P0.1).
@@ -377,16 +561,26 @@ def build_coverage_ledger(spec, results, audit):
                 rows = by_type.get((name, None), [])
                 measured_rows = [r for r in rows if r.get("status") !=
                                  "unresolved"]
-                state = ("measured" if measured_rows else "unresolved")
+                evidence_ok = t.get("_evidence_ok") is not False
+                if not measured_rows:
+                    state = "unresolved"
+                elif not evidence_ok:
+                    state = "unresolved"
+                else:
+                    state = "measured"
                 ledger.append({"item": f"type {name} x{t['count']}",
                                "kind": "type",
                                "source": {"pages": [sched.get("page")]},
                                "state": state,
                                "detail": (f"{len(measured_rows)} region(s)"
                                           " measured with schedule evidence"
-                                          if measured_rows else
-                                          "schedule count present but no"
-                                          " region measured - SF blank")})
+                                          if measured_rows and evidence_ok
+                                          else ("measured SF but unsupported"
+                                                " schedule count"
+                                                if measured_rows else
+                                                "schedule count present but"
+                                                " no region measured - SF"
+                                                " blank"))})
             seen.add((name, None))
         for v in sched.get("variants", []):
             key = (v["type"], v["name"])
@@ -570,6 +764,16 @@ def aggregate_types(spec, results, audit):
         std_units = t["count"] - sum(v["count"] for v in incl)
         sf_unit = round(sum(r["area_sf"] for r in std), 4)
         ext = sf_unit * std_units
+        if t.get("_evidence_ok") is False:
+            # unsupported schedule count: the measured per-unit SF is real
+            # evidence, but the multiplication is withheld (blank)
+            std_units = 0
+            ext = 0.0
+            audit.add_callout(
+                f"totals type {name}",
+                "schedule count unsupported - per-unit SF is measured but"
+                " the extension (SF x count) is withheld",
+                blank_fields=["extended_sf"], pages=[sched.get("page")])
         rows = [{"room_type": name, "variant": None, "region_id": r["region_id"],
                  "assembly": r.get("assembly"),
                  "material_canonical": r.get("material_canonical"),
