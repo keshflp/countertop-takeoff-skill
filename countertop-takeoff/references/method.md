@@ -1,139 +1,159 @@
-# Measuring method
+# Measuring method (V2)
 
-How this skill turns PDF linework into trustworthy square footage. Written for
-the agent doing the takeoff and for the human auditing it.
+How this skill turns PDF linework into trustworthy, auditable square footage.
+Written for the agent doing the takeoff and for the human auditing it.
 
 ## 0. Why this design
 
 Plan PDFs are vector drawings: every wall, counter edge, and dimension string
 is stored as coordinates in PDF points (1/72 inch), not pixels. That means
-quantities can be COMPUTED rather than estimated. The failure mode this skill
-guards against is an AI eyeballing a rendered page and quoting a number —
-plausible, unfalsifiable, and wrong often enough to lose bids. So:
+quantities can be COMPUTED rather than estimated. V2's additional lesson: a
+correct-looking number can still accompany the WRONG scope, a duplicated
+region, a mispicked boundary, or a mis-calibrated scale. So V2 makes SCOPE,
+BOUNDARIES, MULTIPLIERS, CALIBRATION, and REVIEW STATUS auditable from
+recorded evidence:
 
-- The model recognizes (which sheets, which outlines, which labels).
-- Scripts measure (calibration, polygon area, multiplication).
-- Every number is reproducible from the geometry JSON.
+- The agent recognizes and SELECTS: which sheets enter scope, which page is
+  the authoritative revision, which schedule rows justify which counts,
+  which dimension spans calibrate, which segments bound each counter.
+- Code measures: hashes, classifications, lengths, closure, areas,
+  reconciliation — and refuses to guess (every refusal is exit 2 with a
+  named reason).
+- The agent never types a quantity and never types a scale factor.
+- Every result cites page/viewport/segment ids/factors; a fresh agent (or an
+  independent human) audits the pack before anything ships.
 
-## 1. Page inventory (`index_pdf.py`)
+Explicit rejection of unsupported geometry is a feature: an OCR'd scan or a
+hybrid page is skipped WITH A RECORDED REASON, not measured-by-faith.
 
-Reads only the text layer of each page and flags:
+## 1. Pack preflight (`index_pdf.py`)
 
-- **Sheet number**: `SHEET A-101` patterns in the text.
-- **Unit schedule**: "unit schedule" phrases, or schedule + qty/type words.
-- **Plans with countertop terms**: counter/countertop/vanity/kitchen/cabinet.
-- **Dimension labels**: words like `10'-0"` (with or without the hyphen,
-  e.g. `10'6"`, `10'`), used later for calibration.
+Per page: sheet id, title, rotation + crop metadata, vector operator counts
+and linework bounds, raster image coverage, dimension-label count, type tags.
+Plus a content CLASS computed from coverage and segment counts — text
+presence NEVER establishes vector suitability (an OCR'd scan carries a full
+text layer and zero usable linework):
 
-It writes `<pdf>.index.json` with full per-page text — this is where the agent
-READS the unit schedule counts. Text is vector data; reading text is not
-"eyeballing".
+| class | meaning |
+|---|---|
+| `vector` | linework only — measurable |
+| `text_only` | schedule/notes pages — readable, not for linework |
+| `searchable_raster` | image dominates + real text layer (OCR'd scan) |
+| `raster` | image dominates, no text |
+| `hybrid` | meaningful image AND vectors (e.g. scan pasted over a vector title block) — not trustworthy for area |
+| `uncertain` | mixed/ambiguous — human must look |
 
-Limitation: scanned (raster) pages have no text layer and no vectors. V1
-requires vector PDFs (native CAD exports or vector-faithful prints).
+Pack-level findings: source SHA-256, duplicate pages (identical content
+fingerprints), sheet-id conflicts (same sheet number, different content —
+one is a superseded revision), revision marks, and the list of pages that
+need an explicit scope disposition before work continues.
 
 ## 2. Geometry extraction (`extract_geometry.py`)
 
-Uses PyMuPDF `page.get_drawings()` and flattens every drawing item into
-straight segments:
+Flattens drawing items into straight segments (lines; béziers → 8 chords;
+rects/quads → 4 edges) and records, per segment, a stable integer id, its
+source path and operator (`l`/`c`/`re`/`qu`). Words carry ids and boxes too.
+Coordinates are normalized to DISPLAYED page space — page rotation is
+applied — so seeds, boundaries, and rendered overlays all agree with what a
+human sees. The file records the source PDF's SHA-256 and per-page preflight
+data; measurement verifies the geometry belongs to the approved source.
 
-- `l` line items → one segment each
-- `c` béziers → 8 chords each
-- `re` rectangles / `qu` quads → 4 edges each
+Curve tolerance, stated honestly: an arc flattened to 8 chords per quarter
+circle underestimates area by ≈ 0.02·r² pt² — a 3-ft radius loses ≈ 0.18 SF
+(≈ 26 sq in), NOT "well under a square inch". Regions whose boundary
+includes bézier segments are flagged `curved_boundary` in the evidence so
+the reviewer knows where this applies; for tighter budgets raise the chord
+count before measuring.
 
-Output JSON per page: `segments: [{x0,y0,x1,y1,w}]` in page points (origin
-top-left, y grows downward — consistent throughout, so lengths and areas are
-unaffected) plus `words: [{t,x0,y0,x1,y1}]` for calibration. Rotated pages are
-not normalized in V1; if a sheet prints rotated, extract-and-measure in its
-stored orientation (areas are rotation-invariant; only your bbox/seed bookkeeping
-must match the stored coordinates).
+## 3. Calibration (`scripts/calibrate.py`)
 
-## 3. Scale calibration
+**Rule: no measurement without calibration; calibration belongs to a
+(source page, viewport) pair and needs TWO agreeing independent dimensions.**
 
-**Rule: no measurement without calibration, on the same sheet.**
+The agent selects each span: which words carry the dimension text and which
+segments make up the dimension line. Code joins split labels (`12'-` + `0"`),
+parses feet-inches-fractions (`20'-6` + `1/2"`), sums the segment lengths,
+and computes `pt_per_ft = length / real_ft`. Per (page, viewport): median of
+the span factors; spread ≤ 2% passes, 2–5% warns (must be explained to the
+reviewer), > 5% hard-fails. One span never calibrates — a single label
+agreeing with itself is how v1 shipped a 36 pt/ft factor from a wrong
+nearby segment. The ACTUAL factor used is recorded per region and shown in
+the report, so a report can never say 18.00 while the math used 18.36.
 
-1. Find dimension-like words (`10'-0"` → 10.0 ft, `2'-6"` → 2.5 ft) in the
-   page's words, skipping any line that reads like a scale note
-   (`SCALE: 1/4" = 1'-0"` is a statement about the drawing, not a dimension).
-2. For each label, take the longest vector segment whose midpoint falls inside
-   the label's bbox expanded by a pad (default 12 pt). Dimension strings in CAD
-   exports sit exactly on their dimension line, which makes this match
-   reliable; picking the longest candidate rejects tick marks.
-3. `pt_per_ft = segment_length_pt / real_length_ft`.
-4. Cross-check: the sheet's labels must agree (median is used; spread > 5% is
-   a hard stop; 2–5% is a warning you must explain). CAD dimensions are exact,
-   so disagreement means wrong segment matched — investigate, don't average.
+Sanity band: compare against the title block (1/4"=1'-0" full size ⇒ 18
+pt/ft; 1/8"=1'-0" ⇒ 9 pt/ft; half-size prints halve the factor). The title
+block is a CHECK, never the source. No dimension strings at all → the skill
+stops; a known real length on that sheet can be supplied as an explicit span
+(`"real_ft"`) only if the label actually exists there.
 
-Sanity band: compare against the title block (1/4"=1'-0" full-size ⇒ 18 pt/ft;
-a half-size print ⇒ 9 pt/ft; 1/8" ⇒ 36 pt/ft …). The title block is a CHECK,
-never the source. If a sheet has no dimension strings, the skill stops — the
-user must supply a known dimension that actually exists as a labeled string on
-that sheet (job spec `"calibration": {"text": "..."}`) or the set cannot be
-measured honestly.
 
-## 4. Region selection and polygon assembly
+## 4. Region measurement (`scripts/regions.py`)
 
-The agent gives each countertop a **bbox** (window) and a **seed** (point
-inside the counter). `measure.py` then:
+The agent selects the boundary segment ids for each countertop; code then:
 
-1. Keeps segments whose BOTH endpoints lie inside the bbox — this is why the
-   bbox must exclude dimension lines, ticks, and non-counter walls.
-2. Snaps endpoints to a grid (`--snap`, default 0.05 pt) to heal float noise,
-   nodes the linework (`unary_union`) and closes it into faces
-   (`shapely.ops.polygonize`).
-3. Picks the **smallest face containing the seed**. Smallest, because room
-   walls may also form a closed loop around the counter; the counter face is
-   strictly inside it. (In the fixture the counter shares an edge with the
-   unit outline; noding splits the shared edge and the two faces stay distinct
-   — unit ~96 SF vs counter 31.25 SF, so "smallest containing seed" is
-   unambiguous.)
-4. Area by shoelace over the face vertices → `SF = area_pt² / pt_per_ft²`.
+1. Snaps endpoints to a 0.05 pt grid and nodes the selection into a graph.
+2. Requires EVERY node to have degree exactly 2 and the walk to close into
+   ONE cycle. Dangling endpoints (open boundary, stray hatch tick, dimension
+   line) and branched nodes (two loops touching = ambiguous) are REFUSED,
+   with the offending coordinates named. There is no nearest-face fallback —
+   the v1 crash on `nearest=None` came from guessing after polygonization.
+3. Requires the seed to be STRICTLY interior (`Polygon.contains`, boundary
+   distance > 0.01 pt) — v1's `.covers()` accepted a seed sitting on the shell.
+4. Computes area by the shoelace formula: `SF = area_pt² / factor²`.
+5. Applies the declared gross-area policy: `gross` subtracts nothing
+   (observed inner loops like sink rims are recorded, not subtracted);
+   `net_of_declared_cutouts` subtracts exactly the declared cutout loops,
+   each verified to lie fully inside the boundary. V1 silently subtracted a
+   sink loop while its own docs said cutouts were ignored — v2 makes the
+   policy explicit and auditable.
+6. Checks counted instances for overlaps: two base regions of the same
+   (type, variant) sharing any area is a hard fail (this is the v1 bug that
+   passed a duplicated Type B at 208.75 SF); cross-type overlap warns.
 
-If the seed is not inside any closed loop the tool refuses to guess (exit 2)
-with the distance to the nearest loop in the message — usually a bbox too
-tight or a seed on a line.
+`edge_lf` (perimeter ÷ scale) stays INFORMATIONAL ONLY — front edge vs wall
+edge identification is future scope.
 
-`edge_lf_info` (face perimeter ÷ scale) is reported per region as
-INFORMATIONAL ONLY: V1 cannot yet tell countertop front edge from wall edge.
+## 5. Scope ledger, schedule evidence, audit
 
-## 5. Repetition and multiplication
+- **Scope**: every source page is `measured` (with expected region ids),
+  `intentionally_skipped` (with a quoted reason), or `blocked` (prevents
+  completion). The audit compares planned region ids vs completed results
+  EXACTLY — deleting every Type B job or leaving a measured page empty
+  cannot pass like it did in v1.
+- **Schedule**: counts are positive integers read from quoted row text with
+  recorded word boxes; missing counts fail (v1 defaulted to 1). Floor rows
+  decompose counts; stated floor/project totals must reconcile. ADA-style
+  variants declare `included_in_parent_total` explicitly so subsets are
+  never double-counted; `individual_rooms` mode sums rooms independently
+  with count 1 — a declared mode, not a silent fallback.
+- **Rechecks**: an independently selected re-measure of a base region must
+  agree within 2% (configurable) and is never extended into totals.
+- **Status**: audit items are pass / warn / fail. Any fail = `failed` (no
+  export, stale exports quarantined). No fails + warnings = `warning`
+  (exportable, must be explained). Otherwise `ready`. Independently of both,
+  `review_status` records the independent audit: `independent_audit_pending`
+  until `audit_pack.py --record-receipt` writes the reviewer and verdict.
 
-- The **unit schedule** (read from page text by the agent, confirmed by the
-  user at the gate) is the only multiplier source.
-- Measure ONE instance per type; `measure.py` multiplies:
-  `extended_sf = sf_per_unit × schedule_count`.
-- **Spot-check**: a second instance of the same type must agree within 2%
-  (configurable `--spot-tolerance`). These sets are nominally identical, so a
-  real deviation means revision mismatch or a modified unit — stop and look.
-- Counts the agent cannot find default to 1 WITH A WARNING in the report
-  ("VERIFY") — a warning is not license to ship.
+## 6. Known limitations (by design)
 
-### Exception rules (measure separately, do not fold into a type)
+- **Raster / hybrid pages**: skipped or blocked with recorded reasons.
+  Automatic raster tracing is out of scope.
+- **Curved counters**: flagged, tolerance stated above (see §2).
+- **Cutout detection**: only DECLARED cutouts subtract; finding un-declared
+  inner loops automatically is drawing understanding — the fresh-agent audit
+  checks overlays instead.
+- **Boundary repair**: a selection that doesn't close is refused, never
+  "repaired" by snapping to nearest linework.
+- **Universal schedule extraction**: the agent reads schedule text and
+  records evidence; nothing infers counts from prose.
+- **Edge LF / backsplash / cutout pricing**: schema groundwork only.
 
-| Exception | Why | Handling |
-|---|---|---|
-| Mirrored units | Same SF by definition | Verify ONE; if it matches, type holds |
-| Corner/end units | Extra counter run | Own plan sheet → own instance + own count |
-| ADA-modified units | Lowered/shorter runs, different appliances | Own instance + own count |
-| Ground / penthouse variants | Upgraded or reduced counter packages | Own instance + own count |
-| Amenity spaces (lobby, club, pool bath) | No type letter | Measure individually, count 1 unless schedule says otherwise |
-| Unlabeled counters | Unknown multiplier | Open question at the gate — never guess |
+## 7. Worked examples
 
-## 6. Known limitations (V1, by design)
-
-- **Raster/scanned PDFs**: no vectors → no measurement. Reject clearly.
-- **Cutouts**: sink/range inner loops are ignored (outer face wins). Phase 3.
-- **Curved counters**: béziers are flattened to 8 chords (error well under a
-  square inch at typical scales); fine for V1.
-- **Rotated sheets**: areas are fine; bbox/seed must use stored coordinates.
-- **Text-as-curves exports**: labels have no text layer → calibration
-  impossible → the skill stops rather than assume.
-- **3D/BIM exports with smart hatching**: hatch fills add segments inside the
-  bbox; the smallest-face rule usually shrugs them off, but watch the
-  `loops_found` notes in the report.
-
-## 7. Worked example
-
-`examples/run_example.md` is a full verified run against the synthetic fixture:
-known areas are recovered exactly (total 168.75 SF; Type A 38.25 ×3; Type B
-27.00 ×2; calibration 18.0000 pt/ft from six labels, spread 0.00%).
+- Clean fixture: `examples/run_example.md` — 168.75 SF exact.
+- Hostile fixture: `uv run examples/make_fixture.py --case messy` then
+  `examples/messy.jobs.json` — 990.00 SF gross (936.00 with declared
+  cutouts), two viewports at 18/9 pt/ft on a rotated sheet, ADA variant
+  allocation, revision conflict resolved, searchable raster explicitly
+  skipped. Negative mutations and their refusals live in
+  `examples/tests_v2.py`.
