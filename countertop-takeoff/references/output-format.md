@@ -1,8 +1,7 @@
 # Output format spec (5.1.0)
 
-Formats produced by the current pipeline (existing v3 results/v5 pricing
-schema tags are retained). Consumers (the agent's report,
-the audit pack, the estimate, later phases) rely on these, not prose.
+Contracts for reports, audit packs, estimates, and proposals. Existing v3
+results/v5 pricing schema tags are retained.
 
 ## 1. Markdown report (`measure.py --report`)
 
@@ -12,7 +11,7 @@ Sections, in order:
    gross-area policy, declarations (conflicts/omissions/revision decisions)
    recorded for the auditor.
 2. **Approved scope** — table `page | sheet | disposition | detail` (detail
-   = expected region ids, or the quoted skip/block reason). Every source
+   = expected region ids, or the quoted disposition reason). Every source
    page appears exactly once.
 3. **Schedule evidence** — the quoted rows, counts, variant flags
    (included in parent total vs additional), stated totals; or the
@@ -35,7 +34,10 @@ Sections, in order:
    status line, and the overall run status:
    `complete`, `complete_with_callouts`, or `stopped`.
 
-## 2. CSV (`--csv`) — written ONLY when no required check failed
+Input dispositions (`measured | intentionally_skipped | superseded | unresolved`)
+describe page plans; coverage-ledger states describe resolved output scope.
+
+## 2. CSV (`--csv`) — completed runs, including callouts
 
 Columns: `row_kind, room_type, variant, region_id, sheet, page, viewport,
 region_sf, count_applied, region_extended_sf, pt_per_ft_used, source, notes`
@@ -49,7 +51,7 @@ Jobs WITHOUT assemblies keep the V2 shape:
 - `type_total` — exactly one per type with the type's extended SF
 - `grand_total` — one row, project total
 
-Jobs WITH assemblies derive every row from the ONE resolved model (P0.1):
+Jobs WITH assemblies derive every row from the ONE resolved model:
 - `base` — one row per PIECE (blank SF/extensions stay blank; notes carry
   the state + the named blanks)
 - `type_total` — one per active type; an ALL-unknown type totals as
@@ -61,20 +63,15 @@ Jobs WITH assemblies derive every row from the ONE resolved model (P0.1):
   Hotel: 123.00 SF resolved subset vs 146.98 SF full known subtotal; unknown
   contributions keep completeness false. Neither number asserts complete scope.
 
-On a stopped run the CSV is not written, and any pre-existing export file is
-renamed `<name>.stale-<utc>` so an old export can't look current.
-
-## 2b. Stale-output handling + stopped diagnostics (V5, P0.1)
+## 2b. Stale-output handling + stopped diagnostics
 
 On ANY stop (the three data stops, spec refusals, unexpected crashes),
 measure.py quarantines EVERY superseded artifact — CSVs, the report,
 results.json, and estimate/proposal outputs — as `<name>.stale-<utc>`, and
 writes a CURRENT stopped diagnostic results JSON
 (`run_status: "stopped"`, `stopped_early: true`, the stop reason) over the
-results path before quarantining dependent outputs. Old artifacts can
-never look current. `audit_pack.py --record-receipt` refuses a receipt on
-a quarantined file, refuses a stopped run, names any superseded sibling
-files in the receipt, and binds the receipt to the results sha256.
+results path before quarantining dependent outputs. No CSV exports are written
+for stopped runs; old artifacts cannot look current. Receipt rules are below.
 
 Input/output and output/output aliases are rejected before any write or
 cleanup, using case-insensitive canonical Windows identity (including links).
@@ -116,7 +113,7 @@ stopped-diagnostic/quarantine path. Invalid alias requests leave inputs intact.
   "run_status": "complete | complete_with_callouts | stopped",
   "callouts": [{"scope", "reason", "blank_fields", "source"}],
   "coverage_ledger": [{"item", "kind", "state":
-                       "measured|package_excluded|superseded|unresolved"}],
+                       "measured|included_scope|package_excluded|superseded|unresolved"}],
   "assembly_boq": [...],
   "piece_boq": [...],
   "scope_incomplete": [{"item", "kind", "state": "unresolved", "detail"}],
@@ -147,8 +144,7 @@ disclosed, with no gate; the separate receipt can be recorded later safely.
 ## 4. Audit pack (`audit_pack.py --pack DIR`)
 
 - `<source>__<region>-<digest>_full.png` / `..._closeup.png` per measured
-  region (V5: collision-resistant, SOURCE-QUALIFIED filenames —
-  `same:counter` and `same/counter` never collide): base page render
+  region (collision-resistant, source-qualified filenames): base page render
   (recorded rotation applied) + translucent measured shell, region id,
   area, ACTUAL factor, policy, seed marker, calibration span highlights,
   declared cutouts. Relative paths resolve against the RESULTS file's own
@@ -168,8 +164,7 @@ disclosed, with no gate; the separate receipt can be recorded later safely.
 
 ## 5b. Estimate (`estimate.py` / `measure.py --estimate-profile`)
 
-Three files, all from ONE computation over the assembly BoQ + rate
-profile:
+One computation over the assembly BoQ + rate profile produces:
 
 - `estimate.json` — schema `countertop-takeoff/v5 estimate`; scope_complete
   flag, unknown_scope (omitted in-scope items), currency,
@@ -195,11 +190,9 @@ profile:
   rendered amount RE-READ from the PDF and checked against estimate.json
   before the file ships. Markdown syntax is removed: PDFs show plain BLANK,
   clean headings and exact rates, with readable assembly/room identifiers.
-  The AGENT HOST's document tooling may render a
-  richer PDF from the same md instead; the contract is that the PDF carries
-  the SAME grand total as md + json
+  Host tooling may render richer PDFs from the same Markdown; totals must agree.
 - `proposal.json` / `proposal.md` / `proposal.pdf` (`scripts/proposal.py`,
-  V5 P1.3) — proposal-lite built FROM the corrected estimate: schema
+  ) — proposal-lite built FROM the corrected estimate: schema
   `countertop-takeoff/v5 proposal`; provenance binds the estimate sha256
   AND the results sha256 (mismatch refuses); package summaries grouped
   from the data; UNCHANGED EA quantities and exact rates; exclusions from

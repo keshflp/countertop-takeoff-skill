@@ -2,20 +2,21 @@
 # requires-python = ">=3.9"
 # dependencies = ["pymupdf==2.1", "shapely==2.2.0"]
 # ///
-"""Calibrated, scope-checked countertop measurement (V2 pipeline).
+"""Calibrated, scope-checked countertop measurement.
 
-Runs the V2 flow in one command: validate the job spec against the hashed
+Validate a supported job spec against the hashed
 source, audit the scope ledger and schedule evidence, calibrate each
 (page, viewport) from selected dimension spans, measure every region from
 selected boundary segments, run the completeness/reconciliation audit, and
 write the evidence package + report + (when safe) the CSV export.
 
 Exit codes:
-  0 = required checks passed (status ready or warning; review may still be
-      pending - check review_status in the results JSON before delivering)
-  2 = hard stop: invalid spec, hash mismatch, non-vector page, failed
-      calibration, unclosed boundary, failed audit. Diagnostics (report +
-      results JSON) are still written; any previous export is quarantined.
+  0 = complete or complete_with_callouts; unresolved fields stay blank.
+      Independent review may be pending; see review_status in results JSON.
+  2 = stopped: no calibration anywhere, no schedule and no repeatable
+      pattern, or source integrity mismatch. Invalid specs refuse separately.
+      Local geometry/calibration failures degrade with callouts. Stopped
+      diagnostics are written and superseded exports quarantined.
 
 Usage:
     uv run scripts/measure.py <job-spec.json> [--report report.md]
@@ -552,10 +553,10 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
 
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("jobs", help="V2 job spec JSON (see module docstring)")
+    ap.add_argument("jobs", help="v2/v3 job spec JSON (see references/job-spec-v3.md)")
     ap.add_argument("--report", help="write markdown report here")
     ap.add_argument("--csv", dest="csv_path", help="write base-rows CSV here"
-                    " (only when no required check failed)")
+                    " (complete or complete_with_callouts runs)")
     ap.add_argument("--piece-csv", dest="piece_csv",
                     help="write the PIECE BoQ CSV (dims, SF, edge LF, splash,"
                     " cutouts, extensions)")

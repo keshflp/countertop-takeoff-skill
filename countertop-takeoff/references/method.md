@@ -1,233 +1,139 @@
-# Measuring method (V4)
+# Measuring method
 
-How this skill turns drawing sets (vector PDFs, DXF, rasters) into
-trustworthy, auditable quantities. Written for the agent doing the takeoff
-and for the human auditing it.
+The agent recognizes scope and selects evidence; code computes quantities.
+Plan PDFs can contain vectors, rasters, or both. Text/OCR alone never proves
+measurable linework. Follow the workflow order in [SKILL.md](../SKILL.md).
 
-## V4 deltas over V3 (this section is current; the rest describes the
-shared method)
+## 1. Intake and preflight
 
-- ONE RESOLVED QUANTITY MODEL: every deliverable total (project, type
-  rows, assembly BoQ, piece BoQ, CSV grand total) derives from the same
-  resolved records; for jobs that declare assemblies the run ASSERTS the
-  BoQ views agree over the SAME fully resolved assembly subset. Project,
-  report and CSV equal the full known piece subtotal, including valid parts
-  of incomplete assemblies. Hotel: 123.00 SF resolved subset vs 146.98 SF
-  full known subtotal; report the distinction. Included variants (e.g. ADA inside a parent type) are
-  SUBTRACTED from parent counts; package scope applies once per assembly
-  in every aggregation branch.
-- EVIDENCE BINDING: schedule counts must correspond NUMERICALLY to the
-  quoted evidence ("3" never supports 30; image-evidence counts cite
-  `count_cells`); room reconciliation derives counts from the deduped tag
-  records, not from the supplied summary; the image route RECOMPUTES the
-  area from recorded selections (an edited result number over unchanged
-  pixels is rejected), requires the crop bound to (source, page, bbox,
-  zoom) and the overlay proof; `real_ft` overrides contradicting readable
-  labels become callouts.
-- CONSISTENT DEGRADATION: only the three DATA stops stop a job (a
-  malformed job spec refuses separately, before any measuring). Image-range
-  breaches, overlaps, duplicate boundaries, unplanned regions, and failed
-  rechecks degrade LOCALLY — the affected records are withheld blank
-  (numeric quantities NULLED; the measured value kept aside as
-  `measured_area_sf` diagnostics) behind named callouts. Degraded fields
-  are genuinely null — never a value wearing a blank declaration.
-- CAD CORRECTNESS: metres are 1/0.3048 ft per m (V3 shipped 3.048);
-  $INSUNITS 8 is MICROINCHES; MINSERT arrays expand row × col; layer-0
-  block children inherit the insert's effective layer (filtering AFTER
-  expansion); polyline bulges become disclosed arc approximations with
-  chord counts solved for ≤0.5% area error per curve; non-standard OCS
-  extrusions are named exclusions; CAD (and image) source bytes are
-  re-hashed before measuring.
-- ASSEMBLY-EA ESTIMATE (rate profile): EA × exact rate, never SF × price;
-  unmatched/ambiguous rates and withheld quantities stay blank; explicit
-  zero-rates price real 0.00 lines; Decimal + ROUND_HALF_UP to cents;
-  estimate.md / .json / .pdf agree on the grand total (blank while any
-  in-scope amount is unknown).
+Collect every requested input into one job directory with an intake manifest:
+requested/resolved files, byte sizes, SHA-256, page counts, expected-count
+verdict, and unavailable inputs. Cloud downloads happen through the agent.
 
-## V3 deltas over V2 (the rest of this section describes the shared
-V2-established method)
+`index_pdf.py` inventories each PDF's sheet identity, rotation/crop metadata,
+vector operations/bounds, image coverage, dimension labels, and type tags.
+Page classes are `vector`, `text_only`, `searchable_raster`, `raster`,
+`hybrid`, or `uncertain`. Inspect content REGIONS too: a bitmap schedule under
+a vector header needs image reading without disqualifying other linework.
+Coverage thresholds are percentages (20/60); raster fingerprints hash pixels.
 
-- Image-coverage thresholds are PERCENT (20 / 60); raster fingerprints hash
-  actual stored pixels (`get_image_info(xrefs=True)`).
-- Content REGIONS: per-region raster/vector classification inside a sheet —
-  a pasted bitmap schedule neither disappears nor disqualifies unrelated
-  vector geometry. Region boundaries must sit OUTSIDE raster regions for
-  the vector route; raster regions go through the image route or stay
-  blank.
-- Dimension parsing accepts total inches (211"), decimals (10.5'), explicit
-  inch-only values (4", 1 1/2" — required by section sheets), fractions,
-  and split labels.
-- Calibration spans must be independent (unique segments AND unique parsed
-  lengths); duplicate calibration keys for one viewport refuse; viewport
-  boxes bound spans and region seeds.
-- Graduated degradation: recoverable failures resolve to UNRESOLVED
-  records with BLANK quantities + callouts; run status is complete /
-  complete_with_callouts / stopped; exactly three DATA stops (see
-  SKILL.md — malformed job specs refuse separately as spec-validation
-  errors, they are not one of the three).
-- Routes in order: vector PDF -> supplied DXF with verified units
-  ($INSUNITS; unitless refuses without an explicit --units declaration,
-  recorded operator-verified) -> calibrated image-space measurement
-  (image_measure.py: crop hash, 2+ agreeing anchors, mandatory overlay).
-- Counts: schedule evidence (text word boxes or hash-verified crop cells)
-  cross-validated against plan room tags; unsupported counts are withheld.
-- Dual BoQ: assemblies + pieces derive from one model; piece and assembly
-  views are never summed with each other.
+Record duplicate pages, conflicting revisions, sheet aliases, drawing-index
+gaps, and revision decisions. Disposition each `(source_id, page)` as
+`measured` (expected region IDs), `intentionally_skipped` (reason),
+`superseded` (reason), or `unresolved` (reason). These are INPUT dispositions,
+not the output coverage-ledger states listed below. No `blocked` disposition.
 
-## 0. Why this design
+## 2. Schedule and room evidence
 
-Plan PDFs are vector drawings: every wall, counter edge, and dimension string
-is stored as coordinates in PDF points (1/72 inch), not pixels. That means
-quantities can be COMPUTED rather than estimated. V2's additional lesson: a
-correct-looking number can still accompany the WRONG scope, a duplicated
-region, a mispicked boundary, or a mis-calibrated scale. So V2 makes SCOPE,
-BOUNDARIES, MULTIPLIERS, CALIBRATION, and REVIEW STATUS auditable from
-recorded evidence:
+Quote text rows with selected word IDs/boxes. For bitmap schedules, render a
+legible crop, record source/page/bbox/zoom and crop SHA-256, transcribe cells
+with boxes, and mark uncertainty. Image-evidence types AND variants cite
+`count_cells`; uncertain or unsupported cells withhold their counts and
+any dependent standard allocation. Hashes prove pixel identity, not reading.
 
-- The agent recognizes and SELECTS: which sheets enter scope, which page is
-  the authoritative revision, which schedule rows justify which counts,
-  which dimension spans calibrate, which segments bound each counter.
-- Code measures: hashes, classifications, lengths, closure, areas,
-  reconciliation — and refuses to guess (every refusal is exit 2 with a
-  named reason).
-- The agent never types a quantity and never types a scale factor.
-- Every result cites page/viewport/segment ids/factors; a fresh agent (or an
-  independent human) audits the pack before anything ships.
+Counts must correspond NUMERICALLY to cited evidence: a quoted 3 cannot
+support 30. `row_text` is descriptive only. Independently inventory room tags
+and deduplicate rooms appearing on overall/enlarged plans. Reconcile those
+records with schedule cells, floor subtotals, and project totals; a conflicting
+summary cannot override tags. Unsupported counts stay blank, never default 1.
 
-Explicit rejection of unsupported geometry is a feature: an OCR'd scan or a
-hybrid page is skipped WITH A RECORDED REASON, not measured-by-faith.
+Included variants are subtracted from parent counts only when supported;
+unknown included counts withhold the dependent parent allocation. Enumerated
+rooms use declared `individual_rooms` mode, not a fallback count.
 
-## 1. Pack preflight (`index_pdf.py`)
+## 3. Measurement routes, in order
 
-Per page: sheet id, title, rotation + crop metadata, vector operator counts
-and linework bounds, raster image coverage, dimension-label count, type tags.
-Plus a content CLASS computed from coverage and segment counts — text
-presence NEVER establishes vector suitability (an OCR'd scan carries a full
-text layer and zero usable linework):
+1. Selected vector PDF boundaries with per-viewport calibration.
+2. Supplied DXF with verified native units (convert DWG first).
+3. Calibrated image-space measurement for legible rasters.
 
-| class | meaning |
-|---|---|
-| `vector` | linework only — measurable |
-| `text_only` | schedule/notes pages — readable, not for linework |
-| `searchable_raster` | image dominates + real text layer (OCR'd scan) |
-| `raster` | image dominates, no text |
-| `hybrid` | meaningful image AND vectors (e.g. scan pasted over a vector title block) — not trustworthy for area |
-| `uncertain` | mixed/ambiguous — human must look |
+Try available alternate routes before withholding affected quantities. Raster
+or hybrid classification alone is not a blanket exclusion; unusable imagery
+stays blank with a named callout. Automatic full-plan tracing is out of scope.
+Stated section/elevation dimensions take priority on DO NOT SCALE DRAWINGS
+sheets; preserve provenance when joining depth/thickness/material to lengths.
 
-Pack-level findings: source SHA-256, duplicate pages (identical content
-fingerprints), sheet-id conflicts (same sheet number, different content —
-one is a superseded revision), revision marks, and the list of pages that
-need an explicit scope disposition before work continues.
+### Vector extraction and calibration
 
-## 2. Geometry extraction (`extract_geometry.py`)
+`extract_geometry.py` emits stable word/segment IDs, source-path/operator
+identity (`l`, `c`, `re`, `qu`), source SHA-256, and preflight metadata.
+Coordinates are DISPLAYED page space: rotation is applied consistently to
+selections, seeds, and overlays. Measurement verifies the source binding.
 
-Flattens drawing items into straight segments (lines; béziers → 8 chords;
-rects/quads → 4 edges) and records, per segment, a stable integer id, its
-source path and operator (`l`/`c`/`re`/`qu`). Words carry ids and boxes too.
-Coordinates are normalized to DISPLAYED page space — page rotation is
-applied — so seeds, boundaries, and rendered overlays all agree with what a
-human sees. The file records the source PDF's SHA-256 and per-page preflight
-data; measurement verifies the geometry belongs to the approved source.
+Calibration belongs to `(source, page, viewport)` and needs TWO or more
+agreeing independent dimensions: unique segment selections AND parsed lengths.
+Viewport boxes constrain spans and seeds; duplicate calibration keys refuse.
+The parser accepts total inches, decimal feet, inch-only values, fractions,
+and split labels. Code joins selected words, sums selected segment lengths,
+and computes `pt_per_ft = length_pt / real_ft`; no typed scale factors.
+Explicit `real_ft` values must not contradict readable labels.
 
-Curve tolerance, stated honestly: an arc flattened to 8 chords per quarter
-circle underestimates area by ≈ 0.02·r² pt² — a 3-ft radius loses ≈ 0.18 SF
-(≈ 26 sq in), NOT "well under a square inch". Regions whose boundary
-includes bézier segments are flagged `curved_boundary` in the evidence so
-the reviewer knows where this applies; for tighter budgets raise the chord
-count before measuring.
+Use the median factor: spread <=2% passes, 2-5% warns, >5% fails that local
+calibration. Record the actual factor on every region. The title block is a
+sanity check only (1/4 inch per foot gives 18 pt/ft full size); never borrow
+another viewport's scale. A failed viewport does not invalidate healthy ones.
 
-## 3. Calibration (`scripts/calibrate.py`)
+### Boundaries and geometry
 
-**Rule: no measurement without calibration; calibration belongs to a
-(source page, viewport) pair and needs TWO agreeing independent dimensions.**
+The agent selects shell segment IDs, a strictly interior seed, and an honest
+`expected_sf_range`. Code snaps to a 0.05 pt grid, nodes the graph, requires
+every node degree 2 and exactly one closed cycle. Dangling, branched, or
+ambiguous selections are withheld; there is no nearest-face repair fallback.
+The seed must satisfy `Polygon.contains` and boundary distance >0.01 pt.
+Area is shoelace area in pt squared divided by the actual factor squared.
 
-The agent selects each span: which words carry the dimension text and which
-segments make up the dimension line. Code joins split labels (`12'-` + `0"`),
-parses feet-inches-fractions (`20'-6` + `1/2"`), sums the segment lengths,
-and computes `pt_per_ft = length / real_ft`. Per (page, viewport): median of
-the span factors; spread ≤ 2% passes, 2–5% warns (must be explained to the
-reviewer), > 5% hard-fails. One span never calibrates — a single label
-agreeing with itself is how v1 shipped a 36 pt/ft factor from a wrong
-nearby segment. The ACTUAL factor used is recorded per region and shown in
-the report, so a report can never say 18.00 while the math used 18.36.
+`gross` subtracts nothing; `net_of_declared_cutouts` subtracts only selected
+closed cutout loops verified inside the shell. Undeclared sink rims are not
+automatically deductions. Repeated geometry, overlaps, unplanned regions,
+range breaches, and failed rechecks produce local callouts and named blanks.
+Rechecks use independent selections, default 2% tolerance, and never extend.
 
-Sanity band: compare against the title block (1/4"=1'-0" full size ⇒ 18
-pt/ft; 1/8"=1'-0" ⇒ 9 pt/ft; half-size prints halve the factor). The title
-block is a CHECK, never the source. No dimension strings at all → the skill
-stops; a known real length on that sheet can be supplied as an explicit span
-(`"real_ft"`) only if the label actually exists there.
+PDF beziers flatten to 8 chords; curved boundaries carry `curved_boundary`.
+An 8-chord quarter circle loses approximately 0.02*r^2 pt squared: a 3-ft
+radius loses about 0.18 SF (26 square inches). Disclose this tolerance.
+Explicit edge runs distinguish profile/exposure; perimeter alone does not.
 
+### CAD and image evidence
 
-## 4. Region measurement (`scripts/regions.py`)
+DXF `$INSUNITS` supplies scale; unitless files refuse without explicit
+`--units in|ft|mm|cm|m`, recorded as operator-verified. Metres convert by
+1/0.3048 ft/m; unit 8 is microinches. MINSERT arrays expand row x column;
+layer-0 children inherit the insert layer before filtering. Bulges use
+chord counts for <=0.5% area error per curve. Unsupported OCS extrusions
+are named exclusions. See [CAD routes](cad-context.md).
 
-The agent selects the boundary segment ids for each countertop; code then:
+The image route needs crop hash, source/page/bbox/zoom binding, two agreeing
+labeled anchors, selected boundary points, and mandatory overlay proof.
+Measurement recomputes area from selections; changing a result number while
+retaining pixels fails evidence validation. CAD/image bytes are re-hashed.
 
-1. Snaps endpoints to a 0.05 pt grid and nodes the selection into a graph.
-2. Requires EVERY node to have degree exactly 2 and the walk to close into
-   ONE cycle. Dangling endpoints (open boundary, stray hatch tick, dimension
-   line) and branched nodes (two loops touching = ambiguous) are REFUSED,
-   with the offending coordinates named. There is no nearest-face fallback —
-   the v1 crash on `nearest=None` came from guessing after polygonization.
-3. Requires the seed to be STRICTLY interior (`Polygon.contains`, boundary
-   distance > 0.01 pt) — v1's `.covers()` accepted a seed sitting on the shell.
-4. Computes area by the shoelace formula: `SF = area_pt² / factor²`.
-5. Applies the declared gross-area policy: `gross` subtracts nothing
-   (observed inner loops like sink rims are recorded, not subtracted);
-   `net_of_declared_cutouts` subtracts exactly the declared cutout loops,
-   each verified to lie fully inside the boundary. V1 silently subtracted a
-   sink loop while its own docs said cutouts were ignored — v2 makes the
-   policy explicit and auditable.
-6. Checks counted instances for overlaps: two base regions of the same
-   (type, variant) sharing any area is a hard fail (this is the v1 bug that
-   passed a duplicated Type B at 208.75 SF); cross-type overlap warns.
+## 4. Resolved quantities and audit
 
-`edge_lf` (perimeter ÷ scale) stays INFORMATIONAL ONLY — front edge vs wall
-edge identification is future scope.
+One resolved quantity model feeds every deliverable. For jobs declaring
+assemblies, the run ASSERTS the PIECE and ASSEMBLY BoQs agree over the SAME
+fully resolved assembly subset; project/report/CSV equal the full known piece
+subtotal, including valid parts of incomplete assemblies. Hotel: **123.00 SF**
+resolved subset vs **146.98 SF** full known subtotal. Carry completeness flags
+and omission reasons; neither subtotal proves complete scope. Never sum BoQs.
+Package exclusions apply once per assembly and are reported separately.
 
-## 5. Scope ledger, schedule evidence, audit
+Coverage ledger OUTPUT states are `measured`, `included_scope`,
+`package_excluded`, `superseded`, `unresolved`: every inventoried room, type,
+variant, region, page, assembly, and piece must be accounted for. Validate
+planned/completed IDs, evidence identity, reciprocal piece/assembly membership,
+and declared geometry reuse. Identity conflicts withhold affected extensions.
 
-- **Scope**: every source page is `measured` (with expected region ids),
-  `intentionally_skipped` (with a quoted reason), or `blocked` (prevents
-  completion). The audit compares planned region ids vs completed results
-  EXACTLY — deleting every Type B job or leaving a measured page empty
-  cannot pass like it did in v1.
-- **Schedule**: counts are positive integers read from quoted row text with
-  recorded word boxes; missing counts fail (v1 defaulted to 1). Floor rows
-  decompose counts; stated floor/project totals must reconcile. ADA-style
-  variants declare `included_in_parent_total` explicitly so subsets are
-  never double-counted; `individual_rooms` mode sums rooms independently
-  with count 1 — a declared mode, not a silent fallback.
-- **Rechecks**: an independently selected re-measure of a base region must
-  agree within 2% (configurable) and is never extended into totals.
-- **Status**: audit items are pass / warn / fail; run statuses are
-  `complete`, `complete_with_callouts`, or `stopped`. Local defects produce
-  callouts and named blanks; the three catastrophic data failures stop the
-  job. A malformed spec refuses separately. Stopped runs quarantine exports.
-  Results retain `independent_audit_pending`; the independent audit's reviewer,
-  verdict and status live in `results.json.receipt.json`, bound to the exact
-  results hash without modifying results. Follow intake -> inventory/evidence
-  -> selections/spec -> measurement -> audit/receipt -> pricing/proposal -> delivery.
+Local failures yield genuinely null fields with callouts naming scope, source,
+reason, and blanks; valid EA/length/finish facts survive ordinary SF failure.
+`measured_area_sf` may retain diagnostics, never a disguised usable quantity.
+Run statuses: `complete`, `complete_with_callouts`, `stopped`. Exactly three DATA stops:
+no valid calibration anywhere (verified CAD/image calibration qualifies),
+no schedule AND no repeatable pattern, or source integrity mismatch.
+Malformed specs refuse separately before measurement. Stopped runs quarantine
+exports; see [output formats](output-format.md) for paths, diagnostics, receipts,
+and downstream EA pricing/proposal rules. No fourth data stop or approval gate.
 
-## 6. Known limitations (by design)
-
-- **Raster / hybrid pages**: skipped or blocked with recorded reasons.
-  Automatic raster tracing is out of scope.
-- **Curved counters**: flagged, tolerance stated above (see §2).
-- **Cutout detection**: only DECLARED cutouts subtract; finding un-declared
-  inner loops automatically is drawing understanding — the fresh-agent audit
-  checks overlays instead.
-- **Boundary repair**: a selection that doesn't close is refused, never
-  "repaired" by snapping to nearest linework.
-- **Universal schedule extraction**: the agent reads schedule text and
-  records evidence; nothing infers counts from prose.
-- **Edge LF / backsplash / cutout pricing**: schema groundwork only.
-
-## 7. Worked examples
-
-- Clean fixture: `examples/run_example.md` — 168.75 SF exact.
-- Hostile fixture: `uv run examples/make_fixture.py --case messy` then
-  `examples/messy.jobs.json` — 990.00 SF gross (936.00 with declared
-  cutouts), two viewports at 18/9 pt/ft on a rotated sheet, ADA variant
-  allocation, revision conflict resolved, searchable raster explicitly
-  skipped. Negative mutations and their refusals live in
-  `examples/tests_v2.py`.
+Measure -> audit pack/independent receipt -> requested pricing/proposal ->
+delivery. If independent audit is unavailable, disclose it and continue.
+Use the [first-run checklist](first-run-checklist.md) and [synthetic walkthrough](../examples/run_example.md);
+fixtures verify known geometry, not autonomous recognition on unseen plans.

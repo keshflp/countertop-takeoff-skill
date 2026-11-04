@@ -1,49 +1,30 @@
-# CAD context (V3) — dated 2025-06, verify before relying on it
+# CAD routes and provenance
 
-Measurement route 2 in the V3 order is **supplied native CAD**. This file is
-BACKGROUND for the operator/agent — it documents the CAD landscape and the
-optional escalation paths. Nothing here is a runtime dependency; the skill
-works end-to-end without any of it.
+Use routes in order: vector PDF, supplied DXF with verified units, then
+calibrated image measurement. CAD escalation is optional, not required.
 
-## What the skill supports natively
-
-| input | support |
+| Input | Supported route |
 |---|---|
-| vector PDF | route 1 — the primary path (`extract_geometry.py`) |
-| `.dxf` | route 2 — `scripts/cad_input.py` (ezdxf): verified units, entity handles/layers, block inserts expanded, lines/polylines/arcs/splines/ellipses measured, closed polylines usable as boundaries; unsupported entities recorded as callouts |
-| `.dwg` | **NOT supported directly.** Convert first with the free [ODA File Converter](https://www.opendesign.com) (DWG→DXF), then run `cad_input.py`. The refusal message says the same. |
-| decent raster | route 3 — `scripts/image_measure.py`: agent-selected crop, labeled-dimension anchors, boundary points; overlay proof mandatory |
-| unusable raster | no route — quantities stay BLANK + callout |
+| Vector PDF | `extract_geometry.py`, selected boundaries, per-viewport calibration |
+| DXF | `cad_input.py` (ezdxf): entity handles/layers, expanded block inserts, lines/polylines/arcs/splines/ellipses; closed polylines as boundaries; unsupported entities disclosed |
+| DWG | Convert to DXF first with [ODA File Converter](https://www.opendesign.com); no direct DWG reading |
+| Legible raster | `image_measure.py`: selected crop, labeled anchors, boundary points, mandatory overlay |
+| Unusable raster | Quantities BLANK with a named callout |
 
-## Unit verification
+## Units
 
-`$INSUNITS` is the only honest scale in a DXF. UnITLESS files (`$INSUNITS`
-0/missing) refuse unless `--units in|ft|mm|cm|m` declares them; the
-declaration is recorded as **operator-verified** with a warning + callout.
-Never "borrow" a scale from a neighboring sheet or a title-block note.
+DXF `$INSUNITS` supplies scale. Unitless/missing units refuse unless
+`--units in|ft|mm|cm|m` declares them; the declaration is recorded as
+operator-verified with a warning/callout. Never borrow a title-block scale
+or neighboring viewport's calibration. Source bytes are re-hashed before use.
+Unsupported entities/extrusions and curve approximations remain disclosed;
+see [method tolerances](method.md).
 
-## Optional CAD-MCP escalation (documentation only)
+## Optional external-tool escalation
 
-If a set cannot be measured by routes 1–3 and the operator explicitly wants
-CAD-tool escalation, these are the realistic options as of mid-2025. The
-skill NEVER requires them at runtime; record any use (and its provenance)
-in the job declarations:
-
-- **OpenAI/ChatGPT desktop**: no first-party CAD plugin exists (checked
-  2025-06); do not assume one.
-- **Fusion 360**: CAD-agnostic MCP integration is built into Fusion's
-  API/automation surface (Autodesk's own tooling), not a plugin install.
-- **AutoCAD**: paid, via third-party MCP/COM connectors; Autodesk's own
-  desktop COM API (`.SendCommand`, ActiveX) remains the classic path on
-  Windows.
-- **FreeCAD**: free, community-maintained MCP server(s) exist; quality
-  varies; fine for reading/converting geometry locally.
-- **kernelCAD**: hosted CAD automation service (third party).
-- **PlanSwift**: desktop takeoff product with a COM SDK on Windows — a
-  pragmatic local escalation for estimators already licensing it.
-
-Escalation discipline (applies to ALL of the above): the same accuracy
-hierarchy holds — exact vector geometry > best-effort with callouts >
-explicit blank. Anything an external tool produces must land back in the
-evidence package with its provenance, and coverage-ledger discipline
-(measured / package_excluded / superseded / unresolved) is unchanged.
+If supported routes cannot resolve scope and the operator explicitly requests
+CAD-tool escalation, use an available local tool/connector and record its
+identity, conversion/settings, source hashes, units, and resulting selections.
+External outputs must return to the evidence package with provenance.
+The same hierarchy applies: exact geometry > best-effort with callouts > blank;
+coverage-ledger and three-stop rules remain unchanged. No connector is required.
