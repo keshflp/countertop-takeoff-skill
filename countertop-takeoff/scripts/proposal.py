@@ -152,7 +152,9 @@ def package_summaries(lines, exclusions, scope_incomplete=False):
             order.append(pkg)
         g = packages[pkg]
         g["lines"] += 1
-        if l.get("qty_ea"):
+        if l.get("qty_ea") is None:
+            g["ea"] = None
+        elif g["ea"] is not None:
             g["ea"] += l["qty_ea"]
         if l.get("line_total") is not None:
             g["known_amount"] += estimate_mod.D(l["line_total"])
@@ -190,13 +192,13 @@ def build_proposal(results_path, estimate_path, profile_path, out_md=None,
                    out_json=None, out_pdf=None):
     from publish_safety import reject_aliases, register_artifacts, quarantine, manifest_path
     protected = {"results": results_path, "estimate": estimate_path, "profile": profile_path,
-                 "artifact manifest": manifest_path(results_path),
                  "audit receipt": str(results_path) + ".receipt.json"}
     with open(estimate_path, encoding="utf-8") as f:
         source_estimate = json.load(f)
     protected["rate profile"] = source_estimate.get("profile_path")
     protected["estimate results"] = source_estimate.get("results_path")
-    reject_aliases(protected, {"out-md": out_md, "out-json": out_json, "out-pdf": out_pdf})
+    reject_aliases(protected, {"artifact manifest": manifest_path(results_path),
+                              "out-md": out_md, "out-json": out_json, "out-pdf": out_pdf})
     outputs = [out_md, out_json, out_pdf]
     try:
         payload = _build_proposal(results_path, estimate_path, profile_path,
@@ -317,7 +319,8 @@ def proposal_markdown(payload):
     for g in payload["packages"]:
         amount_s = (money(estimate_mod.D(g["amount"]))
                     if g.get("amount") is not None else BLANK)
-        lines.append(f"| {g['package']} | {g['lines']} | {g['ea_total']}"
+        qty_s = str(g["ea_total"]) if g["ea_total"] is not None else BLANK
+        lines.append(f"| {g['package']} | {g['lines']} | {qty_s}"
                      f" | {money(estimate_mod.D(g['known_amount']))}"
                      f" | {amount_s} | {g['note']} |")
     lines.append("")

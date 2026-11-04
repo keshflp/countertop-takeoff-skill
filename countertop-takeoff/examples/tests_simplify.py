@@ -7,6 +7,7 @@ import json
 import io
 import hashlib
 import math
+import os
 import sys
 import tempfile
 import unittest
@@ -18,15 +19,112 @@ from shapely.geometry import Polygon
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import calibrate
 import cad_input
+import audit_pack
 import estimate
 import image_measure
 import intake
 import measure
+import proposal
 import pymupdf
 from audit import Audit, audit_region_checks
 
 
 class SimplifyRegressions(unittest.TestCase):
+    def test_pricing_manifest_aliases_preserve_inputs(self):
+        for command in ("estimate", "proposal"):
+            for linked in (False, True):
+                with self.subTest(command=command, linked=linked), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    results, rates, est, out = [root / name for name in
+                                              ("results.json", "rates.json", "estimate.json", "out.json")]
+                    results.write_text(json.dumps({"run_status": "complete", "assembly_boq": [
+                        {"assembly_id": "counter", "type": "A", "ea": 2}]}), encoding="utf-8")
+                    rates.write_text(json.dumps({"currency": "USD", "rates": [{"item_code": "A", "match": {"assembly_kind": "A"},
+                                                           "uom": "EA", "unit_price": 10}]}), encoding="utf-8")
+                    if command == "proposal":
+                        with redirect_stdout(io.StringIO()):
+                            estimate.build_estimate(str(results), str(rates), out_json=str(est))
+                    manifest = Path(str(results) + ".artifacts.json")
+                    manifest.unlink(missing_ok=True)
+                    if linked:
+                        os.link(rates, manifest)
+                        profile = rates
+                    else:
+                        manifest.write_bytes(rates.read_bytes())
+                        profile = manifest
+                    protected = {p: p.read_bytes() for p in (results, rates, manifest)}
+                    out.write_text("previous output", encoding="utf-8")
+                    with redirect_stdout(io.StringIO()), self.assertRaisesRegex(SystemExit, "artifact manifest.*aliases"):
+                        if command == "estimate":
+                            estimate.build_estimate(str(results), str(profile), out_json=str(out))
+                        else:
+                            proposal.build_proposal(str(results), str(est), str(profile), out_json=str(out))
+                    self.assertTrue(all(p.read_bytes() == content for p, content in protected.items()))
+                    self.assertEqual(out.read_text(), "previous output")
+
+    def test_receipt_manifest_aliases_preserve_evidence(self):
+        for target in ("results", "receipt"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                results = Path(tmp) / "results.json"
+                receipt = Path(str(results) + ".receipt.json")
+                payload = {"run_status": "complete"}
+                results.write_text(json.dumps(payload), encoding="utf-8")
+                receipt.write_text("previous receipt", encoding="utf-8")
+                os.link(results if target == "results" else receipt, str(results) + ".artifacts.json")
+                original = {p: p.read_bytes() for p in (results, receipt)}
+                with self.assertRaisesRegex(SystemExit, "artifact manifest.*aliases"):
+                    audit_pack.record_receipt(payload, str(results), "human:test", "approved", "", tmp)
+                self.assertTrue(all(p.read_bytes() == content for p, content in original.items()))
+
+    def test_audit_pack_prefers_results_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            job, other, pack = root / "job", root / "other", root / "pack"
+            job.mkdir()
+            other.mkdir()
+            for folder, width in ((job, 160), (other, 240)):
+                with pymupdf.open() as doc:
+                    doc.new_page(width=width, height=100)
+                    doc.save(str(folder / "plans.pdf"))
+            result = {"sources": [{"source_id": "plans", "path": "plans.pdf"}], "regions": [
+                {"region_id": "counter", "source_id": "plans", "page": 1, "viewport": "main",
+                 "status": "unresolved", "unresolved_reason": "boundary unavailable"}]}
+            previous = os.getcwd()
+            try:
+                os.chdir(other)
+                with redirect_stdout(io.StringIO()):
+                    audit_pack.render_pack(result, str(pack), 1, base_dir=str(job))
+                png, = pack.glob("*_full.png")
+                self.assertEqual(pymupdf.Pixmap(str(png)).width, 160)
+                self.assertEqual(audit_pack.resolve_from("plans.pdf", str(root / "missing")), "plans.pdf")
+            finally:
+                os.chdir(previous)
+
+    def test_proposal_package_unknown_ea_stays_blank(self):
+        cases = (((None,), None), ((2, None), None), ((None, 2), None), ((0,), 0), ((2, 3), 5))
+        for quantities, expected in cases:
+            with self.subTest(quantities=quantities), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                results, rates, est = [root / name for name in ("results.json", "rates.json", "estimate.json")]
+                results.write_text(json.dumps({"run_status": "complete_with_callouts", "assembly_boq": [
+                    {"assembly_id": str(i), "type": "A", "ea": qty, "package": "millwork"}
+                    for i, qty in enumerate(quantities)]}), encoding="utf-8")
+                rates.write_text(json.dumps({"currency": "USD", "rates": [{"item_code": "A", "match": {"assembly_kind": "A"},
+                                                       "uom": "EA", "unit_price": 10}]}), encoding="utf-8")
+                with redirect_stdout(io.StringIO()):
+                    estimate.build_estimate(str(results), str(rates), out_json=str(est))
+                    payload = proposal.build_proposal(str(results), str(est), str(rates),
+                        out_json=str(root / "proposal.json"), out_md=str(root / "proposal.md"),
+                        out_pdf=str(root / "proposal.pdf"))
+                self.assertEqual(payload["packages"][0]["ea_total"], expected)
+                self.assertEqual(json.loads((root / "proposal.json").read_text())["packages"][0]["ea_total"], expected)
+                shown = estimate.BLANK if expected is None else str(expected)
+                md = (root / "proposal.md").read_text(encoding="utf-8")
+                self.assertIn(f"| millwork | {len(quantities)} | {shown} |", md)
+                with pymupdf.open(str(root / "proposal.pdf")) as doc:
+                    text = "".join(page.get_text() for page in doc)
+                self.assertIn(f"millwork | {len(quantities)} | {estimate.plain_text(shown)} |", " ".join(text.split()))
+
     def test_repeated_calibration_segments_withhold_locally(self):
         page = {"words": [{"id": 0, "t": "10'"}, {"id": 1, "t": "20'"}],
                 "segments": [dict(id=i, x0=0, y0=i * 20, x1=length, y1=i * 20)

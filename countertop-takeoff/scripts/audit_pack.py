@@ -46,7 +46,7 @@ def resolve_from(path, base_dir):
     """V5 (P1.2): resolve a recorded path against the RESULTS FILE's own
     location first - results JSONs carry relative paths and must not depend
     on the reviewer's working directory."""
-    if not path or os.path.isabs(path) or os.path.exists(path):
+    if not path or os.path.isabs(path):
         return path
     candidate = os.path.join(base_dir, path)
     return candidate if os.path.exists(candidate) else path
@@ -377,8 +377,9 @@ def record_receipt(results, results_path, reviewer, verdict, notes, pack_dir):
     receipt["review_status"] = ("independent_audit_approved" if verdict == "approved"
                                 else "independent_audit_recorded")
     receipt_path = results_path + ".receipt.json"
-    from publish_safety import reject_aliases
-    reject_aliases({"results": results_path}, {"audit receipt": receipt_path})
+    from publish_safety import reject_aliases, manifest_path
+    reject_aliases({"results": results_path}, {"audit receipt": receipt_path,
+                   "artifact manifest": manifest_path(results_path)})
     with open(receipt_path, "w", encoding="utf-8") as f:
         json.dump(receipt, f, indent=1)
     from publish_safety import register_artifacts

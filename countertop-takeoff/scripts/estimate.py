@@ -608,9 +608,9 @@ def reject_aliases(results_path, profile_path, out_md, out_json, out_pdf):
     make the estimate overwrite its own results.json."""
     from publish_safety import reject_aliases as reject, manifest_path
     reject({"results": results_path, "rate profile": profile_path,
-            "artifact manifest": manifest_path(results_path),
             "audit receipt": str(results_path) + ".receipt.json"},
-           {"out-md": out_md, "out-json": out_json, "out-pdf": out_pdf})
+           {"artifact manifest": manifest_path(results_path),
+            "out-md": out_md, "out-json": out_json, "out-pdf": out_pdf})
 
 
 def build_estimate(results_path, profile_path, out_md=None, out_json=None,
