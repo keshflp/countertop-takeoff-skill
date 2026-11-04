@@ -41,6 +41,11 @@ Validation rules:
 
 Each rate:
 
+Unknown `match` keys refuse in both profile validators (`width_inches` and
+`variant` are unsupported). Use only the matchers listed below. Exact rates
+travel as `unit_price_exact` decimal strings through arithmetic and every
+document; the legacy numeric `unit_price` is for compatibility only.
+
 | key | required | meaning |
 |-----|----------|---------|
 | `item_code` | yes | the stable code every estimate line cites (unique in the profile) |

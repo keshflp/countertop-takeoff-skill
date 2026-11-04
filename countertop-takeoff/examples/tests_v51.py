@@ -53,6 +53,19 @@ def measurement_tests(t):
             all(a["ea"] is None for a in res["assembly_boq"] if a["type"] == "A")
             and any(e["kind"] == "variant" and e["state"] == "unresolved"
                     for e in res["coverage_ledger"]))
+    # Image variants may cite cells without fabricated text-word evidence.
+    spec["schedule"]["variants"][0]["word_boxes"] = []
+    spec["schedule"]["variants"][0]["count_cells"] = [{"row": 2, "col": "TYPE B"}]
+    spec["schedule"]["evidence"]["uncertain_cells"] = [7]
+    for tag, refs in (("uncertain", [{"row": 2, "col": "TYPE B"}]),
+                      ("unsupported", [{"row": 99, "col": "missing ADA cell"}])):
+        spec["schedule"]["variants"][0]["count_cells"] = refs
+        res = run_hotel(spec, "v51_variant_" + tag)
+        t.check("P0.1 image variant " + tag + " cell withholds variant + standard EA",
+                res["run_status"] == "complete_with_callouts"
+                and all(a["ea"] is None for a in res["assembly_boq"] if a["type"] == "A")
+                and any(e["kind"] == "variant" and e["state"] == "unresolved"
+                        for e in res["coverage_ledger"]))
     ev = hotel()["schedule"]["evidence"]
     crop = os.path.join(os.path.dirname(t.HOTEL_JOBS), ev["crop_image"])
     pix = pymupdf.Pixmap(crop)
@@ -92,7 +105,9 @@ def measurement_tests(t):
             {"item": "missing specifications", "detail": "source unavailable"}]}),
             ("generic unresolved ledger", {"coverage_ledger": [
                 {"item": "unread scope", "kind": "region", "state": "unresolved",
-                 "detail": "unknown contribution, no special room phrase"}]})):
+                 "detail": "unknown contribution, no special room phrase"}]}),
+            ("legacy unavailable source callout", {"callouts": [{"scope": "missing input",
+                "reason": "source unavailable", "blank_fields": ["all quantities from this source"]}]})):
         source = copy.deepcopy(res)
         source.update(scope_incomplete=[], coverage_ledger=[], unavailable_inputs=[])
         source.update(entries)
@@ -103,6 +118,15 @@ def measurement_tests(t):
                 est["grand_total"] is None and est["priced_subtotal"] > 0
                 and not prop["scope_complete"] and prop["open_items"]
                 and all("fully priced" not in p["note"] for p in prop["packages"]))
+    spec["mode"] = "individual_rooms"
+    spec.pop("schedule", None)
+    for a in spec["assemblies"]:
+        a["quantity_basis"] = {"mode": "enumerated"}
+    _, res, _ = t.run_measure(spec, "v51_individual_omission")
+    t.check("P0.3 individual-room orphan scope also makes project incomplete",
+            not res["totals"]["project_sf_complete"]
+            and any(e["item"] == "A:kitchen" and e["state"] == "unresolved"
+                    for e in res["coverage_ledger"]))
 
 
 def run(t):
@@ -110,6 +134,44 @@ def run(t):
     publishing_tests(t)
     import tests_v51_documents
     tests_v51_documents.run(t)
+    documentation_tests(t)
+
+
+def documentation_tests(t):
+    import re
+    from pathlib import Path
+    root = Path(t.SKILL)
+    skill = (root / "SKILL.md").read_text(encoding="utf-8")
+    readme = (root.parent / "README.md").read_text(encoding="utf-8")
+    refs = root / "references"
+    checklist = (refs / "first-run-checklist.md").read_text(encoding="utf-8")
+    t.check("P1.5 first-run checklist covers supervision + a drawings-only blind exercise",
+            all(term in checklist for term in ("headers", "floor totals", "zeros", "ADA",
+                "Deduplicate", "Shells are countertops", "viewport", "report -> estimate ->",
+                "Receipt/hash consistency", "Output paths", "only drawings", "upright",
+                "transform", "cell-box preview", "independent count-cell reading")))
+    t.check("P1.2/P1.5 workflow places audit/receipt before pricing/proposal + delivery",
+            skill.index("### Step 5.") < skill.index("### Step 6.") < skill.index("### Step 7.")
+            < skill.index("### Step 7b.") < skill.index("### Step 8.")
+            and "NEVER modifies results.json" in skill)
+    text = "\n".join(p.read_text(encoding="utf-8") for p in refs.glob("*.md"))
+    t.check("P1.6 secondary references contain current run statuses",
+            not re.search(r"`(?:ready|warning|failed)`|Overall: READY", text, re.I)
+            and "complete_with_callouts" in text)
+    t.check("P1.6 public total claims distinguish resolved subset from full known subtotal",
+            all("123.00" in doc and "146.98" in doc for doc in (skill, readme,
+                (refs / "method.md").read_text(encoding="utf-8"),
+                (refs / "output-format.md").read_text(encoding="utf-8"))))
+    for owner in ("keshflp", "example-org", "Another.Owner"):
+        swapped = readme.replace("ORG-URL-PLACEHOLDER",
+                                 f"https://github.com/{owner}/countertop-takeoff-skill.git")
+        t.check("P1.6 transfer URL assertion accepts owner " + owner,
+                t.install_docs_ok(swapped))
+    t.check("P1.6 turnkey transfer keeps clone-vs-copy and ff-only guidance",
+            all(term in readme for term in ("git remote set-url origin $repoUrl",
+                "WriteAllText", "git pull --ff-only", "Separately-copied skill folder",
+                "does NOT update itself")))
+    t.check("release version is 5.1.0", "version: 5.1.0" in skill and "5.1.0" in readme)
 
 
 def publishing_tests(t):
@@ -138,6 +200,11 @@ def publishing_tests(t):
     t.check("P1.1 estimate output/output case alias rejected",
             refused(lambda: estimate.build_estimate(rp, profile, out_md=ep + ".MD",
                                                      out_pdf=ep + ".md")))
+    copied_results = rp + ".copy.json"
+    with open(rp, "rb") as src, open(copied_results, "wb") as dst:
+        dst.write(src.read())
+    t.check("P1.1 proposal cannot overwrite estimate's original results when given a copy",
+            refused(lambda: proposal.build_proposal(copied_results, ep, profile, out_md=rp.upper())))
     t.check("P1.1 measure output/output case alias rejected",
             refused(lambda: measure.main([jobs, "--json", rp, "--report", rp.upper()])))
     t.check("P1.1 measure output cannot alias geometry input",
@@ -157,6 +224,11 @@ def publishing_tests(t):
     t.check("P1.2 empty results payload refused a receipt",
             audit_pack.record_receipt({}, empty, "test", "approved", "", "pack") == 2
             and not os.path.exists(empty + ".receipt.json"))
+    stale_case = rp + ".stale-SYNTHETIC"
+    with open(stale_case, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+    t.check("P1.2 receipt refuses case-aliased quarantine filename",
+            audit_pack.record_receipt(payload, stale_case.upper(), "test", "approved", "", "pack") == 2)
     bad = json.load(open(jobs, encoding="utf-8"))
     bad["source"]["sha256"] = "0" * 64
     json.dump(bad, open(jobs, "w", encoding="utf-8"))
@@ -176,15 +248,28 @@ def publishing_tests(t):
     measure.main([jobs, "--json", rp])
     estimate.build_estimate(rp, profile, out_json=ep)
     proposal.build_proposal(rp, ep, profile, out_json=out + ".json")
+    import report_out
+    quarantine_events = []
+    original_quarantine = report_out.quarantine_stale_export
+    def inspect_quarantine(path, when):
+        if not aliases(path, rp):
+            diagnostic = json.load(open(rp, encoding="utf-8"))
+            quarantine_events.append(diagnostic.get("run_status") == "stopped")
+        return original_quarantine(path, when)
+    report_out.quarantine_stale_export = inspect_quarantine
     try:
         measure.main([jobs, "--json", rp, "--estimate-profile", bad_profile,
                       "--estimate-json", ep])
     except t.TakeoffError:
         pass
+    finally:
+        report_out.quarantine_stale_export = original_quarantine
     diag = json.load(open(rp, encoding="utf-8"))
     t.check("P1.1 actual pricing SystemExit cleans fresh exports and prior proposals",
             diag["run_status"] == "stopped" and "bad-price" in diag["stopped_reason"]
             and not os.path.exists(ep) and not os.path.exists(out + ".json"))
+    t.check("P1.1 stopped JSON exists before any dependent artifact quarantine",
+            bool(quarantine_events) and all(quarantine_events))
     original = measure.run_pipeline
     for name, error in (("SystemExit", SystemExit("malformed pricing")),
                         ("unexpected exception", RuntimeError("synthetic crash"))):

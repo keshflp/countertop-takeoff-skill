@@ -8,8 +8,8 @@ V2 output rules:
   - the results JSON is an evidence package: measured polygon coordinates,
     selected segment ids, cutouts, per-region factors, source hashes,
     runtime versions
-  - status distinguishes failed / warning / ready, plus review_status for
-    the independent audit (pending until a receipt is recorded); final CSV
+  - status is complete / complete_with_callouts / stopped; independent
+    review status is recorded in the immutable-results receipt sidecar; final CSV
     exports are written only when no required check failed, and stale
     exports from earlier runs are quarantined on failure
 """

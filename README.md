@@ -1,5 +1,7 @@
 # countertop-takeoff-skill
 
+Version **5.1.0** — correctness fixes and first-run supervision guidance.
+
 An agent skill that does **countertop takeoffs** — square feet, edge linear
 feet, splash, and cutout counts — from architectural plan/spec PDFs, DXF
 exports, and rasters. Built for countertop subcontractors bidding
@@ -31,8 +33,9 @@ Give your AI agent a set of plans and it will:
    assembly (measured | package_excluded | included_scope | superseded |
    unresolved), overlay PNGs, an independent-audit receipt, a PIECE BoQ and
    an ASSEMBLY BoQ from ONE resolved quantity model (for jobs that declare
-   assemblies the run asserts: project total == both BoQ views == the CSV
-   grand total; the audit fails the run if they ever disagree), and — with
+   assemblies the run asserts equality over the same fully resolved subset;
+   project/report/CSV equal the full known piece subtotal, including valid
+   parts of incomplete assemblies), and — with
    a rate profile — an assembly-EA estimate (`estimate.md` / `.json` /
    `.pdf`): EA × exact rate, blank while any in-scope amount is unknown —
    plus a proposal-lite PDF/BoQ quote document built from that corrected
@@ -80,6 +83,27 @@ update this line before handing over).
 cd $env:USERPROFILE\Downloads
 git clone ORG-URL-PLACEHOLDER
 ```
+
+For the organization handoff, run this exact swap from the repo root after
+the transfer (set `$repoUrl` to the published owner/org URL first):
+
+```powershell
+$repoUrl = 'https://github.com/YOUR-ORG/countertop-takeoff-skill.git'
+$readmePath = Join-Path (Get-Location) 'README.md'
+$readmeText = [IO.File]::ReadAllText($readmePath)
+[IO.File]::WriteAllText($readmePath, $readmeText.Replace('ORG-URL-' + 'PLACEHOLDER', $repoUrl), [Text.UTF8Encoding]::new($false))
+git remote set-url origin $repoUrl
+Push-Location countertop-takeoff
+uv run examples/tests_v5.py
+Pop-Location
+git add README.md
+git commit -m "docs: publish organization clone URL"
+git push origin main
+```
+
+The acceptance test permits any owner/org URL; it does not require the
+placeholder or a particular account. Existing clones should update their
+`origin` to the published URL and continue using `git pull --ff-only`.
 
 (No git? Click **Code → Download ZIP** on the GitHub page and unzip.)
 
@@ -159,8 +183,10 @@ the areas exactly:
   sheets missing from the drawing index, cross-sheet section→length joins,
   GR guestroom FF&E excluded as a package and reported separately, one
   legible scan measured through the image route (~24 SF) and one unusable
-  scan left blank — **~147 SF measured**, project total == both BoQ views
-  == report == CSVs, every deviation disclosed.
+  scan left blank — **146.98 SF full known subtotal**, matching project,
+  report and CSVs; both BoQ views reconcile **123.00 SF** over the same
+  fully resolved assembly subset. Partial assembly contributions explain
+  the difference; omissions keep completeness false and pricing total blank.
 - V4: a MIXED job (repeated + enumerated + public + excluded scope with
   included ADA variants) totals identically in every view; a schedule cell
   edited 3→30 over a retained "3" quote is caught; an edited image result
@@ -180,13 +206,7 @@ uv run scripts\audit_pack.py build\results.json --pack build\audit_pack
 uv run examples\tests_v2.py     # 47 checks (V2 exactness + behavior)
 uv run examples\tests_v3.py     # 34 checks (V3 hotel traps, routes, intake)
 uv run examples\tests_v4.py     # V4 checks (resolved model, evidence binding, degradation, CAD, estimate)
-```
-
-### Without uv (pip users)
-
-```powershell
-py -m pip install -r countertop-takeoff\scripts\requirements.txt
-py countertop-takeoff\scripts\index_pdf.py plans.pdf
+uv run examples\tests_v5.py     # V5 + 5.1 correctness regressions
 ```
 
 ## Legal / data-handling notes
@@ -229,9 +249,16 @@ Two situations, two workflows:
 | V1 | Square footage per unit type, schedule multiplication, QA report + CSV |
 | V2 | Pack preflight, scope ledger, evidence-backed schedule, per-viewport calibration, selected-boundary measurement, audit pack |
 | V3 | Multiple sources (PDF/DXF/raster), bitmap-schedule transcription, room-tag reconciliation, graduated degradation with CALLOUTS + coverage ledger, assemblies/pieces with edges/splash/cutouts, dual BoQ views, package rules, intake manifest, hotel-grade field traps |
-| V4 | ONE resolved quantity model (project total == both BoQ views == report == CSVs; included variants subtracted, never re-added), quantities bound to evidence (numeric correspondence, tag-derived reconciliation, recomputed image route, mandatory overlay), consistent local degradation (three stops only), CAD correctness (metres, INSUNITS, MINSERT, layer-0, bulge arcs ≤0.5%), assembly-EA estimate (estimate.md/json/pdf, rate × EA), intake collisions + structured metadata |
+| V4 | One resolved quantity model; BoQ equality over the fully resolved subset, project/report/CSV over the full known piece subtotal; included variants subtracted; evidence binding, local degradation, CAD units/arcs, EA pricing and intake metadata |
 | V5 (this repo) | Publish safety (de-aliased estimate paths, stale-artifact quarantine + stopped diagnostics), evidence identity repairs (row_text descriptive-only, reciprocal piece/assembly membership, repeated-geometry withholding, declared reuse, uncertain included variants), estimate scope inheritance (stopped/missing-BoQ refusal, omitted scope = unknown amounts, one currency), consistent uncertainty (zero EA, named edge blanks, strict-pair reconciliation, completeness flags, blank-not-zero type totals), audit-pack + estimate-PDF repairs, proposal-lite quote document (json/md/pdf), QuickBooks mapping groundwork (docs only) |
 | V6 | Exploratory only: drawing outputs derived from the measured polygons — scope undecided, not promised |
+
+5.1.0 repairs bitmap cell/variant withholding, identity conflicts, omitted-scope
+pricing, Windows path aliases, stopped-run cleanup, immutable receipt storage,
+exact rate validation and contractor PDFs. See
+[`references/release-5.1.0.md`](countertop-takeoff/references/release-5.1.0.md)
+for the probe matrix and deliberate test replacements. Begin supervision with
+the [first-run checklist](countertop-takeoff/references/first-run-checklist.md).
 
 ## Repo layout
 

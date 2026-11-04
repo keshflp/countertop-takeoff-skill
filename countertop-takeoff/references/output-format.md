@@ -1,6 +1,7 @@
-# Output format spec (V5)
+# Output format spec (5.1.0)
 
-Exact formats produced by the V4 pipeline. Consumers (the agent's report,
+Formats produced by the current pipeline (existing v3 results/v5 pricing
+schema tags are retained). Consumers (the agent's report,
 the audit pack, the estimate, later phases) rely on these, not prose.
 
 ## 1. Markdown report (`measure.py --report`)
@@ -55,10 +56,12 @@ Jobs WITH assemblies derive every row from the ONE resolved model (P0.1):
   `__blank__` (never 0.00)
 - `excluded_package_total` — one row with the excluded package SF,
   documented as NEVER added into the grand total
-- `grand_total` — equals the project total and BOTH BoQ view totals
-  (equality asserted by the run)
+- `grand_total` — equals the full known piece subtotal and project/report.
+  BoQ equality compares the SAME fully resolved assembly subset separately.
+  Hotel: 123.00 SF resolved subset vs 146.98 SF full known subtotal; unknown
+  contributions keep completeness false. Neither number asserts complete scope.
 
-On a failed run the CSV is not written, and any pre-existing export file is
+On a stopped run the CSV is not written, and any pre-existing export file is
 renamed `<name>.stale-<utc>` so an old export can't look current.
 
 ## 2b. Stale-output handling + stopped diagnostics (V5, P0.1)
@@ -68,16 +71,24 @@ measure.py quarantines EVERY superseded artifact — CSVs, the report,
 results.json, and estimate/proposal outputs — as `<name>.stale-<utc>`, and
 writes a CURRENT stopped diagnostic results JSON
 (`run_status: "stopped"`, `stopped_early: true`, the stop reason) over the
-results path when this run had not already written one. Old artifacts can
+results path before quarantining dependent outputs. Old artifacts can
 never look current. `audit_pack.py --record-receipt` refuses a receipt on
 a quarantined file, refuses a stopped run, names any superseded sibling
 files in the receipt, and binds the receipt to the results sha256.
+
+Input/output and output/output aliases are rejected before any write or
+cleanup, using case-insensitive canonical Windows identity (including links).
+This includes JOB -> JOB and every proposal output -> estimate/input alias.
+`RESULTS.artifacts.json` records dependent output paths, including proposals
+outside the results directory; keep it with the job for stopped-rerun cleanup.
+Pricing refusals (`SystemExit`) and unexpected exceptions follow the same
+stopped-diagnostic/quarantine path. Invalid alias requests leave inputs intact.
 
 ## 3. Results JSON (`--json`) — the evidence package
 
 ```json
 {
-  "schema": "countertop-takeoff/v2 results",
+  "schema": "countertop-takeoff/v3 results",
   "source": {"pdf": "...", "sha256": "..."},
   "mode": "repeated_types", "policy": {...}, "declarations": [...],
   "runtime_versions": {"python": "...", "pymupdf": "2.1",
@@ -108,21 +119,30 @@ files in the receipt, and binds the receipt to the results sha256.
                        "measured|package_excluded|superseded|unresolved"}],
   "assembly_boq": [...],
   "piece_boq": [...],
+  "scope_incomplete": [{"item", "kind", "state": "unresolved", "detail"}],
+  "unavailable_inputs": [{"item", "detail", "source"?}],
   "review_status": "independent_audit_pending",
   "geometry_page_classes": {"1": "text_only", "2": "vector"}
 }
 ```
 
-After an independent audit, `audit_pack.py --record-receipt` adds:
+After an independent audit, `audit_pack.py --record-receipt` writes
+`results.json.receipt.json` without modifying results.json:
 
 ```json
-"review": {"status": "independent_audit_recorded", "reviewer": "...",
+{"status": "independent_audit_recorded", "reviewer": "...",
            "verdict": "approved|rejected", "notes": "...",
            "pack_dir": "...", "results_sha256": "...",
            "superseded_results_files": [...],
-           "recorded_utc": "..."},
-"review_status": "independent_audit_approved"
+ "recorded_utc": "...", "review_status": "independent_audit_approved"}
 ```
+
+The receipt hashes the exact immutable results bytes. Recording it cannot
+stale pricing/proposal hashes. Empty `{}`, noncompleted or quarantined results
+are refused. Superseded siblings match the real `results.json.stale-*` names.
+Normal sequence: intake -> inventory/evidence -> selections/spec -> measurement
+-> audit/receipt -> pricing/proposal -> delivery. Audit unavailability is
+disclosed, with no gate; the separate receipt can be recorded later safely.
 
 ## 4. Audit pack (`audit_pack.py --pack DIR`)
 
@@ -154,13 +174,15 @@ profile:
 - `estimate.json` — schema `countertop-takeoff/v5 estimate`; scope_complete
   flag, unknown_scope (omitted in-scope items), currency,
   sha256 of the results JSON + rate profile, `lines[]` (item_code,
-  description with inch dims, assembly_ids, qty_ea, unit_price,
+  description with inch dims, assembly_ids, room, qty_ea, unit_price_exact,
   line_total, rate_reference {item_code, includes, uom},
   quantity_evidence, callout_references, arithmetic string),
   `priced_subtotal`, `grand_total` (null while any in-scope amount is
   unknown), `unknown_amounts`, `exclusions` (package-excluded assemblies,
   never priced), `callouts`, and the arithmetic block (Decimal exact,
   ROUND_HALF_UP to whole cents per line, single-currency rule)
+  (`unit_price` remains a legacy approximate numeric field; documents and
+  arithmetic use the authoritative exact decimal string)
 - `estimate.md` — header (company, timestamp, currency, scope-completeness
   flag, provenance); table `Item code | Description | QTY EA | Unit price |
   Total` (long descriptions wrap into continuation rows — amounts never
@@ -171,7 +193,9 @@ profile:
 - `estimate.pdf` — PyMuPDF render of estimate.md: first line below the
   page top, wrapped + paginated (grand total on the last page), and every
   rendered amount RE-READ from the PDF and checked against estimate.json
-  before the file ships. The AGENT HOST's document tooling may render a
+  before the file ships. Markdown syntax is removed: PDFs show plain BLANK,
+  clean headings and exact rates, with readable assembly/room identifiers.
+  The AGENT HOST's document tooling may render a
   richer PDF from the same md instead; the contract is that the PDF carries
   the SAME grand total as md + json
 - `proposal.json` / `proposal.md` / `proposal.pdf` (`scripts/proposal.py`,
@@ -182,6 +206,10 @@ profile:
   the estimate + open items; supplied terms; blank signature lines; totals
   carried verbatim (blank preserved) — never invented percentages, tax,
   or payable balances; json/md/pdf agreement enforced like estimates
+  Each line's EA x exact rate must reproduce its amount; missing provenance
+  hashes refuse. Package amounts are line sums, labeled known subtotals when
+  omissions exist; unresolved regions/rooms/inputs/ledger entries propagate
+  their reasons and blank the grand total even when all surviving lines price.
 
 ## 6. Side files (regenerable, gitignored)
 

@@ -95,6 +95,24 @@ def run(t):
             and all(estimate.cents(sum(estimate.D(l["line_total"]) for l in prop["lines"]
                                      if l["package"] == g["package"]))
                     == estimate.D(g["known_amount"]) for g in prop["packages"]))
+    original_insert = pymupdf.Page.insert_text
+    changed = []
+    def corrupt_one(page, point, text, *args, **kwargs):
+        if "100.00" in text and not changed:
+            text = text.replace("100.00", "999.00", 1)
+            changed.append(True)
+        return original_insert(page, point, text, *args, **kwargs)
+    pymupdf.Page.insert_text = corrupt_one
+    try:
+        try:
+            estimate.render_pdf("Amount 100.00\nAmount 100.00", os.path.join(
+                t.BUILD, "v51_corrupt.pdf"), expect_amounts=["100.00", "100.00"])
+            rejected = False
+        except SystemExit as exc:
+            rejected = "numeric sequence matches: False" in str(exc)
+    finally:
+        pymupdf.Page.insert_text = original_insert
+    t.check("P1.4 PDF verification catches one corrupt repeated amount", rejected and bool(changed))
     for key, value in (("width_inches", 60), ("variant", "STD")):
         bad = copy.deepcopy(profile)
         bad["rates"][0]["match"][key] = value

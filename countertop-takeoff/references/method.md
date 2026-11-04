@@ -10,9 +10,10 @@ shared method)
 - ONE RESOLVED QUANTITY MODEL: every deliverable total (project, type
   rows, assembly BoQ, piece BoQ, CSV grand total) derives from the same
   resolved records; for jobs that declare assemblies the run ASSERTS the
-  views agree — it reconciles them against each other over the SAME known
-  contributions (not by regrouping extensions), and a disagreement fails
-  the run. Included variants (e.g. ADA inside a parent type) are
+  BoQ views agree over the SAME fully resolved assembly subset. Project,
+  report and CSV equal the full known piece subtotal, including valid parts
+  of incomplete assemblies. Hotel: 123.00 SF resolved subset vs 146.98 SF
+  full known subtotal; report the distinction. Included variants (e.g. ADA inside a parent type) are
   SUBTRACTED from parent counts; package scope applies once per assembly
   in every aggregation branch.
 - EVIDENCE BINDING: schedule counts must correspond NUMERICALLY to the
@@ -198,11 +199,14 @@ edge identification is future scope.
   with count 1 — a declared mode, not a silent fallback.
 - **Rechecks**: an independently selected re-measure of a base region must
   agree within 2% (configurable) and is never extended into totals.
-- **Status**: audit items are pass / warn / fail. Any fail = `failed` (no
-  export, stale exports quarantined). No fails + warnings = `warning`
-  (exportable, must be explained). Otherwise `ready`. Independently of both,
-  `review_status` records the independent audit: `independent_audit_pending`
-  until `audit_pack.py --record-receipt` writes the reviewer and verdict.
+- **Status**: audit items are pass / warn / fail; run statuses are
+  `complete`, `complete_with_callouts`, or `stopped`. Local defects produce
+  callouts and named blanks; the three catastrophic data failures stop the
+  job. A malformed spec refuses separately. Stopped runs quarantine exports.
+  Results retain `independent_audit_pending`; the independent audit's reviewer,
+  verdict and status live in `results.json.receipt.json`, bound to the exact
+  results hash without modifying results. Follow intake -> inventory/evidence
+  -> selections/spec -> measurement -> audit/receipt -> pricing/proposal -> delivery.
 
 ## 6. Known limitations (by design)
 

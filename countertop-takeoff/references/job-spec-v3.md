@@ -98,9 +98,10 @@ millwork|FFE|public_BOH, "finish_tag"?: "ST"|"PL"|"W"|..., "width_in"?,
   claimed by two assemblies, assembly piece-list entries without records,
   and measured regions covered by no piece are flagged (callouts; the
   affected extensions stay blank).
-- ALL deliverable totals (project, type rows, both BoQ views, CSV grand
-  total) derive from this one resolved model and cannot disagree; the run
-  asserts their equality (`dual BoQ reconciliation`).
+- Project/type/report/CSV equal the full known piece subtotal. BoQ equality
+  compares the same fully resolved assembly subset, separately from partial
+  assembly contributions (`dual BoQ reconciliation`). Hotel: 123.00 SF in
+  the resolved subset vs 146.98 SF full known subtotal; completeness is false.
 
 ## `pieces[]`
 

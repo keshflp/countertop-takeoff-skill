@@ -214,6 +214,7 @@ def build_proposal(results_path, estimate_path, profile_path, out_md=None,
     with open(estimate_path, encoding="utf-8") as f:
         source_estimate = json.load(f)
     protected["rate profile"] = source_estimate.get("profile_path")
+    protected["estimate results"] = source_estimate.get("results_path")
     reject_aliases(protected, {"out-md": out_md, "out-json": out_json, "out-pdf": out_pdf})
     outputs = [out_md, out_json, out_pdf]
     try:

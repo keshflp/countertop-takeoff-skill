@@ -302,6 +302,12 @@ def unknown_scope_from_ledger(results):
     for e in results.get("scope_incomplete") or []:
         if e not in out:
             out.append(e)
+    # Legacy results represented unavailable inputs as named blank fields.
+    # Read that structural declaration, never a phrase from the reason text.
+    for c in results.get("callouts") or []:
+        if "all quantities from this source" in (c.get("blank_fields") or []):
+            out.append({"item": c.get("scope"), "kind": "input", "state": "unresolved",
+                        "detail": c.get("reason"), "source": c.get("source") or {}})
     return out
 
 
@@ -582,10 +588,14 @@ def render_pdf(text, out_path, title="Countertop Estimate",
     n_pages = check_doc.page_count
     check_doc.close()
     missing = [a for a in expect_amounts if plain_text(a) not in extracted]
-    if missing:
+    # Membership alone misses a changed repeated amount if another copy
+    # still exists. Verify the entire rendered numeric sequence as well.
+    number_re = r"(?<!\w)\d[\d,]*(?:\.\d+)?(?!\w)"
+    numbers_match = re.findall(number_re, extracted) == re.findall(number_re, plain_text(text))
+    if missing or not numbers_match:
         raise SystemExit(
             f"ERROR: rendered PDF amounts disagree with estimate.json -"
-            f" missing from the rendered text: {missing!r}; refusing to"
+            f" missing: {missing!r}; numeric sequence matches: {numbers_match}; refusing to"
             " ship a PDF whose numbers cannot be re-read")
     if not extracted.strip():
         raise SystemExit("ERROR: rendered PDF carries no extractable text")
@@ -605,7 +615,7 @@ def reject_aliases(results_path, profile_path, out_md, out_json, out_pdf):
 
 
 def build_estimate(results_path, profile_path, out_md=None, out_json=None,
-                   out_pdf=None):
+                   out_pdf=None, *, quarantine_on_error=True):
     reject_aliases(results_path, profile_path, out_md, out_json, out_pdf)
     from publish_safety import register_artifacts, quarantine
     outputs = [out_md, out_json, out_pdf]
@@ -614,7 +624,8 @@ def build_estimate(results_path, profile_path, out_md=None, out_json=None,
         register_artifacts(results_path, outputs)
         return payload
     except (Exception, SystemExit):
-        quarantine(outputs)
+        if quarantine_on_error:
+            quarantine(outputs)
         raise
 
 
@@ -685,9 +696,10 @@ def _build_estimate(results_path, profile_path, out_md, out_json, out_pdf):
         for l in lines:
             if l["line_total"] is not None:
                 expect.append(money(D(l["line_total"])))
-                expect.append(fmt_rate(line_rate(l)))
             else:
                 expect.append(BLANK)
+            if line_rate(l) is not None:
+                expect.append(fmt_rate(line_rate(l)))
         render_pdf(md, out_pdf, expect_amounts=expect)
         print(f"wrote {out_pdf} (PyMuPDF render of estimate.md; every"
               " rendered amount re-checked against estimate.json - the"

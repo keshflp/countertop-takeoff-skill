@@ -339,7 +339,7 @@ def record_receipt(results, results_path, reviewer, verdict, notes, pack_dir):
         audited; the receipt binds to the file's sha256.
     """
     base = os.path.basename(results_path)
-    if ".stale-" in base:
+    if ".stale-" in base.casefold():
         print(f"REFUSED: {base!r} is a QUARANTINED (superseded) results file"
               " left behind by a later run - audit the current results file"
               " instead. Nothing recorded.")
@@ -361,7 +361,7 @@ def record_receipt(results, results_path, reviewer, verdict, notes, pack_dir):
         return 2
     directory = os.path.dirname(os.path.abspath(results_path))
     superseded = sorted(f for f in os.listdir(directory)
-                        if f.startswith(base + ".stale-"))
+                        if f.casefold().startswith(base.casefold() + ".stale-"))
     if superseded:
         print("WARNING: superseded earlier results file(s) detected next to"
               f" the current file: {superseded} - the receipt names them so"

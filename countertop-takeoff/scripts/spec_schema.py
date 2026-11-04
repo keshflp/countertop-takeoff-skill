@@ -421,6 +421,9 @@ def validate_schedule(spec):
         require(finite(ev.get("render_zoom")) and ev["render_zoom"] > 0,
                 "image evidence needs render_zoom (the zoom used for the"
                 " crop render)")
+        require(type(ev.get("render_rotation", 0)) is int
+                and ev.get("render_rotation", 0) in (0, 90, 180, 270),
+                "image evidence render_rotation must be 0/90/180/270 degrees")
         validate_box_list(ev.get("crop_bbox"),
                           "image evidence crop_bbox (displayed points)")
         require(isinstance(ev.get("headers"), list) and ev["headers"],
@@ -487,7 +490,15 @@ def validate_schedule(spec):
                 " false = the variant row is additional)")
         require(isinstance(v.get("row_text"), str) and v["row_text"].strip(),
                 f"variant {vname}: row_text must quote its schedule row")
-        word_boxes(v.get("word_boxes"), f"variant {vname} word_boxes")
+        if ev["kind"] == "text":
+            word_boxes(v.get("word_boxes"), f"variant {vname} word_boxes")
+        else:
+            for i, b in enumerate(v.get("word_boxes") or []):
+                box(b, f"variant {vname} word_boxes[{i}]")
+        for i, ref in enumerate(v.get("count_cells") or []):
+            require(isinstance(ref, dict) and type(ref.get("row")) is int
+                    and isinstance(ref.get("col"), str) and ref["col"].strip(),
+                    f"variant {vname}: count_cells[{i}] needs row: int, col: str")
     totals = sched.get("stated_totals")
     if totals is not None:
         require(isinstance(totals, dict), "stated_totals must be an object")

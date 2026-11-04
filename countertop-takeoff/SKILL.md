@@ -1,6 +1,6 @@
 ---
 name: countertop-takeoff
-version: 5.0.0
+version: 5.1.0
 description: >-
   Countertop takeoffs (SF, edge feet, splash, cutouts) from plan PDFs, DXF,
   and rasters. Preflights the pack, transcribes bitmap schedules with
@@ -13,7 +13,7 @@ description: >-
   quantity requests on plan sets.
 ---
 
-# Countertop Takeoff (V5: safe publishing, evidence identity, complete-scope estimates)
+# Countertop Takeoff (5.1.0: correctness and scope-safe documents)
 
 You are doing a countertop takeoff on a drawing set for a countertop
 subcontractor. Run to completion, then notify once — no approval gates, no
@@ -35,7 +35,10 @@ THIS skill folder via uv (`uv run scripts/<name>.py`; uv provisions Python
    schedule rows with word boxes, or a bitmap-schedule crop (hash recorded)
    with cell boxes, reconciled against plan room tags. The count VALUE must
    correspond numerically to the quoted evidence (a quoted "3" never
-   supports a count of 30; image-evidence counts cite `count_cells`); plan
+   supports a count of 30; image-evidence types AND variants cite `count_cells`);
+   uncertain/unsupported referenced cells withhold the count and dependent
+   standard allocation. Crop hashes prove pixel identity only; transcription
+   is the agent's job. Plan
    room tags are DEDUPED RECORDS, and a supplied summary contradicting them
    withholds the type. Missing counts stay missing — never defaulted to 1.
 3. **Graduated degradation.** Bad boundary, missing calibration, unusable
@@ -43,11 +46,13 @@ THIS skill folder via uv (`uv run scripts/<name>.py`; uv provisions Python
    failed recheck: try alternate routes, then withhold ONLY the unresolved
    quantities (blank + callout naming room/type, source pages, reason,
    blank fields) and finish the job. Valid EA counts, lengths and finishes
-   survive even when SF is impossible.
+   survive ordinary geometry failure even when SF is impossible. Identity
+   conflicts withhold affected SF/extended LF/cutouts and assembly pricing.
 4. **Exactly three stops** (exit 2; everything else degrades): (a) no valid
    calibration anywhere (verified native-CAD units qualify); (b) no unit
    schedule AND no repeatable pattern after reading images and plan tags;
    (c) source-file integrity mismatch.
+   Schema malformation refuses before measurement; it is not a fourth data stop.
 5. **Cite everything.** Every number carries source id, page, viewport,
    selection ids, and the actual calibration factor.
 
@@ -100,7 +105,7 @@ assemblies (room/type, package millwork|FFE|public_BOH, finish tag ST/PL/W,
 inch dims, handing, quantity basis) and pieces (geometry or stated dims,
 edge runs by profile+exposure, splash runs with LH/RH returns, cutouts EA,
 source links: length from plan/elevation, depth/thickness/material from
-sections/specs). Image-evidence schedule types cite `count_cells` (row/col
+sections/specs). Image-evidence schedule types and variants cite `count_cells` (row/col
 of the transcribed cells that prove each count).
 
 ### Step 5. Measure
@@ -109,10 +114,22 @@ build/takeoff.csv --piece-csv build/pieces.csv --assembly-csv
 build/assemblies.csv --json build/results.json`. Exit 0 = deliverable
 (callouts in the CALLOUTS section); exit 2 = one of the three stops — read
 the named reason. Never edit outputs by hand. Every deliverable derives
-from ONE resolved quantity model: project total == assembly BoQ total ==
-piece BoQ total == report == CSV grand total (the run asserts this).
+from ONE resolved quantity model. Project/report/CSV equal the full known
+piece subtotal. Assembly/piece BoQ equality compares the SAME fully resolved
+subset; partial assembly pieces remain in the full known subtotal. The hotel
+case is 123.00 SF resolved subset vs 146.98 SF full known subtotal. Carry
+completeness flags and omission reasons with both; never claim equal scopes.
 
-### Step 5b. Estimate (when the shop asks for pricing)
+### Step 6. Audit pack and independent receipt
+`uv run scripts/audit_pack.py build/results.json --pack build/audit_pack`
+renders overlays. Give a FRESH agent (or an independent human, recorded as
+such) the pack + raw sources + JSONs to re-verify counts, shells, spans and
+omissions; record the receipt with `--record-receipt`. If no independent
+auditor is available, disclose `independent_audit_unavailable` and continue.
+Use `references/first-run-checklist.md` for supervision and the blind
+synthetic exercise. No approval gate is added.
+
+### Step 7. Estimate (when the shop asks for pricing)
 Receipt storage is separate from results: `audit_pack.py --record-receipt`
 writes `results.json.receipt.json` and NEVER modifies results.json. Its
 `results_sha256` hashes the exact immutable results bytes. Pricing/proposal
@@ -126,7 +143,8 @@ build/estimate.md --out-json build/estimate.json --out-pdf
 build/estimate.pdf` (or add `--estimate-profile` to the measure command;
 `--estimate-md/--estimate-json/--estimate-pdf` set EXPLICIT output paths —
 an estimate may never overwrite its own evidence package, and paths that
-would alias the results/report de-alias automatically). Each in-scope
+would alias the results/report de-alias automatically for derived defaults;
+explicit paths must be distinct). Each in-scope
 assembly prices EA × exact rate; unmatched or ambiguous rates and withheld
 quantities stay BLANK behind callouts; omitted in-scope scope (a room
 covered by NO assembly) is an UNKNOWN amount — priced lines survive, the
@@ -137,7 +155,7 @@ are re-checked against estimate.json — render a richer PDF from the same
 md with the host's document tooling if you have one; the grand total must
 agree.
 
-### Step 5c. Proposal-lite (when the shop asks for a customer-facing quote)
+### Step 7b. Proposal-lite (when the shop asks for a customer-facing quote)
 `uv run scripts/proposal.py build/results.json --estimate
 build/estimate.json --profile <rate-profile.json> --out-md
 build/proposal.md --out-json build/proposal.json --out-pdf
@@ -148,13 +166,7 @@ from the estimate's exclusions + open items, the profile's SUPPLIED terms,
 and blank signature lines. Never invent percentages, tax treatment, or
 payable balances. json/md/pdf totals must agree (the script enforces it).
 
-### Steps 6–7. Audit pack, independent audit, deliver
-`uv run scripts/audit_pack.py build/results.json --pack build/audit_pack`
-renders overlays. Give a FRESH agent (or an independent human, recorded as
-such) the pack + raw sources + JSONs to re-verify counts, shells, spans and
-omissions; record the receipt with `--record-receipt`. If no independent
-auditor is available, deliver with the receipt status disclosed
-(`independent_audit_unavailable`) — disclosed, not hidden, not a blocker.
+### Step 8. Deliver
 Then deliver report, CSVs (piece BoQ + assembly BoQ — same resolved
 records, NEVER summed), results.json, audit pack, receipt, estimate (when
 priced), proposal (when quoted), and ONE final summary: totals (with the

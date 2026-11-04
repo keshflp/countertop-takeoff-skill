@@ -434,6 +434,8 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
         by_type.setdefault((r.get("type"), r.get("variant")), []).append(r)
 
     def region_state(r):
+        if r["region_id"] in resolved.get("measured_orphans", []):
+            return "unresolved"
         if r.get("status") == "unresolved":
             return "unresolved"
         return "measured"
@@ -446,7 +448,9 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
                     "source": {"source_id": r.get("source_id"),
                                "pages": [r["page"]]},
                     "state": region_state(r),
-                    "detail": (r.get("unresolved_reason", "")[:120]
+                    "detail": ("measured but covered by NO assembly/piece"
+                               if r["region_id"] in resolved.get("measured_orphans", [])
+                               else r.get("unresolved_reason", "")[:120]
                                if r.get("status") == "unresolved"
                                else f"{r['area_sf']:.2f} SF measured"),
                 })
@@ -512,8 +516,7 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
                 "item": r["region_id"], "kind": "region",
                 "source": {"source_id": r.get("source_id"),
                            "pages": [r["page"]]},
-                "state": ("unresolved" if r["region_id"] in
-                          resolved.get("measured_orphans", []) else region_state(r)),
+                "state": region_state(r),
                 "detail": ("measured but covered by NO assembly/piece"
                            if r["region_id"] in resolved.get("measured_orphans", [])
                            else r.get("unresolved_reason", "")[:120]

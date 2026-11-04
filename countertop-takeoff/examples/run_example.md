@@ -99,7 +99,7 @@ Audit highlights:
       (factor 18.0000 pt/ft, policy gross)
 - [x] recheck: PASS - dev 0.00%
 Review status: independent_audit_pending
-**Overall: READY** (0 fail, 0 warn)
+**Run status: complete** (0 fail, 0 warn)
 ```
 
 The CSV (`build/takeoff.csv`) holds base rows with
@@ -129,8 +129,10 @@ $ uv run scripts/audit_pack.py build/results.json --record-receipt \
 
 Each region gets full-page + close-up overlays (translucent shell, seed
 marker, calibration span highlights, the ACTUAL factor). The recorded
-receipt flips `review_status` to `independent_audit_approved` in the results
-JSON. Only then are the exports delivered.
+receipt records `review_status: independent_audit_approved` in the separate
+`results.json.receipt.json`. Its hash binds the unchanged results bytes.
+Continue to pricing/proposal when requested, then deliver. If independent
+audit is unavailable, disclose it and continue without an approval gate.
 
 ## 5. Known vs measured
 

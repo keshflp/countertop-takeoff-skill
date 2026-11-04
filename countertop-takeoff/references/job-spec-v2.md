@@ -17,7 +17,7 @@ word boxes. V1 specs are rejected (`schema` mismatch). A working example:
 | `mode` | yes | `"repeated_types"` (unit schedule multiplies one measured instance per type) or `"individual_rooms"` (each room measured and summed once) — never inferred |
 | `policy` | yes | `{"gross_area": "gross" \| "net_of_declared_cutouts", "declarations": [...]}`; `gross_area` may be omitted when a company profile supplies the default. `declarations` records conflicts/omissions/revision decisions for the auditor |
 | `profile` | no | path to a company profile (see `references/company-profile.md`) |
-| `review` | no | reserved for the independent-audit receipt recorded by `audit_pack.py` |
+| `review` | no | legacy inline field; new independent receipts use `RESULTS.receipt.json`, without modifying results |
 
 ## `schedule` (repeated_types only)
 
@@ -37,8 +37,9 @@ word boxes. V1 specs are rejected (`schema` mismatch). A working example:
 - `{"page", "disposition": "intentionally_skipped", "reason"}` — explicit,
   quoted omission (schedule sheets, superseded revisions, unmeasurable
   scans); the reason travels into the report and audit pack
-- `{"page", "disposition": "blocked", "reason"}` — blocks completion; the
-  run can never be ready while any page is blocked
+- `{"page", "disposition": "blocked", "reason"}` — unresolved local scope;
+  the run completes with callouts and blanks for that page. Run statuses:
+  `complete | complete_with_callouts | stopped`.
 
 Measured pages must be class `vector` per the preflight (raster /
 searchable_raster / hybrid / text_only pages cannot be measured). Sheets

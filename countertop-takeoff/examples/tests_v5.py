@@ -54,6 +54,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1010,6 +1011,16 @@ def proposal_tests():
 
 
 # ------------------------------------------------ P1.4 docs alignment
+def install_docs_ok(text):
+    """Accept either the transfer placeholder or any published GitHub owner."""
+    clone = re.search(r"git clone\s+(\S+)", text)
+    if not clone or "--ff-only" not in text:
+        return False
+    url = clone[1].strip("\"'")
+    return url == "ORG-URL-PLACEHOLDER" or bool(re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:)[A-Za-z0-9_.-]+/countertop-takeoff-skill(?:\.git)?", url))
+
+
 def docs_tests():
     root = os.path.dirname(SKILL)                       # repo root
     sk = os.path.join(root, "countertop-takeoff")       # skill folder
@@ -1025,10 +1036,8 @@ def docs_tests():
           and "NO QuickBooks API/MCP integration" in qb
           and "sales-tax" in qb,
           f"exists={os.path.exists(qb_path)}")
-    check("docs: README install examples carry NO hardcoded personal repo"
-          " URL (org placeholder at transfer time)",
-          "keshflp" not in readme and "ORG-URL-PLACEHOLDER" in readme
-          and "--ff-only" in readme,
+    check("docs: README supports a placeholder or any published owner/org URL",
+          install_docs_ok(readme),
           "")
     check("docs: README explains clone-update vs separately-copied-skill",
           "Separately-copied skill folder" in readme

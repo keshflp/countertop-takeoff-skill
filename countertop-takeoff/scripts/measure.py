@@ -541,7 +541,8 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
         import estimate as estimate_mod
         payload = estimate_mod.build_estimate(
             args.json_path or args.report, args.estimate_profile,
-            out_md=outs["md"], out_json=outs["json"], out_pdf=outs["pdf"])
+            out_md=outs["md"], out_json=outs["json"], out_pdf=outs["pdf"],
+            quarantine_on_error=False)  # main writes stopped JSON before cleanup
         print(f"estimate grand total:"
               + (f" {payload['grand_total']}"
                  if payload["grand_total"] is not None else " BLANK"
