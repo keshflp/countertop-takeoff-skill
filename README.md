@@ -147,4 +147,4 @@ for supervised validation and a drawings-only blind exercise.
   assist judgment; this tool is not a stamp. Fixtures are entirely synthetic.
 
 [5.1.0 release details](countertop-takeoff/references/release-5.1.0.md) document
-correctness fixes and probe coverage. MIT licensed; see [LICENSE](LICENSE).
+correctness fixes and probe coverage. MIT licensed; see [LICENSE](countertop-takeoff/LICENSE).

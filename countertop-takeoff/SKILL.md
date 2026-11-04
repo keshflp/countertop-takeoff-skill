@@ -3,42 +3,36 @@ name: countertop-takeoff
 version: 5.1.0
 description: >-
   Countertop takeoffs (SF, edge feet, splash, cutouts) from plan PDFs, DXF,
-  and rasters. Preflights the pack, transcribes bitmap schedules with
-  crop-hash evidence, cross-validates counts against plan room tags,
-  calibrates per viewport from TWO agreeing dimensions, measures
-  agent-selected vector boundaries (plus DXF and image routes), and emits
-  PIECE + ASSEMBLY BoQs from ONE resolved quantity model - plus an
-  optional assembly-EA estimate (rate x EA). Runs to completion;
-  unresolvable quantities stay BLANK behind CALLOUTS. Use for countertop
-  quantity requests on plan sets.
+  and rasters. Preflights inputs; reads bitmap schedules with crop-hash evidence;
+  reconciles plan tags; calibrates viewports from TWO agreeing dimensions;
+  measures selected vector boundaries, DXF, or images; emits PIECE + ASSEMBLY
+  BoQs from ONE resolved model and optional assembly-EA pricing (rate x EA).
+  Runs to completion with unresolvable quantities BLANK behind CALLOUTS.
 ---
 
 # Countertop Takeoff
 
-You are doing a countertop takeoff on a drawing set for a countertop
-subcontractor. Run to completion, then notify once — no approval gates, no
-idle waiting. Unresolvable quantities stay **BLANK** (never zero, and
-GENUINELY null — a withheld number never survives as a value in another
-field) behind a named CALLOUT; the run finishes `complete`,
-`complete_with_callouts`, or `stopped` (exit 0 / 0 / 2). Commands run from
-THIS skill folder via uv (`uv run scripts/<name>.py`; uv provisions Python
-+ deps). Windows-first: filter JSON with Python one-liners, never grep/sed.
+Do a countertop subcontractor's takeoff. Run to completion, then notify once:
+no approval gates or idle waiting. Unresolved quantities stay **BLANK**, never
+zero, GENUINELY null in every usable field, behind a named CALLOUT. Status:
+`complete`, `complete_with_callouts`, `stopped` (exit 0/0/2). Run from THIS skill
+folder via `uv run scripts/<name>.py` (uv provisions Python + deps).
+Windows-first: filter JSON with Python one-liners, never grep/sed.
 
 ## Non-negotiable rules
 
 1. **Vision for recognition, code for measurement.** Look at renders to
    decide WHAT to measure; never type a scale factor or length — select
-   recorded words/segments/points and the code computes. OCR text proves
-   nothing about linework; only vector geometry, verified-units CAD, or the
-   calibrated image route produces quantities.
+   recorded words/segments/points and code computes. OCR proves no linework;
+   quantities require vectors, verified CAD units, or calibrated images.
 2. **Counts are earned, and they correspond.** Every count quotes evidence:
    schedule rows with word boxes, or a bitmap-schedule crop (hash recorded)
    with cell boxes, reconciled against plan room tags. The count VALUE must
    correspond numerically to the quoted evidence (a quoted "3" never
    supports a count of 30; image-evidence types AND variants cite `count_cells`);
    uncertain/unsupported referenced cells withhold the count and dependent
-   standard allocation. Crop hashes prove pixel identity only; transcription
-   is the agent's job. Plan room tags are DEDUPED RECORDS; a contradictory summary
+   standard allocation. Hashes prove pixels only; the agent transcribes.
+   Plan room tags are DEDUPED RECORDS; a contradictory summary
    withholds the type. Missing counts stay missing — never defaulted to 1.
 3. **Graduated degradation.** Bad boundary, missing calibration, unusable
    raster, disagreed count, range breach, overlap, unplanned region,
@@ -125,8 +119,7 @@ renders overlays. Give a FRESH agent (or an independent human, recorded as
 such) the pack + raw sources + JSONs to re-verify counts, shells, spans and
 omissions; record the receipt with `--record-receipt`. If no independent
 auditor is available, disclose `independent_audit_unavailable` and continue.
-Use `references/first-run-checklist.md` for supervision and the blind
-synthetic exercise. No approval gate is added.
+Use `references/first-run-checklist.md` for supervision/blind exercise; no gate.
 
 ### Step 7. Estimate (when the shop asks for pricing)
 Receipt storage writes `results.json.receipt.json` and NEVER modifies results.json.
@@ -161,6 +154,5 @@ carry "brand/color TBD" flags.
 
 ## Method & output details
 Method/tolerances: `references/method.md` · schema: `references/job-spec-v3.md` ·
-outputs/pricing/receipts: `references/output-format.md` · company/rate profiles:
-`references/company-profile.md` · QuickBooks groundwork (no integration):
-`references/quickbooks-mapping.md` · CAD routes: `references/cad-context.md`
+outputs/pricing/receipts: `references/output-format.md` · profiles: `references/company-profile.md` ·
+QuickBooks groundwork (no integration): `references/quickbooks-mapping.md` · CAD: `references/cad-context.md`
