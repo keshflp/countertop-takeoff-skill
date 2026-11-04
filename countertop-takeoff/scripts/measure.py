@@ -175,18 +175,25 @@ def audit_intake_manifest(spec, audit_obj, base_dir):
         return
     path = resolve_path(path, base_dir)
     if not os.path.exists(path):
+        spec.setdefault("_unavailable_inputs", []).append({
+            "item": "intake manifest", "detail": f"intake manifest not found: {path}"})
         audit_obj.add_callout("intake", f"intake manifest not found: {path}",
                               blank_fields=[], pages=[])
         return
     manifest = load_json(path)
     for e in manifest.get("sources") or []:
         if e.get("status") != "resolved":
+            spec.setdefault("_unavailable_inputs", []).append({
+                "item": str(e.get("requested")),
+                "detail": "source unavailable at intake - quantities unknown"})
             audit_obj.add_callout(
                 "intake", f"source {e.get('requested')!r} was never resolved"
                 " (unavailable at intake) - the job proceeds without it",
                 blank_fields=["all quantities from this source"], pages=[])
     verdict = manifest.get("verdict") or ""
     if "mismatch" in verdict:
+        spec.setdefault("_unavailable_inputs", []).append({
+            "item": "intake source count", "detail": verdict})
         audit_obj.add_callout("intake", verdict, blank_fields=[], pages=[])
     audit_obj.add("intake manifest", "pass",
                   f"manifest {os.path.basename(path)}:"
@@ -420,9 +427,11 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
     assembly_ea = (sum(a.get("ea") or 0 for a in assembly_rows
                        if a["state"] != "package_excluded")
                    if spec.get("_assemblies") else None)
+    from scope_state import unresolved_scope
+    scope_unknown = unresolved_scope(ledger, spec.get("_unavailable_inputs") or [])
     totals_meta = {
-        "project_sf_complete": not unknown_pieces,
-        "unknown_contribution_count": len(unknown_pieces),
+        "project_sf_complete": not (unknown_pieces or scope_unknown),
+        "unknown_contribution_count": len(scope_unknown) or len(unknown_pieces),
         "known_subtotal_sf": round(total, 2),
         "unit_count": schedule_unit_total,
         "assembly_ea": assembly_ea,
@@ -444,8 +453,9 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
     payload["assembly_boq"] = assembly_rows
     payload["piece_boq"] = piece_rows
     payload["totals"]["known_subtotal_sf"] = round(total, 2)
-    payload["totals"]["project_sf_complete"] = not unknown_pieces
-    payload["totals"]["unknown_contribution_count"] = len(unknown_pieces)
+    payload["totals"].update(totals_meta)
+    payload["scope_incomplete"] = scope_unknown
+    payload["unavailable_inputs"] = spec.get("_unavailable_inputs") or []
     payload["totals"]["unit_count"] = schedule_unit_total
     payload["totals"]["assembly_ea"] = assembly_ea
     payload["totals"]["excluded_package_sf"] = round(

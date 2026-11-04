@@ -279,7 +279,9 @@ def identity_tests():
          "sources": [{"source_id": "plans", "page": 5}]})
     spec["pieces"].append(
         {"piece_id": "p:v2", "assembly_id": "van-enum2", "route": "geometry",
-         "region_id": "A:vanity", "finish_tag": "PL", "edge_runs": []})
+         "region_id": "A:vanity", "finish_tag": "PL",
+         "edge_runs": [{"profile": "eased", "exposure": "front", "length_in": 60}],
+         "cutouts": [{"kind": "sink", "ea": 1}]})
     rc, res, err = run_measure(spec, "v5_geomdup")
     co = callout_text(res)
     check("identity: repeated geometry claim called out and withheld"
@@ -288,9 +290,10 @@ def identity_tests():
           and "REPEATED GEOMETRY CLAIM" in co,
           f"rc={rc} total={res and res['totals']['project_sf']}")
     pv2 = next(p for p in res["piece_boq"] if p["piece_id"] == "p:v2")
-    check("identity: the duplicate piece keeps identity but its extension is"
-          " blank",
-          pv2["extension_sf"] is None and pv2.get("sf") is not None
+    check("identity: duplicate piece identity remains; SF and extension withheld (5.1)",
+          pv2["extension_sf"] is None and pv2.get("sf") is None
+          and pv2["edge_lf_ext"] is None and pv2["cutouts_ea_ext"] is None
+          and pv2["cutouts_ea"] is None
           and "extension_sf" in (pv2.get("blank_fields") or []), str(pv2))
     # declared reuse: same shape, now with an explicit declaration
     spec["piece_geometry_reuse"] = [{
@@ -825,8 +828,8 @@ def estimate_pdf_tests():
           " estimate.json",
           all(f"{l['line_total']:,.2f}" in txt
               for l in payload["lines"] if l["line_total"] is not None)
-          and payload["grand_total"] is not None
-          and f"{payload['grand_total']:,.2f}" in txt, txt[:200])
+          and (f"{payload['grand_total']:,.2f}" in txt if payload["grand_total"] is not None
+               else "GRAND TOTAL: __blank__" in txt), txt[:200])
 
     # long descriptions wrap; many lines paginate
     spec = mixed_v5_spec()
@@ -1065,6 +1068,8 @@ def main():
     estimate_pdf_tests()
     proposal_tests()
     docs_tests()
+    import tests_v51
+    tests_v51.run(sys.modules[__name__])
     print()
     failed = [r for r in RESULTS if not r[1]]
     for name, ok, detail in RESULTS:

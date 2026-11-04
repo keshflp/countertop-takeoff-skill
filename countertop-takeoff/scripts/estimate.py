@@ -279,15 +279,13 @@ def validate_results_payload(results, path):
 
 
 def unknown_scope_from_ledger(results):
-    """P0.3: in-scope assemblies that were OMITTED (the hotel's room-203
-    case) are represented as UNKNOWN amounts - read from the coverage
-    ledger the measure run wrote (rooms covered by NO assembly)."""
-    out = []
-    for e in results.get("coverage_ledger") or []:
-        if e.get("kind") == "room" and e.get("state") == "unresolved" \
-                and "covered by NO assembly" in str(e.get("detail", "")):
-            out.append({"item": e.get("item"), "detail": e.get("detail"),
-                        "source": e.get("source") or {}})
+    """Every unresolved in-scope contribution withholds the grand total."""
+    from scope_state import unresolved_scope
+    out = unresolved_scope(results.get("coverage_ledger") or [],
+                           results.get("unavailable_inputs") or [])
+    for e in results.get("scope_incomplete") or []:
+        if e not in out:
+            out.append(e)
     return out
 
 
@@ -379,8 +377,8 @@ def build_lines(results, rates):
     for u in unknown_scope:
         callouts.append({
             "scope": f"estimate scope {u['item']}",
-            "reason": f"{u['detail']} - its amount is UNKNOWN (no assembly"
-                      " record exists to price); the grand total is withheld",
+            "reason": f"{u['detail']} - scope contribution unresolved; its amount"
+                      " is UNKNOWN; the grand total is withheld",
             "blank_fields": ["amount"],
         })
     return lines, callouts, exclusions, unknown_scope

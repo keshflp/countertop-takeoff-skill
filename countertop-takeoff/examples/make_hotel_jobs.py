@@ -307,34 +307,47 @@ def schedule_evidence(pdf, geo, workdir):
                   if r.get("kind") == "raster")
     crop_bbox = raster["bbox"]
     zoom = 3.0
-    crop_png = render_crop_png(pdf, 2, crop_bbox, zoom,
-                               os.path.join(workdir, "schedule_crop.png"))
+    # Displayed page is rotated 270 degrees. Rotate its clipped render 90
+    # degrees clockwise to restore upright table text; boxes are crop pixels.
+    rotation = 90
+    crop_png = os.path.join(workdir, "schedule_crop.png")
+    with pymupdf.open(pdf) as doc:
+        matrix = pymupdf.Matrix(zoom, zoom).prerotate(rotation)
+        pix = doc[1].get_pixmap(matrix=matrix, clip=pymupdf.Rect(*crop_bbox))
+        pix.save(crop_png)
     crop_sha = hashlib.sha256(open(crop_png, "rb").read()).hexdigest()
-    cells = [
-        {"row": 1, "col": "FLOOR", "text": "FLOOR 1", "box": [10, 60, 90, 100]},
-        {"row": 1, "col": "TYPE A", "text": "3", "box": [150, 60, 200, 100]},
-        {"row": 1, "col": "TYPE B", "text": "0", "box": [260, 60, 310, 100]},
-        {"row": 1, "col": "TYPE GR", "text": "1", "box": [360, 60, 410, 100]},
-        {"row": 1, "col": "TOTAL", "text": "4", "box": [470, 60, 510, 100]},
-        {"row": 2, "col": "FLOOR", "text": "FLOOR 2", "box": [10, 130, 90, 170]},
-        {"row": 2, "col": "TYPE A", "text": "3", "box": [150, 130, 200, 170]},
-        {"row": 2, "col": "TYPE B", "text": "2", "box": [260, 130, 310, 170]},
-        {"row": 2, "col": "TYPE GR", "text": "1", "box": [360, 130, 410, 170]},
-        {"row": 2, "col": "TOTAL", "text": "6", "box": [470, 130, 510, 170]},
-        {"row": 3, "col": "TOTAL", "text": "6", "box": [150, 200, 200, 240]},
-    ]
+    # Synthetic ground truth, NOT an OCR/recognition result. Independent
+    # transcription is the agent's job. A hash proves pixel identity only.
+    columns = ["FLOOR", "TYPE A", "TYPE B", "TYPE GR", "TOTAL"]
+    xs = [60, 140, 240, 340, 440, 540]
+    values = [["FLOOR 1", "3", "0", "1", "4"],
+              ["FLOOR 2", "3", "2", "1", "6"],
+              ["TOTAL", "6", "2", "2", "10"]]
+    scale = (crop_bbox[3] - crop_bbox[1]) / 612 * zoom
+    cells = [{"row": r + 1, "col": col, "text": values[r][c],
+              "box": [round(v * scale, 2) for v in
+                      (xs[c] + 3, 103 + r * 40, xs[c + 1] - 3, 137 + r * 40)]}
+             for r in range(3) for c, col in enumerate(columns)]
+    with pymupdf.open() as preview:
+        page = preview.new_page(width=pix.width, height=pix.height)
+        page.insert_image(page.rect, filename=crop_png)
+        for c in cells:
+            page.draw_rect(pymupdf.Rect(*c["box"]), color=(1, 0, 0))
+        page.get_pixmap().save(os.path.join(workdir, "schedule_cells.png"))
     return {
         "kind": "image",
-        "crop_image": os.path.relpath(crop_png, os.path.dirname(
-            os.path.abspath(workdir))),
+        "crop_image": os.path.abspath(crop_png),
         "crop_sha256": crop_sha,
         "render_zoom": zoom,
+        "render_rotation": rotation,
+        "transform": "displayed clip -> zoom 3 -> clockwise 90 -> crop-local pixels",
         "crop_bbox": crop_bbox,
         "headers": ["FLOOR", "TYPE A", "TYPE B", "TYPE GR", "FLOOR TOTAL"],
         "cells": cells,
         "uncertain_cells": [],
-        "note": "table is a pasted bitmap; transcribed by vision from the"
-                " rendered crop; crop hash proves which pixels were read",
+        "note": "Synthetic truth supplied by fixture generator, not recognition. "
+                "Crop hash proves pixel identity only; transcription is the agent's job. "
+                "schedule_cells.png previews boxes on the upright schedule_crop.png.",
     }, crop_png
 
 

@@ -129,7 +129,7 @@ def load_terms(profile_path):
     return terms, profile.get("company", "(unnamed shop)")
 
 
-def package_summaries(lines, exclusions):
+def package_summaries(lines, exclusions, scope_incomplete=False):
     """Package groupings FROM THE DATA (P1.3): one summary per package with
     its line count, EA total and KNOWN amount - no invented splits."""
     packages = {}
@@ -161,7 +161,8 @@ def package_summaries(lines, exclusions):
                        if not g["has_unknown"] else None),
             "note": ("includes line(s) with unknown amounts - see the open"
                      " items" if g["has_unknown"]
-                     else "fully priced from the estimate"),
+                     else ("known subtotal; omitted scope remains unresolved"
+                           if scope_incomplete else "fully priced from the estimate")),
         })
     exclusion_pkgs = []
     for e in exclusions:
@@ -189,7 +190,7 @@ def build_proposal(results_path, estimate_path, profile_path, out_md=None,
     terms, company = load_terms(profile_path)
     lines = est["lines"]
     exclusions = est.get("exclusions") or []
-    packages = package_summaries(lines, exclusions)
+    packages = package_summaries(lines, exclusions, not est.get("scope_complete"))
     callouts = est.get("callouts") or []
     open_items = [c for c in callouts if "amount" in (c.get("blank_fields")
                                                       or [])]
@@ -209,6 +210,8 @@ def build_proposal(results_path, estimate_path, profile_path, out_md=None,
         "profile_path": profile_path,
         "profile_sha256": sha256_file(profile_path),
         "scope_complete": bool(est.get("scope_complete")),
+        "unknown_scope": est.get("unknown_scope") or [],
+        "callouts": callouts,
         "packages": packages,
         "lines": lines,
         "exclusions": exclusions,

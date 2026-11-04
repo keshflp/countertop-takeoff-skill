@@ -512,8 +512,11 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
                 "item": r["region_id"], "kind": "region",
                 "source": {"source_id": r.get("source_id"),
                            "pages": [r["page"]]},
-                "state": region_state(r),
-                "detail": (r.get("unresolved_reason", "")[:120]
+                "state": ("unresolved" if r["region_id"] in
+                          resolved.get("measured_orphans", []) else region_state(r)),
+                "detail": ("measured but covered by NO assembly/piece"
+                           if r["region_id"] in resolved.get("measured_orphans", [])
+                           else r.get("unresolved_reason", "")[:120]
                            if r.get("status") == "unresolved"
                            else f"{r['area_sf']:.2f} SF"),
             })
@@ -717,6 +720,21 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
     asm_ids = {a["assembly_id"] for a in assemblies}
     declared_pieces = {a["assembly_id"]: set(a.get("pieces") or [])
                        for a in assemblies}
+    owners = {}
+    listed = {}
+    for p in pieces:
+        owners.setdefault(p["piece_id"], []).append(p["assembly_id"])
+    for a in assemblies:
+        for pid in a.get("pieces") or []:
+            listed.setdefault(pid, []).append(a["assembly_id"])
+    identity_pieces = set()
+    identity_assemblies = set()
+    for pid in owners.keys() | listed.keys():
+        actual, declared = owners.get(pid, []), listed.get(pid, [])
+        if (len(actual) != 1 or len(declared) != 1
+                or actual != declared or actual[0] not in asm_ids):
+            identity_pieces.add(pid)
+            identity_assemblies.update(actual + declared)
     claims = {}
     for p in pieces:
         claims.setdefault(p["assembly_id"], []).append(p["piece_id"])
@@ -757,7 +775,8 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
                 " membership) - the extension stays blank")
     for problem in resolved["membership_problems"]:
         audit.add_callout("piece/assembly membership", problem,
-                          blank_fields=["extension_sf"])
+                          blank_fields=["sf", "extension_sf", "edge_lf_ext",
+                                        "cutouts_ea_ext", "ea"])
 
     # ---- repeated geometry claims (V5, P0.2) --------------------------
     # Two geometry-route pieces pointing at the SAME measured region claim
@@ -774,6 +793,11 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
         if p.get("route") == "geometry" and p.get("region_id"):
             by_region.setdefault(p["region_id"], []).append(p["piece_id"])
     geometry_withheld = set()
+    for p in pieces:
+        r = (results_by_id or {}).get(p.get("region_id"), {})
+        if r.get("identity_conflict"):
+            geometry_withheld.add(p["piece_id"])
+            identity_assemblies.add(p["assembly_id"])
     for rid, pids in by_region.items():
         if len(pids) <= 1:
             continue
@@ -782,6 +806,7 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
             if pid in allowed and pids[0] in allowed:
                 continue  # explicitly declared reuse: legitimate
             geometry_withheld.add(pid)
+            identity_assemblies.update(owners.get(pid, []))
             resolved["membership_problems"].append(
                 f"pieces {pids} both claim region {rid!r} - the same measured"
                 f" geometry cannot be counted twice; piece {pid!r}'s"
@@ -793,7 +818,7 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
             "REPEATED GEOMETRY CLAIM - another piece already extends this"
             f" measured region; the duplicate extension is withheld"
             " (blank, never re-counted)",
-            blank_fields=["extension_sf"])
+            blank_fields=["sf", "extension_sf", "edge_lf_ext", "cutouts_ea_ext"])
 
     # ---- measured regions covered by NO piece ------------------------
     if assemblies:
@@ -816,6 +841,9 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
         pkg = a["package"]
         excluded_asm = pkg in excluded
         count, basis = resolve_assembly_ea(spec, a)
+        identity_conflict = aid in identity_assemblies
+        if identity_conflict:
+            count, basis = None, "piece/assembly identity conflict - EA withheld"
         pages = sorted({s.get("page") for s in a.get("sources", [])
                         if s.get("page")})
         if excluded_asm:
@@ -836,6 +864,7 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
             "width_in": a.get("width_in"), "depth_in": a.get("depth_in"),
             "height_in": a.get("height_in"), "handing": a.get("handing"),
             "ea": count, "basis": basis,
+            "identity_conflict": identity_conflict,
             # V5 (P1.1): a legitimate derived EA of ZERO (all units covered
             # by included variants) is a resolved zero, never `unresolved`;
             # and vice versa - an unresolved EA stays genuinely blank
@@ -939,12 +968,13 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
             cutouts[c["kind"]] = cutouts.get(c["kind"], 0) + c["ea"]
         ext = (round(sf * ea, 4)
                if sf is not None and isinstance(ea, (int, float)) else None)
-        extension_withheld = pid in geometry_withheld
-        if extension_withheld and ext is not None:
-            # V5 P0.2: the duplicate geometry claim keeps its identity (SF,
-            # EA) but its extension is WITHHELD - the same counter is never
-            # money/area-counted twice
+        extension_withheld = pid in geometry_withheld or pid in identity_pieces
+        if extension_withheld:
+            sf = None
             ext = None
+            state = "unresolved" if state != "package_excluded" else state
+            blank.extend(["sf", "extension_sf", "edge_lf_ext", "cutouts_ea_ext",
+                          "splash_lf_ext", "splash_sf_ext"])
         if ext is None:
             blank.append("extension_sf")
         edge_ext = ({k: round(v * ea, 3) for k, v in edges.items()
@@ -956,6 +986,8 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
                          if splash_sf_ok and ea is not None else None)
         cutouts_ext = ({k: v * ea for k, v in cutouts.items()}
                        if ea is not None else None)
+        if extension_withheld:
+            edge_ext = cutouts_ext = splash_lf_ext = splash_sf_ext = None
         if blank:
             audit.add_callout(
                 f"piece {pid}",
@@ -983,7 +1015,7 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
             "splash_lf": round(splash_lf, 3) if splash_lf_ok else None,
             "splash_sf": round(splash_sf, 3) if splash_sf_ok else None,
             "splash_detail": splash_detail,
-            "cutouts_ea": cutouts or {},
+            "cutouts_ea": None if extension_withheld else (cutouts or {}),
             "ea": ea, "extension_sf": ext,
             "extension_withheld": extension_withheld,
             "edge_lf_ext": edge_ext, "splash_lf_ext": splash_lf_ext,
@@ -1001,7 +1033,6 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
         own = pieces_by_asm.get(arow["assembly_id"], [])
         # V5: pieces with a WITHHELD extension (repeated geometry claim,
         # one-sided membership) do not extend the assembly either
-        own = [pp for pp in own if not pp.get("extension_withheld")]
         sfs = [pp["sf"] for pp in own]
         if own and all(v is not None for v in sfs):
             arow["sf_per_instance"] = round(sum(sfs), 4)
@@ -1181,16 +1212,7 @@ def audit_schedule_evidence(spec, geometry_map, audit):
                     f", fresh render {got[:16]}... - the transcription does"
                     " not prove which pixels it read; re-render and"
                     " re-transcribe")
-        if ev.get("uncertain_cells"):
-            audit.add_callout(
-                "schedule image evidence",
-                f"uncertain cells disclosed: {ev['uncertain_cells']} -"
-                " re-read those cells at higher zoom before relying on them",
-                blank_fields=[], pages=[sched.get("page")])
-        if problems:
-            for t in sched["types"]:
-                _withhold_type(audit, sched, t["type"], "; ".join(problems))
-        else:
+        if not problems:
             audit.add("image schedule evidence", "pass",
                       f"crop hash verified on source {sid!r} page"
                       f" {sched['page']} ({len(ev.get('cells') or [])} cells"
@@ -1198,37 +1220,34 @@ def audit_schedule_evidence(spec, geometry_map, audit):
             # P0.2: the count VALUE must be supported by the TRANSCRIBED
             # cells (count_cells); an edited count over verified pixels is
             # still caught
-            cell_index = {}
-            for c in ev.get("cells") or []:
-                cell_index[(c.get("row"), c.get("col"))] = \
-                    str(c.get("text", "")).strip()
-            for t in sched["types"]:
-                refs = t.get("count_cells") or []
-                if not refs:
-                    _withhold_type(
-                        audit, sched, t["type"],
-                        "image-evidence count has NO count_cells pointing at"
-                        " the transcribed cell(s) that prove it - record"
-                        " count_cells (row/col of the transcribed cells) so"
-                        " the number is bound to the crop")
-                    continue
-                vals = []
-                bad_refs = []
-                for ref in refs:
-                    key = (ref.get("row"), ref.get("col"))
-                    if key not in cell_index:
-                        bad_refs.append(key)
-                        continue
-                    vals.append(cell_index[key])
-                if bad_refs:
-                    _withhold_type(
-                        audit, sched, t["type"],
-                        f"count_cells {bad_refs} do not match any transcribed"
-                        " cell - fix the references or re-transcribe")
-                    continue
-                ok, why = _count_supported_by_evidence(t["count"], vals)
-                if not ok:
-                    _withhold_type(audit, sched, t["type"], why)
+        cell_index = {}
+        uncertain = set(ev.get("uncertain_cells") or [])
+        for i, c in enumerate(ev.get("cells") or []):
+            cell_index.setdefault((c.get("row"), c.get("col")), []).append((i, c))
+        for row in [*sched["types"], *sched.get("variants", [])]:
+            reasons = list(problems)
+            refs = row.get("count_cells") or []
+            if not refs:
+                reasons.append("image-evidence count has NO count_cells")
+            vals = []
+            for ref in refs:
+                key = (ref.get("row"), ref.get("col"))
+                matches = cell_index.get(key, [])
+                if len(matches) != 1:
+                    reasons.append(f"count_cells {key} missing or ambiguous")
+                elif matches[0][0] in uncertain:
+                    reasons.append(f"count_cells {key} uncertain - re-read the cell")
+                else:
+                    vals.append(str(matches[0][1].get("text", "")).strip())
+            ok, why = _count_supported_by_evidence(row["count"], vals)
+            if not ok:
+                reasons.append(why)
+            if reasons:
+                row["_evidence_ok"] = False
+                audit.add_callout(
+                    f"schedule evidence {row.get('name') or row['type']}",
+                    "; ".join(reasons), blank_fields=["count", "extended_sf"],
+                    pages=[sched.get("page")])
 
 
 def _withhold_all(audit, sched, sid, reason):
@@ -1249,7 +1268,8 @@ def _render_crop_hash(spec, sid, page_no, ev):
         pg = doc[page_no - 1]
         clip = pymupdf.Rect(*ev["crop_bbox"])
         pix = pg.get_pixmap(matrix=pymupdf.Matrix(ev["render_zoom"],
-                                                  ev["render_zoom"]),
+                                                  ev["render_zoom"]).prerotate(
+                                                      ev.get("render_rotation", 0)),
                             clip=clip)
         data = pix.tobytes("png")
         doc.close()
@@ -1544,6 +1564,7 @@ def audit_region_checks(spec, results, calibrations, audit,
         ids = [part.strip().strip("'") for part in between.split(" and ")]
         for r in results:
             if r["region_id"] in ids and r.get("status") != "unresolved":
+                r["identity_conflict"] = True
                 withhold(r, "duplicate boundary selection - this segment"
                          " set is already used by another region; one"
                          " counter cannot be two regions (both records"

@@ -145,7 +145,7 @@ def _schedule_table_pixmap():
                       size=10)
     for r, row in enumerate(data):
         for i, cell in enumerate(row):
-            text_centered(sp, (cols[i] + cols[i + 1]) / 2, rows[r + 1] - 12,
+            text_centered(sp, (cols[i] + cols[i + 1]) / 2, rows[r + 2] - 12,
                           cell, size=10)
     pix = sp.get_pixmap(matrix=pymupdf.Matrix(2, 2))
     scratch.close()
