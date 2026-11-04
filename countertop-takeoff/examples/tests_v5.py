@@ -57,7 +57,7 @@ import re
 import shutil
 import subprocess
 import sys
-from test_support import sh, sha256, run_measure as shared_run_measure
+from test_support import build_fixtures, sha256, run_measure as shared_run_measure
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -80,34 +80,6 @@ def check(name, ok, detail=""):
     RESULTS.append((name, ok, detail))
     print(f"[{'PASS' if ok else 'FAIL'}] {name}"
           + (f" - {detail}" if detail and not ok else ""))
-
-
-def build_fixtures():
-    """messy + hotel + orig fixtures + geometry + canonical hotel spec."""
-    os.makedirs(BUILD, exist_ok=True)
-    sh(os.path.join(HERE, "make_fixture.py"), "--case", "messy",
-       "--out", os.path.join(BUILD, "messy.pdf"))
-    sh(os.path.join(HERE, "make_fixture.py"), "--out",
-       os.path.join(BUILD, "orig.pdf"))
-    sh(os.path.join(SKILL, "scripts", "extract_geometry.py"),
-       os.path.join(BUILD, "messy.pdf"), "--pages", "all",
-       "--out", os.path.join(BUILD, "messy.geometry.json"))
-    sh(os.path.join(SKILL, "scripts", "extract_geometry.py"),
-       os.path.join(BUILD, "orig.pdf"), "--pages", "all",
-       "--out", os.path.join(BUILD, "orig.geometry.json"))
-    hdir = os.path.join(BUILD, "hotel")
-    os.makedirs(hdir, exist_ok=True)
-    sh(os.path.join(HERE, "make_fixture.py"), "--case", "hotel",
-       "--out", os.path.join(BUILD, "hotel", "hotel.pdf"))
-    sh(os.path.join(SKILL, "scripts", "extract_geometry.py"),
-       os.path.join(BUILD, "hotel", "hotel.pdf"), "--pages", "all",
-       "--out", os.path.join(BUILD, "hotel", "hotel.geometry.json"))
-    sh(os.path.join(HERE, "make_hotel_jobs.py"),
-       "--pdf", os.path.join(BUILD, "hotel", "hotel.pdf"),
-       "--geometry", os.path.join(BUILD, "hotel", "hotel.geometry.json"),
-       "--out", HOTEL_JOBS,
-       "--workdir", os.path.join(hdir, "evidence"))
-    print("fixtures built.")
 
 
 def run_measure(spec, tag, extra=(), jobs_path=None):
@@ -1044,7 +1016,7 @@ def main():
     global ORIG_PDFS, ORIG_GEO
     shutil.rmtree(BUILD, ignore_errors=True)
     os.makedirs(BUILD, exist_ok=True)
-    build_fixtures()
+    build_fixtures(BUILD)
     ORIG_PDFS = {"orig": os.path.join(BUILD, "orig.pdf")}
     ORIG_GEO = {"orig": os.path.join(BUILD, "orig.geometry.json")}
     rate_profile = os.path.join(HERE, "example.rate-profile.json")

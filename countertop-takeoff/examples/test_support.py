@@ -1,4 +1,4 @@
-"""Shared runners only; suites own checks, fixtures and result registries."""
+"""Shared runners and fixture preparation; suites own checks and results."""
 import hashlib
 import json
 import os
@@ -26,6 +26,33 @@ def sha256(path):
         for c in iter(lambda: f.read(1 << 20), b""):
             h.update(c)
     return h.hexdigest()
+
+
+def build_fixtures(build):
+    """V4/V5 fixture commands, in their original order and locations."""
+    here = os.path.join(SKILL, "examples")
+    os.makedirs(build, exist_ok=True)
+    sh(os.path.join(here, "make_fixture.py"), "--case", "messy",
+       "--out", os.path.join(build, "messy.pdf"))
+    sh(os.path.join(here, "make_fixture.py"), "--out",
+       os.path.join(build, "orig.pdf"))
+    sh(os.path.join(SKILL, "scripts", "extract_geometry.py"),
+       os.path.join(build, "messy.pdf"), "--pages", "all",
+       "--out", os.path.join(build, "messy.geometry.json"))
+    sh(os.path.join(SKILL, "scripts", "extract_geometry.py"),
+       os.path.join(build, "orig.pdf"), "--pages", "all",
+       "--out", os.path.join(build, "orig.geometry.json"))
+    hdir = os.path.join(build, "hotel")
+    os.makedirs(hdir, exist_ok=True)
+    pdf = os.path.join(hdir, "hotel.pdf")
+    geo = os.path.join(hdir, "hotel.geometry.json")
+    sh(os.path.join(here, "make_fixture.py"), "--case", "hotel", "--out", pdf)
+    sh(os.path.join(SKILL, "scripts", "extract_geometry.py"), pdf,
+       "--pages", "all", "--out", geo)
+    sh(os.path.join(here, "make_hotel_jobs.py"), "--pdf", pdf,
+       "--geometry", geo, "--out", os.path.join(hdir, "hotel.jobs.json"),
+       "--workdir", os.path.join(hdir, "evidence"))
+    print("fixtures built.")
 
 
 def run_measure(spec, tag, extra=(), jobs_path=None, *, build, report_csv=False):

@@ -45,15 +45,6 @@ sys.path.insert(0, os.path.join(SKILL, "scripts"))
 from preflight_lib import file_sha256 as sha256_file
 
 
-def render_crop_sha(pdf, page_no, crop_bbox, zoom):
-    """Render a displayed-space crop the same way audit.py re-renders it."""
-    doc = pymupdf.open(pdf)
-    pix = doc[page_no - 1].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom),
-                                      clip=pymupdf.Rect(*crop_bbox))
-    doc.close()
-    return hashlib.sha256(pix.tobytes("png")).hexdigest()
-
-
 def render_crop_png(pdf, page_no, crop_bbox, zoom, out_png):
     doc = pymupdf.open(pdf)
     pix = doc[page_no - 1].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom),

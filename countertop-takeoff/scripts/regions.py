@@ -6,17 +6,17 @@ TypeError when nothing polygonized (``nearest=None``), accepted a seed ON the
 boundary via ``.covers()``, silently applied gross or net areas depending on
 which face was smallest, and passed a duplicated region at double area.
 
-V2 rules (all errors are hard stops with explicit messages):
+Selection and QA rules (affected regions become blanks with callouts):
   - the agent selects the boundary segment IDs; code builds the polygon
   - the selection must close into EXACTLY one cycle (every node degree 2);
     dangling endpoints (open boundary, stray hatch tick) and branched nodes
     (ambiguous junction) are named in the error
-  - the seed must be STRICTLY interior (boundary distance > 0.01 pt), never on the
-    shell
+  - the seed must be STRICTLY interior (boundary distance > 0.01 pt for
+    PDF, > 0.01 ft converted to verified CAD units), never on the shell
   - gross-area policy is explicit: "gross" ignores inner loops; declared
     cutouts are subtracted only under "net_of_declared_cutouts"
   - counted instances must not overlap: two base regions of the same
-    (type, variant) sharing any area is a hard fail (the v1 208.75 SF bug);
+    (type, variant) sharing area withhold both records (the v1 208.75 SF bug);
     cross-type overlap warns
 """
 
@@ -402,9 +402,9 @@ def _page_polygon(r):
 
 
 def check_duplicate_boundaries(results):
-    """Two base regions selected via identical segment sets on the SAME
-    (source, page) = one region measured twice (a scope error, not a
-    spot-check). Cross-source identical ids are unrelated."""
+    """Identical segment sets or transformed image polygons on the SAME
+    (source, page) = one region measured twice. Cross-source selections
+    are unrelated."""
     errors = []
     base = [r for r in results if r["kind"] == "base"
             and r.get("status") != "unresolved"]
@@ -427,7 +427,7 @@ def check_duplicate_boundaries(results):
 def check_overlaps(results):
     """Counted instances must not overlap on the same (source, page).
 
-    Same (type, variant) overlap = hard fail (the v1 duplicate-Type-B bug
+    Same (type, variant) overlap withholds both (the v1 duplicate-Type-B bug
     that passed at 208.75 SF); cross-type overlap = warning (possible
     mirrored plans or a mislabeled bbox) reported for human review.
     """

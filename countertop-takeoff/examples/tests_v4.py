@@ -50,7 +50,7 @@ import os
 import shutil
 import subprocess
 import sys
-from test_support import sh, sha256, run_measure as shared_run_measure
+from test_support import build_fixtures, sha256, run_measure as shared_run_measure
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.dirname(HERE)
@@ -69,7 +69,6 @@ import spec_schema  # noqa: E402
 BUILD = os.path.join(SKILL, "build", "test")
 HOTEL_JOBS = os.path.join(BUILD, "hotel", "hotel.jobs.json")
 HOTEL_PDF = os.path.join(BUILD, "hotel", "hotel.pdf")
-HOTEL_GEO = os.path.join(BUILD, "hotel", "hotel.geometry.json")
 RESULTS = []
 
 
@@ -81,31 +80,6 @@ def check(name, ok, detail=""):
 
 def run_measure(spec, tag, extra=(), jobs_path=None):
     return shared_run_measure(spec, tag, extra, jobs_path, build=BUILD)
-
-
-def build_fixtures():
-    """messy + hotel + orig fixtures, geometry + canonical hotel spec."""
-    os.makedirs(BUILD, exist_ok=True)
-    sh(os.path.join(HERE, "make_fixture.py"), "--case", "messy",
-       "--out", os.path.join(BUILD, "messy.pdf"))
-    sh(os.path.join(HERE, "make_fixture.py"), "--out",
-       os.path.join(BUILD, "orig.pdf"))
-    sh(os.path.join(SKILL, "scripts", "extract_geometry.py"),
-       os.path.join(BUILD, "messy.pdf"), "--pages", "all",
-       "--out", os.path.join(BUILD, "messy.geometry.json"))
-    sh(os.path.join(SKILL, "scripts", "extract_geometry.py"),
-       os.path.join(BUILD, "orig.pdf"), "--pages", "all",
-       "--out", os.path.join(BUILD, "orig.geometry.json"))
-    hdir = os.path.join(BUILD, "hotel")
-    os.makedirs(hdir, exist_ok=True)
-    sh(os.path.join(HERE, "make_fixture.py"), "--case", "hotel",
-       "--out", HOTEL_PDF)
-    sh(os.path.join(SKILL, "scripts", "extract_geometry.py"), HOTEL_PDF,
-       "--pages", "all", "--out", HOTEL_GEO)
-    sh(os.path.join(HERE, "make_hotel_jobs.py"), "--pdf", HOTEL_PDF,
-       "--geometry", HOTEL_GEO, "--out", HOTEL_JOBS,
-       "--workdir", os.path.join(hdir, "evidence"))
-    print("fixtures built.")
 
 
 def messy_spec():
@@ -625,7 +599,7 @@ def intake_tests_v4():
 def main():
     shutil.rmtree(BUILD, ignore_errors=True)
     os.makedirs(BUILD, exist_ok=True)
-    build_fixtures()
+    build_fixtures(BUILD)
     mixed_resolved_tests()
     evidence_binding_tests()
     degradation_tests()
