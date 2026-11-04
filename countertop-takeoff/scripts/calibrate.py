@@ -156,6 +156,10 @@ def calibrate_entry(entry, page):
             raise CalibrationError(
                 f"span {i} ({text!r}): seg_ids must name the dimension-line"
                 " segments")
+        if len(set(ids)) != len(ids):
+            raise CalibrationError(
+                f"span {i} ({text!r}): repeated segment ids would count the"
+                " same dimension-line length more than once")
         missing = [j for j in ids if j not in segs_by_id]
         if missing:
             raise CalibrationError(

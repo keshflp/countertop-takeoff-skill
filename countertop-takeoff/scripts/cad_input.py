@@ -83,7 +83,7 @@ INSUNITS_PER_FT = {
     10: 1.0 / 3.0,              # yards (1 ft = 1/3 yd)
     13: 304_800.0,              # microns
     14: 3.048,                  # decimeters
-    20: 1200.0 / 3937.0,        # US survey feet
+    20: 0.3048 / (1200.0 / 3937.0),  # US survey feet per international foot
 }
 INSUNITS_NAMES = {1: "in", 2: "ft", 3: "mile", 4: "mm", 5: "cm", 6: "m",
                   7: "km", 8: "microinch", 9: "mil", 10: "yd",
@@ -147,6 +147,8 @@ def arc_segments(center, radius, a0, a1, segs, emit_meta, ccw=True):
     """Emit chords for an arc from a0 to a1 (radians). CCW arcs run a0->a1;
     CW arcs run a1->a0 (same chord ring, reversed direction)."""
     sweep = (a1 - a0) % (2.0 * math.pi) if ccw else -((a0 - a1) % (2.0 * math.pi))
+    if math.isclose(abs(a1 - a0), 2.0 * math.pi, rel_tol=0.0, abs_tol=1e-12):
+        sweep = 2.0 * math.pi if ccw else -2.0 * math.pi
     n = arc_chord_count(abs(sweep) if abs(sweep) > 1e-9 else 2.0 * math.pi)
     prev = None
     steps = max(2, n)

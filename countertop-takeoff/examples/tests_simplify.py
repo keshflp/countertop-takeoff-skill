@@ -6,14 +6,18 @@
 import json
 import io
 import hashlib
+import math
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from contextlib import redirect_stderr, redirect_stdout
+from types import SimpleNamespace
+from shapely.geometry import Polygon
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import calibrate
+import cad_input
 import estimate
 import image_measure
 import intake
@@ -23,6 +27,50 @@ from audit import Audit, audit_region_checks
 
 
 class SimplifyRegressions(unittest.TestCase):
+    def test_repeated_calibration_segments_withhold_locally(self):
+        page = {"words": [{"id": 0, "t": "10'"}, {"id": 1, "t": "20'"}],
+                "segments": [dict(id=i, x0=0, y0=i * 20, x1=length, y1=i * 20)
+                             for i, length in enumerate((100, 200))]}
+        for repeated in ((True, False), (True, True)):
+            with self.subTest(repeated=repeated):
+                entries = [{"page": 1, "viewport": viewport, "spans": [
+                    {"word_ids": [i], "seg_ids": [i, i] if duplicate else [i]}
+                    for i, duplicate in enumerate(repeated if viewport == "bad" else (False, False))]}
+                    for viewport in ("bad", "good")]
+                cals, errors = calibrate.build_calibrations(entries, {("plans", 1): page}, "plans")
+                self.assertEqual(set(cals), {("plans", 1, "good")})
+                self.assertEqual(cals[("plans", 1, "good")]["factor_pt_per_ft"], 10)
+                self.assertEqual(len(errors), 1)
+                self.assertIn("repeated segment ids", errors[0][1])
+
+    def test_survey_feet_preserve_physical_area(self):
+        name, factor, verified, warning = cad_input.resolve_units(
+            SimpleNamespace(header={"$INSUNITS": 20}), None)
+        self.assertEqual(name, "us_survey_ft")
+        self.assertTrue(verified)
+        self.assertIsNone(warning)
+        # A five-survey-foot square, independently converted through metres.
+        expected = (5 * (1200 / 3937) / .3048) ** 2
+        self.assertAlmostEqual(25 / factor ** 2, expected, places=9)
+        self.assertLess(abs(25 / factor ** 2 - 25), .001)
+
+    def test_cad_full_circles_and_wrapped_arcs(self):
+        for start, end, ccw, sweep in ((0, 2 * math.pi, True, 2 * math.pi),
+                                     (1, 1 - 2 * math.pi, False, -2 * math.pi),
+                                     (3 * math.pi / 2, math.pi / 2, True, math.pi),
+                                     (math.pi / 2, 0, False, -math.pi / 2)):
+            with self.subTest(start=start, end=end, ccw=ccw):
+                edges = []
+                cad_input.arc_segments((0, 0), 2, start, end, None,
+                                       lambda a, b: edges.append((a, b)), ccw=ccw)
+                self.assertTrue(all(math.dist(a, b) > 0 for a, b in edges))
+                area = sum(a[0] * b[1] - b[0] * a[1] for a, b in edges) / 2
+                self.assertLessEqual(abs(area - 2 * sweep) / abs(2 * sweep), cad_input.ARC_AREA_TOL)
+                if abs(sweep) == 2 * math.pi:
+                    ring = Polygon([a for a, b in edges])
+                    self.assertTrue(ring.is_valid)
+                    self.assertLessEqual(abs(ring.area - 4 * math.pi) / (4 * math.pi), cad_input.ARC_AREA_TOL)
+
     def test_recheck_a_then_b_withholds_locally(self):
         self._assert_multiple_rechecks_complete(("A", "B"))
 
