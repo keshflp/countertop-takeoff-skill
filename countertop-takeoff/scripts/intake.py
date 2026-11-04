@@ -43,7 +43,6 @@ Usage:
 """
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -51,14 +50,7 @@ import sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-
-def file_sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+from preflight_lib import file_sha256
 
 
 def pdf_page_count(path):

@@ -39,7 +39,6 @@ Usage:
 """
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -50,16 +49,9 @@ from decimal import Decimal, ROUND_HALF_UP
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import estimate as estimate_mod  # noqa: E402
+from preflight_lib import file_sha256 as sha256_file
 
 BLANK = estimate_mod.BLANK
-
-
-def sha256_file(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def cents(d):

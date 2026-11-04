@@ -59,6 +59,7 @@ import sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from preflight_lib import file_sha256
 
 ARC_AREA_TOL = 0.005      # max chord-approximation area error per curve (0.5%)
 ARC_MIN_SEGMENTS = 8      # never fewer than 8 chords per curve
@@ -92,14 +93,6 @@ DECLARED_PER_FT = {"in": 12.0, "ft": 1.0, "mm": 304.8, "cm": 30.48,
                    "m": 0.3048}
 UNSUPPORTED_OPS = {"HATCH", "DIMENSION", "LEADER", "MLINE", "3DSOLID",
                    "REGION", "BODY", "IMAGE", "WIPEOUT", "OLE2FRAME"}
-
-
-def file_sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def resolve_units(doc, declared):

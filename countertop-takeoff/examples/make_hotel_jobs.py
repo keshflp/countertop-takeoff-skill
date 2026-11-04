@@ -41,14 +41,8 @@ import pymupdf
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.dirname(HERE)
-
-
-def sha256_file(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+sys.path.insert(0, os.path.join(SKILL, "scripts"))
+from preflight_lib import file_sha256 as sha256_file
 
 
 def render_crop_sha(pdf, page_no, crop_bbox, zoom):
@@ -232,7 +226,6 @@ def build_image_routes(pdf, workdir):
     page, crop_bbox, render_zoom - the crop binds to source/page/transform)
     and renders its OVERLAY PROOF (mandatory for route acceptance).
     """
-    sys.path.insert(0, os.path.join(SKILL, "scripts"))
     import image_measure
 
     def placed( rect, pixmap_pt_w, pixmap_pt_h, zoom_img):

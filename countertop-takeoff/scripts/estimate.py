@@ -43,7 +43,6 @@ Usage:
 """
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -52,6 +51,7 @@ import textwrap
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from spec_schema import RATE_MATCH_KEYS
+from preflight_lib import file_sha256 as sha256_file
 
 BLANK = "__blank__"
 _CURRENCY_SYMBOLS = "$€£¥"
@@ -128,14 +128,6 @@ def rate_amount(r, what):
             f"ERROR: rates[{code}] {what} is negative ({d}) - prices cannot"
             " be negative; fix the profile")
     return d
-
-
-def sha256_file(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def D(v):
