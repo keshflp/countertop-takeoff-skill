@@ -1,13 +1,20 @@
-# Job spec — the evidence document (V3 schema, V4 semantics)
+# Job spec — authoritative evidence contract
 
 `measure.py` is driven by a JSON job spec the AGENT writes after reading
 the indexed pack. Every number in the deliverable is either computed from
 recorded geometry or quoted from recorded evidence (word boxes, or a
-crop-hash-verified bitmap transcription). V4 (P0.1/P0.2) binds every
-quantity to that evidence and derives ALL deliverable totals from ONE
+crop-hash-verified bitmap transcription). Bind every quantity to that
+evidence and derive ALL deliverable totals from ONE
 resolved model. V2 specs (`"schema": "countertop-takeoff/v2"`, single
 source) remain valid. Working examples: `examples/fixture.jobs.json` (v2),
 the output of `examples/make_hotel_jobs.py` (full v3).
+
+Only `countertop-takeoff/v2` and `countertop-takeoff/v3` tags are supported;
+V1 is rejected. V2's `source: {"pdf": path, "sha256": "64-hex digest"}`
+normalizes to one PDF source with ID `plans`. In `sources[]`, `path` accepts
+the legacy `pdf` alias; omitted kind infers PDF/CAD/image from the extension.
+Omitted source IDs on selections default to the first declared source.
+Geometry must carry the same source digest; source mismatches stop the job.
 
 ## Top level
 
@@ -25,12 +32,17 @@ the output of `examples/make_hotel_jobs.py` (full v3).
 | `assemblies` | v3 | one record per room-instance prototype |
 | `pieces` | v3 | construction records with runs + provenance |
 | `profile` | no | company profile path (`references/company-profile.md`) |
+| `review` | no | legacy inline field; independent receipts now use `RESULTS.receipt.json` without changing results |
+
+`policy.gross_area` may be omitted if the profile supplies `gross_net_policy`.
+Legacy V2 region `assembly`/`material` strings identify scope; without explicit
+assemblies/pieces the legacy SF aggregation cannot provide assembly-EA pricing.
 
 ## `schedule` — counts with evidence
 
-- `evidence.kind = "text"`: each type carries `row_text` + `word_boxes`
-  that must reference ACTUAL extracted words (fabricated quotes refuse to
-  multiply) AND whose numbers must correspond to the count (the count
+- `evidence.kind = "text"` (also the legacy default): each type carries `row_text` + `word_boxes`
+  that must reference ACTUAL extracted words (`row_text` is descriptive only)
+  AND whose numbers must correspond to the count (the count
   appears as a quoted number token, the boxes are pure integers summing
   to the count, or per-floor `rows[]` whose quoted texts carry each
   value). A quoted "3" never supports a count of 30.
@@ -51,7 +63,7 @@ the output of `examples/make_hotel_jobs.py` (full v3).
   are disclosed callouts (the quoted per-row counts stay authoritative).
 - `room_inventory`: `rooms[]` (deduped plan tags), `per_type_counts`
   (supplied summary), `count_resolutions` (explicit resolutions with
-  evidence). V4 derives the plan-derived counts FROM the `rooms[]` tag
+  evidence). Derive the plan-derived counts FROM the `rooms[]` tag
   records: a supplied `per_type_counts` contradicting the tags (an edited
   inventory) withholds the type exactly like a schedule-vs-tags mismatch
   (the 3→30 invention trap). NEVER default a missing count to 1.
@@ -59,10 +71,29 @@ the output of `examples/make_hotel_jobs.py` (full v3).
 ## `scope` — the completeness ledger input
 
 One entry per (source_id, page): `measured` (with `expected_regions`),
-`intentionally_skipped` (reason), or `superseded` (reason). Pages with no
+`intentionally_skipped`, `superseded`, or `unresolved` (each needs a nonempty
+reason). These are INPUT dispositions, not output ledger states. Pages with no
 disposition are recorded unresolved + callout — never silently dropped.
 Sheet-label conflicts, unlabeled measured pages, and drawing-index gaps
 are tolerant-identity CALLOUTS.
+
+## `calibrations[]` — selected dimension spans
+
+```json
+{"source_id": "plans", "page": 2, "viewport": "main",
+ "viewport_box": [0, 0, 612, 792], "spans": [
+   {"label": "10'-0\"", "word_ids": [29], "seg_ids": [14]},
+   {"label": "2'-6\"", "word_ids": [30], "seg_ids": [17], "real_ft": 2.5}]}
+```
+
+Word/segment IDs reference the extracted page; coordinates use DISPLAYED
+page points (rotation already applied). Code measures selected dimension
+segments and parses joined words (including split/fractional labels).
+`real_ft` is optional, positive/finite, and cannot contradict readable text;
+never supply a typed pt/ft factor. Need TWO+ independent spans: distinct
+segment selections AND parsed lengths. Median factors use <=2% pass, 2-5%
+warning, >5% local failure. Duplicate `(source_id, page, viewport)` keys
+refuse; viewport defaults to `main`, and boxes bound spans/seeds.
 
 ## `regions[]`
 
@@ -74,8 +105,13 @@ are tolerant-identity CALLOUTS.
 | `boundary.seg_ids` | selected boundary segments — must close into EXACTLY one cycle; dangling/branched nodes refuse with coordinates |
 | `seed` | `[x, y]` strictly interior, inside the viewport box |
 | `expected_sf_range` | sanity guard; a breach WITHHOLDS the quantity (blank + callout) instead of shipping it |
-| `cutouts` | inner loops; subtracted only under the net policy |
+| `cutouts` | `[{"label", "seg_ids"}]` closed inner loops fully inside the shell; subtracted only under the net policy |
 | `route: "image"` | image-route region: `image_measurement` points at an `image_measure.py` result; the crop hash is re-verified |
+
+Rechecks independently select a base region again (`of` references its ID),
+compare at the default 2% tolerance, and NEVER extend into totals. Boundary,
+range, overlap, or recheck failures withhold local quantities with callouts;
+they are not extra data stops. See [method](method.md) for closure/tolerances.
 
 ## `assemblies[]`
 
@@ -86,7 +122,7 @@ millwork|FFE|public_BOH, "finish_tag"?: "ST"|"PL"|"W"|..., "width_in"?,
 "pieces": [piece_id...], "sources": [{"source_id", "page"}]}`
 
 - Unknown dims stay `null` (blank), never 0.
-- V4 resolves each assembly's EA INDEPENDENTLY: `enumerated` EA = 1;
+- Resolve each assembly's EA INDEPENDENTLY: `enumerated` EA = 1;
   `room_type_count` EA = the schedule count MINUS the counts of included
   variants (an ADA room inside the parent count is subtracted from the
   standard EA, never added again); `room_type_count` + variant EA = that
@@ -121,7 +157,7 @@ schedule|detail|other, "note"?}}}`
 - Piece extensions (SF, edge LF, splash, cutouts) are multiplied by the
   SAME resolved assembly EA; the piece BoQ and the assembly BoQ are two
   views of the same resolved records — never summed with each other.
-- V5: pieces may declare LEGITIMATE reuse of one measured region across
+- Pieces may declare LEGITIMATE reuse of one measured region across
   assemblies via the optional spec key `piece_geometry_reuse:
   [{"region_id": ..., "pieces": [...], "reason": ...}]` (validated at
   load; an explicitly DECLARED reuse is a non-defect). An UNDECLARED
