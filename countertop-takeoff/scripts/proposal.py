@@ -179,13 +179,26 @@ def package_summaries(lines, exclusions, scope_incomplete=False):
 
 def build_proposal(results_path, estimate_path, profile_path, out_md=None,
                    out_json=None, out_pdf=None):
-    estimate_mod.reject_aliases(results_path, profile_path, out_md, out_json,
-                                out_pdf)
-    if out_json and os.path.abspath(out_json) == \
-            os.path.abspath(estimate_path):
-        raise SystemExit(
-            f"ERROR: out-json {out_json!r} aliases the estimate - the"
-            " proposal must never overwrite its own source")
+    from publish_safety import reject_aliases, register_artifacts, quarantine, manifest_path
+    protected = {"results": results_path, "estimate": estimate_path, "profile": profile_path,
+                 "artifact manifest": manifest_path(results_path),
+                 "audit receipt": str(results_path) + ".receipt.json"}
+    with open(estimate_path, encoding="utf-8") as f:
+        source_estimate = json.load(f)
+    protected["rate profile"] = source_estimate.get("profile_path")
+    reject_aliases(protected, {"out-md": out_md, "out-json": out_json, "out-pdf": out_pdf})
+    outputs = [out_md, out_json, out_pdf]
+    try:
+        payload = _build_proposal(results_path, estimate_path, profile_path,
+                                  out_md, out_json, out_pdf)
+        register_artifacts(results_path, outputs)
+        return payload
+    except (Exception, SystemExit):
+        quarantine(outputs)
+        raise
+
+
+def _build_proposal(results_path, estimate_path, profile_path, out_md, out_json, out_pdf):
     est = load_estimate(estimate_path, results_path)
     terms, company = load_terms(profile_path)
     lines = est["lines"]

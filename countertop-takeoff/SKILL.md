@@ -113,6 +113,11 @@ from ONE resolved quantity model: project total == assembly BoQ total ==
 piece BoQ total == report == CSV grand total (the run asserts this).
 
 ### Step 5b. Estimate (when the shop asks for pricing)
+Receipt storage is separate from results: `audit_pack.py --record-receipt`
+writes `results.json.receipt.json` and NEVER modifies results.json. Its
+`results_sha256` hashes the exact immutable results bytes. Pricing/proposal
+hashes therefore stay current even if the independent receipt is recorded
+later. Receipts travel beside the results; they are not embedded in pricing.
 With a rate profile (`examples/example.rate-profile.json` shows the v2
 pricing schema — rates[] pin `match.assembly_kind` plus dims/finish, uom
 EA, unit_price, includes[]): `uv run scripts/estimate.py

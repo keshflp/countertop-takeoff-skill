@@ -4,6 +4,14 @@ import json
 import os
 
 
+def refused(fn):
+    try:
+        fn()
+    except (SystemExit, Exception) as exc:
+        return "alias" in str(exc).lower()
+    return False
+
+
 def measurement_tests(t):
     from estimate import build_estimate
     from proposal import build_proposal
@@ -99,3 +107,101 @@ def measurement_tests(t):
 
 def run(t):
     measurement_tests(t)
+    publishing_tests(t)
+
+
+def publishing_tests(t):
+    import measure
+    import estimate
+    import proposal
+    import audit_pack
+    from publish_safety import dependent_paths, aliases
+    profile = os.path.join(t.BUILD, "v51.rates.json")
+    jobs = os.path.join(t.BUILD, "v51_safety.jobs.json")
+    rp = os.path.join(t.BUILD, "v51_safety.results.json")
+    ep = os.path.join(t.BUILD, "v51_safety.estimate.json")
+    json.dump(t.mixed_v5_spec(), open(jobs, "w", encoding="utf-8"))
+    before = t.sha256(jobs)
+    for name, output in (("same job file", jobs), ("case-insensitive job file", jobs.upper())):
+        t.check("P1.1 measure rejects " + name + " without mutating input",
+                refused(lambda: measure.main([jobs, "--json", output])) and t.sha256(jobs) == before)
+    t.check("P1.1 canonical identity resolves dot segments and case",
+            aliases(os.path.join(t.BUILD, "sub", "..", "FILE.JSON"),
+                    os.path.join(t.BUILD, "file.json")))
+    rc = measure.main([jobs, "--json", rp])
+    estimate.build_estimate(rp, profile, out_json=ep)
+    for output in ("out_md", "out_json", "out_pdf"):
+        t.check("P1.1 proposal " + output + " cannot alias estimate input (case-insensitive)",
+                refused(lambda: proposal.build_proposal(rp, ep, profile, **{output: ep.upper()})))
+    t.check("P1.1 estimate output/output case alias rejected",
+            refused(lambda: estimate.build_estimate(rp, profile, out_md=ep + ".MD",
+                                                     out_pdf=ep + ".md")))
+    t.check("P1.1 measure output/output case alias rejected",
+            refused(lambda: measure.main([jobs, "--json", rp, "--report", rp.upper()])))
+    t.check("P1.1 measure output cannot alias geometry input",
+            refused(lambda: measure.main([jobs, "--json", t.mixed_v5_spec()["geometry"].upper()])))
+    out = os.path.join(t.BUILD, "external-output", "proposal")
+    proposal.build_proposal(rp, ep, profile, out_json=out + ".json", out_md=out + ".md",
+                            out_pdf=out + ".pdf")
+    payload = json.load(open(rp, encoding="utf-8"))
+    original_hash = t.sha256(rp)
+    audit_pack.record_receipt(payload, rp, "synthetic-reviewer", "approved", "probe", "pack")
+    receipt = json.load(open(rp + ".receipt.json", encoding="utf-8"))
+    t.check("P1.2 receipt after pricing leaves results/proposal hashes current",
+            t.sha256(rp) == original_hash == receipt["results_sha256"]
+            and proposal.load_estimate(ep, rp)["results_sha256"] == original_hash)
+    empty = os.path.join(t.BUILD, "v51_empty.results.json")
+    json.dump({}, open(empty, "w", encoding="utf-8"))
+    t.check("P1.2 empty results payload refused a receipt",
+            audit_pack.record_receipt({}, empty, "test", "approved", "", "pack") == 2
+            and not os.path.exists(empty + ".receipt.json"))
+    bad = json.load(open(jobs, encoding="utf-8"))
+    bad["source"]["sha256"] = "0" * 64
+    json.dump(bad, open(jobs, "w", encoding="utf-8"))
+    try:
+        measure.main([jobs, "--json", rp])
+    except t.TakeoffError:
+        pass
+    t.check("P1.1 stopped integrity rerun quarantines all proposal formats + receipt",
+            all(not os.path.exists(out + ext) for ext in (".json", ".md", ".pdf"))
+            and not os.path.exists(rp + ".receipt.json")
+            and json.load(open(rp, encoding="utf-8"))["run_status"] == "stopped")
+    json.dump(t.mixed_v5_spec(), open(jobs, "w", encoding="utf-8"))
+    bad_profile = os.path.join(t.BUILD, "v51_bad.rates.json")
+    bad = copy.deepcopy(t.HOTEL_ALLMATCH_PROFILE)
+    bad["rates"][0]["unit_price"] = "bad-price"
+    json.dump(bad, open(bad_profile, "w", encoding="utf-8"))
+    measure.main([jobs, "--json", rp])
+    estimate.build_estimate(rp, profile, out_json=ep)
+    proposal.build_proposal(rp, ep, profile, out_json=out + ".json")
+    try:
+        measure.main([jobs, "--json", rp, "--estimate-profile", bad_profile,
+                      "--estimate-json", ep])
+    except t.TakeoffError:
+        pass
+    diag = json.load(open(rp, encoding="utf-8"))
+    t.check("P1.1 actual pricing SystemExit cleans fresh exports and prior proposals",
+            diag["run_status"] == "stopped" and "bad-price" in diag["stopped_reason"]
+            and not os.path.exists(ep) and not os.path.exists(out + ".json"))
+    original = measure.run_pipeline
+    for name, error in (("SystemExit", SystemExit("malformed pricing")),
+                        ("unexpected exception", RuntimeError("synthetic crash"))):
+        # Recreate fresh deliverables, then exercise the actual main cleanup boundary.
+        measure.main([jobs, "--json", rp])
+        estimate.build_estimate(rp, profile, out_json=ep)
+        proposal.build_proposal(rp, ep, profile, out_json=out + ".json")
+        def fail(args):
+            raise error
+        measure.run_pipeline = fail
+        try:
+            try:
+                measure.main([jobs, "--json", rp])
+            except t.TakeoffError:
+                pass
+        finally:
+            measure.run_pipeline = original
+        diag = json.load(open(rp, encoding="utf-8"))
+        t.check("P1.1 " + name + " writes stopped JSON and quarantines dependent proposals",
+                diag["run_status"] == "stopped" and str(error) in diag["stopped_reason"]
+                and not os.path.exists(out + ".json") and not os.path.exists(ep)
+                and any(p.endswith("proposal.json") for p in dependent_paths(rp)))

@@ -551,24 +551,28 @@ def reject_aliases(results_path, profile_path, out_md, out_json, out_pdf):
     """P0.1: an estimate output may never alias the evidence it reads -
     the `--json build/results.json --estimate-profile X` combo used to
     make the estimate overwrite its own results.json."""
-    protected = {"results": os.path.abspath(results_path),
-                 "rate profile": os.path.abspath(profile_path)}
-    for label, p in (("out-md", out_md), ("out-json", out_json),
-                     ("out-pdf", out_pdf)):
-        if not p:
-            continue
-        for what, q in protected.items():
-            if os.path.abspath(p) == q:
-                raise SystemExit(
-                    f"ERROR: {label} {p!r} aliases the {what} - the"
-                    " estimate must never overwrite its own evidence; pass"
-                    " distinct output paths (measure.py --estimate-* flags"
-                    " de-alias automatically)")
+    from publish_safety import reject_aliases as reject, manifest_path
+    reject({"results": results_path, "rate profile": profile_path,
+            "artifact manifest": manifest_path(results_path),
+            "audit receipt": str(results_path) + ".receipt.json"},
+           {"out-md": out_md, "out-json": out_json, "out-pdf": out_pdf})
 
 
 def build_estimate(results_path, profile_path, out_md=None, out_json=None,
                    out_pdf=None):
     reject_aliases(results_path, profile_path, out_md, out_json, out_pdf)
+    from publish_safety import register_artifacts, quarantine
+    outputs = [out_md, out_json, out_pdf]
+    try:
+        payload = _build_estimate(results_path, profile_path, out_md, out_json, out_pdf)
+        register_artifacts(results_path, outputs)
+        return payload
+    except (Exception, SystemExit):
+        quarantine(outputs)
+        raise
+
+
+def _build_estimate(results_path, profile_path, out_md, out_json, out_pdf):
     results = json.load(open(results_path, encoding="utf-8"))
     validate_results_payload(results, results_path)
     profile, rates, currency = load_profile(profile_path)

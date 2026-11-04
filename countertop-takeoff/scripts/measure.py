@@ -217,18 +217,57 @@ def estimate_output_paths(args):
     else:
         base = args.report or args.json_path or "build/estimate"
         stem = os.path.splitext(base)[0].replace("report", "estimate")
-    taken = {os.path.normcase(os.path.abspath(p)) for p in
+    from publish_safety import identity
+    taken = {identity(p) for p in
              (args.report, args.json_path, args.csv_path, args.piece_csv,
               args.assembly_csv) if p}
     outs = {"md": stem + ".md", "json": stem + ".json",
             "pdf": stem + ".pdf"}
-    if any(os.path.normcase(os.path.abspath(p)) in taken
+    if any(identity(p) in taken
            for p in outs.values()):
         d = os.path.dirname(args.json_path or args.report or "build")
         stem = os.path.join(d or ".", "estimate")
         outs = {"md": stem + ".md", "json": stem + ".json",
                 "pdf": stem + ".pdf"}
-    return outs
+    return {ext: getattr(args, "estimate_" + ext, None) or path
+            for ext, path in outs.items()}
+
+
+def validate_output_paths(args):
+    """Preflight BEFORE any write/cleanup, including malformed job inputs."""
+    from publish_safety import reject_aliases, manifest_path
+    inputs = {"job spec": args.jobs, "estimate profile": args.estimate_profile}
+    base = os.path.dirname(os.path.abspath(args.jobs))
+    try:
+        raw = load_json(args.jobs)
+    except (OSError, ValueError):
+        raw = {}
+
+    def collect(value, key=""):
+        if isinstance(value, dict):
+            for k, v in value.items():
+                collect(v, "geometry" if key == "geometry" else k)
+        elif isinstance(value, list):
+            for v in value:
+                collect(v, key)
+        elif isinstance(value, str) and key in {
+                "geometry", "pdf", "path", "profile", "company_profile", "intake_manifest",
+                "image_measurement", "crop", "crop_image"}:
+            inputs[f"input {len(inputs)} ({key})"] = resolve_path(value, base)
+    collect(raw)
+    outputs = {k: getattr(args, k) for k in
+               ("json_path", "report", "csv_path", "piece_csv", "assembly_csv")}
+    if args.json_path:
+        outputs["artifact manifest"] = manifest_path(args.json_path)
+    if args.estimate_profile:
+        outputs.update({"estimate " + k: v for k, v in estimate_output_paths(args).items()})
+        if not args.json_path:
+            raise TakeoffError("--estimate-profile requires --json results.json")
+    try:
+        reject_aliases(inputs, outputs)
+    except SystemExit as exc:
+        raise TakeoffError(str(exc)) from exc
+    args._protected_inputs = list(inputs.values())
 
 
 def stop_diagnostic_payload(exc_text):
@@ -491,6 +530,10 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
         report_out.write_assembly_csv(args.assembly_csv, assembly_rows)
         print(f"wrote {args.assembly_csv} (assembly BoQ:"
               f" {len(assembly_rows)} row(s))")
+    if args.json_path:
+        from publish_safety import register_artifacts
+        register_artifacts(args.json_path, [args.report, args.csv_path,
+                                            args.piece_csv, args.assembly_csv])
     if args.estimate_profile:
         # P1.1: assembly-EA estimate from the SAME resolved records; P0.1:
         # explicit, de-aliased output paths
@@ -540,54 +583,47 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    t0 = time.time()
+    validate_output_paths(args)
 
-    def quarantine_exports(write_stopped=False, exc_text=""):
+    def quarantine_exports(exc_text=""):
         # ANY stop must not leave an OLDER artifact looking current (P0.1:
         # this covers results.json, the report, the estimates and the
         # receipts-bearing files - not just the CSVs). An early stop also
         # writes a CURRENT stopped diagnostic over the results path.
         when = report_out.runtime_versions()["generated_utc"]
+        from publish_safety import dependent_paths, aliases
+        # Publish the current stopped diagnostic before touching dependents.
+        if args.json_path:
+            if os.path.exists(args.json_path):
+                report_out.quarantine_stale_export(args.json_path, when)
+            report_out.write_json(args.json_path, stop_diagnostic_payload(exc_text))
         outs = estimate_output_paths(args) if args.estimate_profile else {}
         paths = [args.csv_path, getattr(args, "piece_csv", None),
                  getattr(args, "assembly_csv", None), args.report,
-                 args.json_path, outs.get("md"), outs.get("json"),
+                 outs.get("md"), outs.get("json"),
                  outs.get("pdf")]
+        if args.json_path:
+            paths.extend(dependent_paths(args.json_path))
         quarantined = []
         for path in paths:
             if path and os.path.exists(path):
-                if os.path.getmtime(path) >= t0:
-                    continue  # written by THIS run - it IS the current truth
+                if any(p and aliases(path, p) for p in
+                       [args.json_path, *args._protected_inputs]):
+                    continue
                 stale = report_out.quarantine_stale_export(path, when)
                 if stale:
                     quarantined.append(stale)
                     print(f"quarantined stale artifact: {stale}",
                           file=sys.stderr)
-        if write_stopped and args.json_path \
-                and not os.path.exists(args.json_path):
-            # the stale file (if any) was renamed away above; a fresh run
-            # that already wrote its own stopped results keeps them
-            report_out.write_json(args.json_path,
-                                  stop_diagnostic_payload(exc_text))
-            print(f"wrote CURRENT stopped diagnostic: {args.json_path}",
-                  file=sys.stderr)
         return quarantined
 
     try:
         return run_pipeline(args)
     except TakeoffError as exc:
-        # A diagnostic written by THIS run (the normal stopped path) is
-        # current; anything older is superseded and must be replaced.
-        stale_json = (args.json_path and os.path.exists(args.json_path)
-                      and os.path.getmtime(args.json_path) < t0)
-        quarantine_exports(write_stopped=(stale_json
-                                          or not (args.json_path and
-                                                  os.path.exists(
-                                                      args.json_path))),
-                           exc_text=exc)
+        quarantine_exports(exc_text=exc)
         raise
-    except Exception as exc:  # noqa: BLE001 - quarantine survives ANY crash
-        quarantine_exports()
+    except (Exception, SystemExit) as exc:  # pricing refusals must clean up too
+        quarantine_exports(exc_text=exc)
         import traceback
         traceback.print_exc()
         raise TakeoffError(

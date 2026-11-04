@@ -329,7 +329,7 @@ def _marker_png(text):
 
 
 def record_receipt(results, results_path, reviewer, verdict, notes, pack_dir):
-    """Write the independent-audit receipt into the results JSON.
+    """Write an independent receipt beside IMMUTABLE results JSON.
 
     V5 (P1.2) guard extensions:
       - a QUARANTINED/SUPERSEDED results file (`*.stale-*`) never receives
@@ -348,15 +348,20 @@ def record_receipt(results, results_path, reviewer, verdict, notes, pack_dir):
     # checks the CURRENT status names (complete / complete_with_callouts /
     # stopped) and the obsolete V2 name `failed` for old files.
     status = results.get("run_status") or results.get("status")
-    if status in ("stopped", "failed"):
-        print(f"REFUSED: this run is {status.upper()} - required checks"
-              " failed/were stopped; fix the job spec, re-measure, then"
+    if status not in ("complete", "complete_with_callouts"):
+        print(f"REFUSED: this run is {status!r} - only completed results"
+              " can receive a receipt; fix the job spec, re-measure, then"
               " audit. Nothing recorded.")
         return 2
-    stem = base[:-5] if base.endswith(".json") else base
+    with open(results_path, encoding="utf-8") as f:
+        actual = json.load(f)
+    reviewed = {k: v for k, v in results.items() if k != "_results_path"}
+    if actual != reviewed:
+        print("REFUSED: supplied review payload differs from the results file")
+        return 2
     directory = os.path.dirname(os.path.abspath(results_path))
     superseded = sorted(f for f in os.listdir(directory)
-                        if f.startswith(stem + ".stale-"))
+                        if f.startswith(base + ".stale-"))
     if superseded:
         print("WARNING: superseded earlier results file(s) detected next to"
               f" the current file: {superseded} - the receipt names them so"
@@ -375,13 +380,16 @@ def record_receipt(results, results_path, reviewer, verdict, notes, pack_dir):
         "superseded_results_files": superseded,
         "recorded_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
-    results["review"] = receipt
-    results["review_status"] = receipt["status"]
-    if verdict == "approved":
-        results["review_status"] = "independent_audit_approved"
-    with open(results_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=1)
-    print(f"recorded receipt in {results_path}: reviewer={reviewer!r} "
+    receipt["review_status"] = ("independent_audit_approved" if verdict == "approved"
+                                else "independent_audit_recorded")
+    receipt_path = results_path + ".receipt.json"
+    from publish_safety import reject_aliases
+    reject_aliases({"results": results_path}, {"audit receipt": receipt_path})
+    with open(receipt_path, "w", encoding="utf-8") as f:
+        json.dump(receipt, f, indent=1)
+    from publish_safety import register_artifacts
+    register_artifacts(results_path, [receipt_path])
+    print(f"recorded receipt in {receipt_path}: reviewer={reviewer!r} "
           f"verdict={verdict!r}")
     return 0
 
@@ -393,7 +401,7 @@ def main():
                     help="output directory for overlays")
     ap.add_argument("--zoom", type=float, default=2.0)
     ap.add_argument("--record-receipt", action="store_true",
-                    help="record the audit receipt into the results JSON")
+                    help="record the audit receipt in RESULTS.receipt.json (results unchanged)")
     ap.add_argument("--reviewer", help='e.g. "fresh-agent: <session>" or'
                     ' "human: <name>"')
     ap.add_argument("--verdict", choices=["approved", "rejected"])

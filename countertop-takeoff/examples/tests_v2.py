@@ -407,10 +407,11 @@ def positives(pdfs, geo):
     payload = json.load(open(res_path, encoding="utf-8"))
     audit_pack.record_receipt(payload, res_path, "fresh-agent: test",
                               "approved", "matrix run", "pack")
-    after = json.load(open(res_path, encoding="utf-8"))
-    check("receipt: recorded + review status updates",
+    after = json.load(open(res_path + ".receipt.json", encoding="utf-8"))
+    check("receipt: sidecar recorded + review status (5.1 immutable results)",
           after["review_status"] == "independent_audit_approved"
-          and after["review"]["reviewer"] == "fresh-agent: test")
+          and after["reviewer"] == "fresh-agent: test"
+          and json.load(open(res_path, encoding="utf-8")) == payload)
 
 
 def profile_tests(pdfs, geo):

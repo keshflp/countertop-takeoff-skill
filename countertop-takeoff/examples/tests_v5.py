@@ -760,17 +760,17 @@ def audit_pack_tests():
     good = os.path.join(BUILD, "v5_receipt.results.json")
     json.dump({"run_status": "complete"}, open(good, "w",
                                                encoding="utf-8"))
-    stale_copy = good.replace(".json", ".stale-20990101T000000.json")
+    stale_copy = good + ".stale-20990101T000000"
     shutil.copy(good, stale_copy)
     payload = json.load(open(good, encoding="utf-8"))
     rc = audit_pack.record_receipt(payload, good, "fresh-agent: v5",
                                    "approved", "n", "pack")
-    after = json.load(open(good, encoding="utf-8"))
+    after = json.load(open(good + ".receipt.json", encoding="utf-8"))
     check("audit-pack: the receipt DETECTS superseded sibling results files"
           " and names them",
-          rc == 0 and after["review"]["superseded_results_files"]
+          rc == 0 and after["superseded_results_files"]
           == [os.path.basename(stale_copy)]
-          and "results_sha256" in after["review"], str(rc))
+          and "results_sha256" in after, str(rc))
     rc2 = audit_pack.record_receipt({}, stale_copy, "fresh-agent: v5",
                                     "approved", "n", "pack")
     check("audit-pack: a quarantined (*.stale-*) results file REFUSES a"

@@ -14,4 +14,18 @@ cell-box preview. It is not a recognition benchmark.
   old nonblank-grand-total assertion was incorrect. The replacement checks
   every priced line and the correctly blank grand total; pricing survives.
 
-No V2, V3 or V4 checks are superseded.
+- V2 receipt check now reads `RESULTS.receipt.json` and asserts results bytes
+  remain unchanged. V5 sibling detection now creates the real quarantine
+  name `results.json.stale-*` and reads the sidecar. These replace inline
+  receipt mutation and the incorrectly named synthetic stale sibling.
+
+No V3 or V4 checks are superseded.
+
+## Receipt/provenance decision
+
+Receipts are separate from results. They hash the exact results file; recording
+one never modifies the results that pricing/proposals hash. They are delivered
+beside results, never embedded into estimates. The normal operator sequence is
+intake -> inventory/evidence -> selections/spec -> measurement -> audit/receipt
+-> pricing/proposal -> delivery. No audit approval gate is added; an unavailable
+independent audit remains a disclosed condition.

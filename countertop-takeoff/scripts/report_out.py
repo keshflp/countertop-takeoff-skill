@@ -589,6 +589,10 @@ def quarantine_stale_export(path, when_utc):
     if os.path.exists(path):
         stamp = when_utc.replace(":", "").replace("-", "")
         dest = f"{path}.stale-{stamp}"
+        n = 1
+        while os.path.exists(dest):
+            dest = f"{path}.stale-{stamp}-{n}"
+            n += 1
         os.replace(path, dest)
         return dest
     return None
