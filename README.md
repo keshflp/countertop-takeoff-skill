@@ -4,8 +4,7 @@ Version **5.1.0**. An agent skill for countertop takeoffs from architectural
 PDFs, DXF exports, and rasters: square feet, edge feet, splash, and cutouts.
 Built for subcontractors bidding apartments and hotels; harness-agnostic.
 
-The agent inventories inputs, reads schedules with evidence, reconciles room
-tags, calibrates each viewport, measures, audits, and delivers once at the end.
+The [workflow](countertop-takeoff/SKILL.md) delivers once at the end.
 Unresolvable quantities stay **BLANK**, never zero, behind named CALLOUTS.
 Run status: `complete`, `complete_with_callouts`, or `stopped` (exit 0/0/2).
 
@@ -59,24 +58,18 @@ A cloud workspace cannot see local files or profiles automatically.
 
 Supply local paths, chat attachments, or Drive/OneDrive files fetched by your
 agent. The scripts import local files; the agent fetches cloud binaries first.
-Intake records requested/resolved files, sizes, hashes, page counts, and the
-expected-count verdict in one job directory. Unavailable inputs get callouts.
+Intake records files, hashes, page counts and expected-count verdict in one
+job directory; unavailable inputs get callouts. See the [method](countertop-takeoff/references/method.md)
+for measurement routes and evidence requirements.
 
-Routes, in order: selected vector PDF boundaries; supplied DXF with verified
-units (convert DWG first); calibrated image measurement for legible rasters.
-Schedule counts need word-box or crop/cell evidence plus plan-tag reconciliation.
+Completed-run [deliverables](countertop-takeoff/references/output-format.md) include
+reports, CSVs, results JSON, overlays and an audit receipt (or disclosed
+unavailability). Optional pricing/proposals use a [rate profile](countertop-takeoff/examples/example.rate-profile.json).
 
-Delivery includes a report, `takeoff.csv`, `pieces.csv`, `assemblies.csv`,
-`results.json`, overlay PNGs, and an independent-audit receipt (or disclosed
-unavailability). A rate profile adds `estimate.md/.json/.pdf`; a quote request
-adds proposal-lite documents. See [output formats](countertop-takeoff/references/output-format.md)
-and the [rate-profile example](countertop-takeoff/examples/example.rate-profile.json).
-
-The run asserts, for jobs that declare assemblies, that both BoQs reconcile over the
-same fully resolved subset; project/report/CSV show the full known piece
-subtotal, including valid parts of incomplete assemblies. The hotel fixture
-has **123.00 SF** in the resolved subset and **146.98 SF** full known subtotal.
-Omissions keep completeness false and the pricing grand total blank.
+The run asserts, for jobs that declare assemblies, that both BoQs reconcile over
+the same resolved subset (hotel: **123.00 SF**); project/report/CSV retain the
+full known piece subtotal (**146.98 SF**). Omissions keep completeness false
+and the pricing grand total blank.
 
 ## Updating
 

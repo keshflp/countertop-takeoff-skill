@@ -6,9 +6,8 @@ measurable linework. Follow the workflow order in [SKILL.md](../SKILL.md).
 
 ## 1. Intake and preflight
 
-Collect every requested input into one job directory with an intake manifest:
-requested/resolved files, byte sizes, SHA-256, page counts, expected-count
-verdict, and unavailable inputs. Cloud downloads happen through the agent.
+Collect inputs into one job directory/manifest ([workflow](../SKILL.md));
+cloud downloads happen through the agent.
 
 `index_pdf.py` inventories each PDF's sheet identity, rotation/crop metadata,
 vector operations/bounds, image coverage, dimension labels, and type tags.
@@ -109,13 +108,11 @@ retaining pixels fails evidence validation. CAD/image bytes are re-hashed.
 
 ## 4. Resolved quantities and audit
 
-One resolved quantity model feeds every deliverable. For jobs declaring
-assemblies, the run ASSERTS the PIECE and ASSEMBLY BoQs agree over the SAME
-fully resolved assembly subset; project/report/CSV equal the full known piece
-subtotal, including valid parts of incomplete assemblies. Hotel: **123.00 SF**
-resolved subset vs **146.98 SF** full known subtotal. Carry completeness flags
-and omission reasons; neither subtotal proves complete scope. Never sum BoQs.
-Package exclusions apply once per assembly and are reported separately.
+The run ASSERTS the PIECE and ASSEMBLY BoQs agree over the SAME fully resolved
+assembly subset; project/report/CSV retain the full known piece subtotal.
+Hotel: **123.00 SF** resolved subset vs **146.98 SF** full known subtotal;
+neither proves completeness. [Output contracts](output-format.md) specify
+completeness, exclusions and pricing; never sum BoQs.
 
 Coverage ledger OUTPUT states are `measured`, `included_scope`,
 `package_excluded`, `superseded`, `unresolved`: every inventoried room, type,
@@ -133,7 +130,5 @@ Malformed specs refuse separately before measurement. Stopped runs quarantine
 exports; see [output formats](output-format.md) for paths, diagnostics, receipts,
 and downstream EA pricing/proposal rules. No fourth data stop or approval gate.
 
-Measure -> audit pack/independent receipt -> requested pricing/proposal ->
-delivery. If independent audit is unavailable, disclose it and continue.
 Use the [first-run checklist](first-run-checklist.md) and [synthetic walkthrough](../examples/run_example.md);
 fixtures verify known geometry, not autonomous recognition on unseen plans.

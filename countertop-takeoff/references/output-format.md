@@ -60,13 +60,11 @@ Jobs WITH assemblies derive every row from the ONE resolved model:
 
 ## 2b. Stale-output handling + stopped diagnostics
 
-On ANY stop (the three data stops, spec refusals, unexpected crashes),
-measure.py quarantines EVERY superseded artifact — CSVs, the report,
-results.json, and estimate/proposal outputs — as `<name>.stale-<utc>`, and
-writes a CURRENT stopped diagnostic results JSON
-(`run_status: "stopped"`, `stopped_early: true`, the stop reason) over the
-results path before quarantining dependent outputs. No CSV exports are written
-for stopped runs; old artifacts cannot look current. Receipt rules are below.
+On stops (data stops, spec refusals, crashes), measure.py quarantines superseded
+CSVs, reports, results and estimate/proposal outputs as `<name>.stale-<utc>`.
+Early cleanup writes current stopped JSON ONLY when `--json` is supplied,
+before quarantining dependents: `run_status: "stopped"`, `stopped_early: true`,
+and the reason. It does not write a new report. No stopped-run CSVs are written.
 
 Input/output and output/output aliases are rejected before any write or
 cleanup, using case-insensitive canonical Windows identity (including links).
@@ -78,63 +76,34 @@ stopped-diagnostic/quarantine path. Invalid alias requests leave inputs intact.
 
 ## 3. Results JSON (`--json`) — the evidence package
 
-```json
-{
-  "schema": "countertop-takeoff/v3 results",
-  "source": {"pdf": "...", "sha256": "..."},
-  "mode": "repeated_types", "policy": {...}, "declarations": [...],
-  "runtime_versions": {"python": "...", "pymupdf": "2.1",
-                       "shapely": "2.2.0", "platform": "...", ...},
-  "settings": {"snap_pt": 0.05, "recheck_tolerance_pct": 2.0},
-  "scope": {...}, "schedule": {...}, "profile": {...},
-  "calibrations": {"<page>:<viewport>": {"spans": [...],
-                  "factor_pt_per_ft": 18.0, "spread_pct": 0.0,
-                  "status": "pass"}},
-  "regions": [{"region_id": "A:kitchen", "kind": "base", "type": "A",
-               "page": 2, "viewport": "main", "sheet": "A-101",
-               "boundary_seg_ids": [4,5,6,7,8,9], "seed": [160, 390],
-               "polygon": [[x, y], ...], "cutout_polygons": [...],
-               "area_sf": 31.25, "gross_area_sf": 31.25,
-               "factor_pt_per_ft": 18.0, "gross_area_policy": "gross",
-               "curved_boundary": false, "expected_sf_range": [25, 40],
-               "expected_range_ok": true, "assembly": null,
-               "material_canonical": null}],
-  "types": [{"room_type": "A", "schedule_count": 3, "std_units": 3,
-             "sf_per_unit": 38.25, "extended_sf": 114.75, "rows": [...]}],
-  "totals": {"project_sf": 168.75, "unit_count": 5,
-             "known_subtotal_sf": 168.75, "project_sf_complete": true,
-             "unknown_contribution_count": 0, "assembly_ea": null},
-  "audit": [{"check": "...", "status": "pass|warn|fail", "detail": "..."}],
-  "run_status": "complete | complete_with_callouts | stopped",
-  "callouts": [{"scope", "reason", "blank_fields", "source"}],
-  "coverage_ledger": [{"item", "kind", "state":
-                       "measured|included_scope|package_excluded|superseded|unresolved"}],
-  "assembly_boq": [...],
-  "piece_boq": [...],
-  "scope_incomplete": [{"item", "kind", "state": "unresolved", "detail"}],
-  "unavailable_inputs": [{"item", "detail", "source"?}],
-  "review_status": "independent_audit_pending",
-  "geometry_page_classes": {"1": "text_only", "2": "vector"}
-}
-```
+Schema: `countertop-takeoff/v3 results`. Input-derived selections follow the
+[job-spec contract](job-spec-v3.md); output fields include:
 
-After an independent audit, `audit_pack.py --record-receipt` writes
-`results.json.receipt.json` without modifying results.json:
+| Fields | Contents |
+|---|---|
+| `source`, `mode`, `policy`, `declarations`, `scope`, `schedule`, `profile` | Source `pdf`/`sha256` and resolved job context |
+| `runtime_versions`, `settings` | Python/PyMuPDF/Shapely/platform; `snap_pt` (0.05), `recheck_tolerance_pct` (2.0) |
+| `calibrations` | Keyed `<page>:<viewport>`; `spans`, `factor_pt_per_ft`, `spread_pct`, `status` |
+| `regions[]` | IDs/kind/type, page/sheet/viewport, `boundary_seg_ids`, seed, `polygon`, `cutout_polygons`; `area_sf`, `gross_area_sf`, `factor_pt_per_ft`, `gross_area_policy`, `curved_boundary`, `expected_sf_range`, `expected_range_ok`, `assembly`, `material_canonical` |
+| `types[]` | `room_type`, `schedule_count`, `std_units`, `sf_per_unit`, `extended_sf`, `rows` |
+| `totals` | `project_sf`, `unit_count`, `known_subtotal_sf`, `project_sf_complete`, `unknown_contribution_count`, `assembly_ea` |
+| `audit[]`, `run_status` | `check`/`status` (`pass|warn|fail`)/`detail`; run statuses from §1 |
+| `callouts[]` | `scope`, `reason`, `blank_fields`, `source` |
+| `coverage_ledger[]`, `scope_incomplete[]` | `item`, `kind`, `state` (§1); unresolved entries also carry `detail` |
+| `assembly_boq[]`, `piece_boq[]` | Resolved quantities (§1/§2) |
+| `unavailable_inputs[]` | `item`, `detail`, optional `source` |
+| `review_status`, `geometry_page_classes` | Initially `independent_audit_pending`; page-to-class mapping |
 
-```json
-{"status": "independent_audit_recorded", "reviewer": "...",
-           "verdict": "approved|rejected", "notes": "...",
-           "pack_dir": "...", "results_sha256": "...",
-           "superseded_results_files": [...],
- "recorded_utc": "...", "review_status": "independent_audit_approved"}
-```
+`audit_pack.py --record-receipt` writes `results.json.receipt.json` without
+modifying results: `status: independent_audit_recorded`, `reviewer`, `verdict`
+(`approved|rejected`), `notes`, `pack_dir`, `results_sha256`,
+`superseded_results_files`, `recorded_utc`, and `review_status`
+(e.g. `independent_audit_approved`).
 
-The receipt hashes the exact immutable results bytes. Recording it cannot
-stale pricing/proposal hashes. Empty `{}`, noncompleted or quarantined results
-are refused. Superseded siblings match the real `results.json.stale-*` names.
-Normal sequence: intake -> inventory/evidence -> selections/spec -> measurement
--> audit/receipt -> pricing/proposal -> delivery. Audit unavailability is
-disclosed, with no gate; the separate receipt can be recorded later safely.
+Receipts hash immutable results bytes without staling pricing/proposals.
+Empty `{}`, noncompleted or quarantined results refuse; superseded siblings
+match `results.json.stale-*`. Follow [workflow](../SKILL.md); audit unavailability
+is disclosed without a gate, and the receipt can safely be recorded later.
 
 ## 4. Audit pack (`audit_pack.py --pack DIR`)
 
@@ -155,7 +124,7 @@ disclosed, with no gate; the separate receipt can be recorded later safely.
 | code | meaning |
 |---|---|
 | 0 | `complete` (deliverable) or `complete_with_callouts` (deliver with the CALLOUTS list: blank fields named, never zeros); CSVs written |
-| 2 | `stopped` — one of the three catastrophic cases: no valid calibration anywhere (verified-units CAD OR a valid image-route calibration qualifies), no schedule and no repeatable pattern, or source integrity mismatch (ALL source kinds are re-hashed before measuring); also spec malformation. Diagnostics (report + results JSON) are still written; no exports; stale exports quarantined — even when the pipeline itself crashes. A `stopped` run can never receive an approved audit receipt |
+| 2 | `stopped` — the [three data stops](method.md#4-resolved-quantities-and-audit), spec refusal, or crash. Stale artifacts are quarantined; early cleanup writes stopped JSON only with `--json`, without a new report (§2b). No exports or approved receipt |
 
 ## 5b. Estimate (`estimate.py` / `measure.py --estimate-profile`)
 

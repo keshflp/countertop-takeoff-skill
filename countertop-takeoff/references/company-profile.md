@@ -1,8 +1,7 @@
 # Company profile
 
-Job specs reference a shop's identity and conventions. Examples:
-`examples/example.profile.json` (identity, no pricing) and
-`examples/example.rate-profile.json` (identity + assembly-EA rates).
+Examples: `examples/example.profile.json` (shop identity/conventions),
+`examples/example.rate-profile.json` (also assembly-EA rates).
 
 ## Identity schema (`"profile": "<path>"` in a job spec)
 
@@ -34,8 +33,6 @@ Validation rules:
 | `currency` | profile-level currency (e.g. `"USD"`); every rate's currency must agree — mixed currencies refuse |
 | `rates[]` | one entry per company rate; each prices an ASSEMBLY as EA × `unit_price` |
 
-Each rate:
-
 Unknown `match` keys refuse in both profile validators (`width_inches` and
 `variant` are unsupported). Use only the matchers listed below. Exact rates
 travel as `unit_price_exact` decimal strings through arithmetic and every
@@ -51,12 +48,10 @@ document; the legacy numeric `unit_price` is for compatibility only.
 | `includes` | no | components the rate already covers (top/edge/splash/cutout labor) so they are not charged again |
 
 Exactly one matching rate prices EA × exact rate (Decimal, ROUND_HALF_UP to
-cents). No match, ambiguous matches, or withheld EA leave blank amounts with
-callouts. Valid EA pricing survives unresolved SF; explicit zero EA/rates
-produce real 0.00 lines. Excluded packages never price. Omitted in-scope scope
-is an unknown amount, preserving priced lines but blanking the grand total.
-Stopped results or missing `assembly_boq` refuse pricing. See
-[output contracts](output-format.md) for documents, provenance, and receipts.
+cents); no/ambiguous matches or withheld EA leave blanks + callouts. Valid EA
+survives unresolved SF; zero EA/rates produce 0.00. Excluded packages never
+price; omitted scope blanks the grand total. Stopped/missing-`assembly_boq`
+results refuse. Documents/provenance: [output contracts](output-format.md).
 
 ## Activation status
 

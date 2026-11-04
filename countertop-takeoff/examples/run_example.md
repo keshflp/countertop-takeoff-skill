@@ -14,10 +14,9 @@ uv run scripts/measure.py examples/fixture.jobs.json --report build/report.md --
 uv run scripts/audit_pack.py build/results.json --pack build/audit_pack
 ```
 
-The deterministic fixture matches the job spec's pinned hash. Page 1 contains
-the schedule; pages 2-3 contain selected countertops with three independent
-calibration spans each, all 18.0000 pt/ft. The spec records schedule quotes,
-word boxes, planned regions, rechecks, and the plan/spec depth conflict.
+The deterministic fixture matches the pinned hash: page 1 schedule, pages 2-3
+countertops, three spans each at 18.0000 pt/ft. The spec records evidence,
+planned regions, rechecks and the plan/spec depth conflict.
 
 | Quantity | Known and measured |
 |---|---:|
@@ -27,17 +26,13 @@ word boxes, planned regions, rechecks, and the plan/spec depth conflict.
 | Type B x2 | 54.00 SF |
 | Project total | 168.75 SF |
 
-CSV base rows extend by schedule count; rechecks do not extend. Type and grand
-totals reconcile. Results retain `independent_audit_pending` until a separate
-receipt records the independent review without changing results bytes:
+After independent checking, record a separate immutable-results receipt:
 
 ```powershell
 uv run scripts/audit_pack.py build/results.json --record-receipt --reviewer "independent reviewer" --verdict approved --notes "Verified counts, spans, shells, omissions against raw sources"
 ```
 
-Record that verdict only after independent checking. If no auditor is
-available, disclose it and continue. Requested pricing/proposal follows audit;
-deliver once at the end. See [output contracts](../references/output-format.md).
+If no auditor is available, disclose it and continue ([output contracts](../references/output-format.md)).
 
 ## Additional fixtures and regression coverage
 
@@ -55,7 +50,7 @@ deliver once at the end. See [output contracts](../references/output-format.md).
 - `tests_v5.py`: quantity identity, blank-vs-zero, publish safety, immutable
   receipts, exact pricing, proposal documents, and current doc contracts.
 
-## Acceptance commands (sequential: shared generated paths)
+Acceptance commands (sequential: shared generated paths):
 
 ```powershell
 uv run examples/tests_v2.py  # 47
@@ -64,8 +59,3 @@ uv run examples/tests_v4.py  # 40
 uv run examples/tests_v5.py  # 125
 ```
 
-A failed boundary/span/recheck, unusable raster, or unsupported count degrades
-locally to BLANK + callout. Only no calibration anywhere, no schedule AND no
-repeatable pattern, or source integrity mismatch are catastrophic data stops.
-Malformed specs refuse separately. Completed runs return 0 (`complete` or
-`complete_with_callouts`); stopped runs return 2 and quarantine stale exports.

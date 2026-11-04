@@ -1,13 +1,8 @@
 # Job spec — authoritative evidence contract
 
-`measure.py` is driven by a JSON job spec the AGENT writes after reading
-the indexed pack. Every number in the deliverable is either computed from
-recorded geometry or quoted from recorded evidence (word boxes, or a
-crop-hash-verified bitmap transcription). Bind every quantity to that
-evidence and derive ALL deliverable totals from ONE
-resolved model. V2 specs (`"schema": "countertop-takeoff/v2"`, single
-source) remain valid. Working examples: `examples/fixture.jobs.json` (v2),
-the output of `examples/make_hotel_jobs.py` (full v3).
+The agent writes a JSON spec after reading the indexed pack. Every quantity
+binds to geometry or word-box/crop evidence in one resolved model. Examples:
+`examples/fixture.jobs.json` (v2), `examples/make_hotel_jobs.py` output (v3).
 
 Only `countertop-takeoff/v2` and `countertop-takeoff/v3` tags are supported;
 V1 is rejected. V2's `source: {"pdf": path, "sha256": "64-hex digest"}`
@@ -108,10 +103,8 @@ refuse; viewport defaults to `main`, and boxes bound spans/seeds.
 | `cutouts` | `[{"label", "seg_ids"}]` closed inner loops fully inside the shell; subtracted only under the net policy |
 | `route: "image"` | image-route region: `image_measurement` points at an `image_measure.py` result; the crop hash is re-verified |
 
-Rechecks independently select a base region again (`of` references its ID),
-compare at the default 2% tolerance, and NEVER extend into totals. Boundary,
-range, overlap, or recheck failures withhold local quantities with callouts;
-they are not extra data stops. See [method](method.md) for closure/tolerances.
+Rechecks independently select a base (`of`: base ID), compare at default 2%
+tolerance, and NEVER extend totals. Local failures: [method](method.md#boundaries-and-geometry).
 
 ## `assemblies[]`
 
