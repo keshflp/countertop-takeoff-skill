@@ -7,15 +7,12 @@ results/v5 pricing schema tags are retained.
 
 Sections, in order:
 
-1. **Header** — source PDF(s) + sha256 prefixes, UTC timestamp, mode and
-   gross-area policy, declarations (conflicts/omissions/revision decisions)
-   recorded for the auditor.
-2. **Approved scope** — table `page | sheet | disposition | detail` (detail
-   = expected region ids, or the quoted disposition reason). Every source
-   page appears exactly once.
-3. **Schedule evidence** — the quoted rows, counts, variant flags
-   (included in parent total vs additional), stated totals; or the
-   `individual_rooms` declaration.
+1. **Header** — sources + sha256 prefixes, UTC timestamp, mode, gross policy,
+   and declarations (conflicts/omissions/revision decisions) for the auditor.
+2. **Approved scope** — `page | sheet | disposition | detail` (expected region
+   IDs or quoted disposition reason). Every source page appears exactly once.
+3. **Schedule evidence** — quoted rows/counts, variants (included vs additional),
+   stated totals; or the `individual_rooms` declaration.
 4. **Calibration** — per (source, page, viewport): one row per span
    (`label | seg pt | real ft | pt/ft`), then the factor actually used and
    the spread verdict (OK / WARNING), plus disclosed `real_ft` overrides.
@@ -30,9 +27,8 @@ Sections, in order:
    `measured | included_scope | package_excluded | superseded | unresolved`.
 8. **ASSEMBLY BoQ + PIECE BoQ** — two views of the SAME resolved records
    (never summed); piece extensions ×EA; splash handing/returns preserved.
-9. **Audit checklist** — every pass/warn/fail item with detail, the review
-   status line, and the overall run status:
-   `complete`, `complete_with_callouts`, or `stopped`.
+9. **Audit checklist** — pass/warn/fail items with detail, review status, and
+   run status: `complete`, `complete_with_callouts`, or `stopped`.
 
 Input dispositions (`measured | intentionally_skipped | superseded | unresolved`)
 describe page plans; coverage-ledger states describe resolved output scope.
@@ -43,9 +39,8 @@ Columns: `row_kind, room_type, variant, region_id, sheet, page, viewport,
 region_sf, count_applied, region_extended_sf, pt_per_ft_used, source, notes`
 
 Jobs WITHOUT assemblies keep the V2 shape:
-- `base` — one row per measured base region; `count_applied` = the units
-  this region's SF multiplies; `region_extended_sf = region_sf ×
-  count_applied`
+- `base` — one per measured base region; `count_applied` is its unit count;
+  `region_extended_sf = region_sf × count_applied`
 - `recheck_of_base` — QA recheck rows: `count_applied` 0,
   `region_extended_sf` EMPTY
 - `type_total` — exactly one per type with the type's extended SF
@@ -166,9 +161,8 @@ disclosed, with no gate; the separate receipt can be recorded later safely.
 
 One computation over the assembly BoQ + rate profile produces:
 
-- `estimate.json` — schema `countertop-takeoff/v5 estimate`; scope_complete
-  flag, unknown_scope (omitted in-scope items), currency,
-  sha256 of the results JSON + rate profile, `lines[]` (item_code,
+- `estimate.json` — schema `countertop-takeoff/v5 estimate`; scope_complete,
+  unknown_scope (omitted in-scope items), currency, results/profile hashes, `lines[]` (item_code,
   description with inch dims, assembly_ids, room, qty_ea, unit_price_exact,
   line_total, rate_reference {item_code, includes, uom},
   quantity_evidence, callout_references, arithmetic string),
@@ -176,33 +170,27 @@ One computation over the assembly BoQ + rate profile produces:
   unknown), `unknown_amounts`, `exclusions` (package-excluded assemblies,
   never priced), `callouts`, and the arithmetic block (Decimal exact,
   ROUND_HALF_UP to whole cents per line, single-currency rule)
-  (`unit_price` remains a legacy approximate numeric field; documents and
-  arithmetic use the authoritative exact decimal string)
-- `estimate.md` — header (company, timestamp, currency, scope-completeness
-  flag, provenance); table `Item code | Description | QTY EA | Unit price |
-  Total` (long descriptions wrap into continuation rows — amounts never
-  split); priced subtotal; exclusions; CALLOUTS (incl. omitted in-scope
-  scope as UNKNOWN amounts); grand total — BLANK while any in-scope amount
-  is unknown; per-line arithmetic with EXACT rate precision (55.555 stays
-  55.555, never 55.56)
+  (`unit_price` is legacy approximate; documents/math use the exact decimal string)
+- `estimate.md` — company, timestamp, currency, scope-completeness, provenance;
+  table `Item code | Description | QTY EA | Unit price | Total` (descriptions
+  wrap, amounts never split); priced subtotal; exclusions; CALLOUTS including
+  omitted scope as UNKNOWN amounts; grand total BLANK while any amount is unknown;
+  per-line arithmetic with EXACT rates (55.555 stays 55.555, never 55.56).
 - `estimate.pdf` — PyMuPDF render of estimate.md: first line below the
   page top, wrapped + paginated (grand total on the last page), and every
   rendered amount RE-READ from the PDF and checked against estimate.json
   before the file ships. Markdown syntax is removed: PDFs show plain BLANK,
   clean headings and exact rates, with readable assembly/room identifiers.
   Host tooling may render richer PDFs from the same Markdown; totals must agree.
-- `proposal.json` / `proposal.md` / `proposal.pdf` (`scripts/proposal.py`,
-  ) — proposal-lite built FROM the corrected estimate: schema
-  `countertop-takeoff/v5 proposal`; provenance binds the estimate sha256
-  AND the results sha256 (mismatch refuses); package summaries grouped
-  from the data; UNCHANGED EA quantities and exact rates; exclusions from
-  the estimate + open items; supplied terms; blank signature lines; totals
-  carried verbatim (blank preserved) — never invented percentages, tax,
-  or payable balances; json/md/pdf agreement enforced like estimates
-  Each line's EA x exact rate must reproduce its amount; missing provenance
-  hashes refuse. Package amounts are line sums, labeled known subtotals when
-  omissions exist; unresolved regions/rooms/inputs/ledger entries propagate
-  their reasons and blank the grand total even when all surviving lines price.
+- `proposal.json/.md/.pdf` (`scripts/proposal.py`) — proposal-lite from the
+  corrected estimate; schema `countertop-takeoff/v5 proposal`. Provenance binds
+  estimate AND results sha256 (missing/mismatched hashes refuse). Package
+  summaries group data; EA/exact rates stay unchanged. Include exclusions/open
+  items, supplied terms, blank signatures, verbatim totals preserving blanks;
+  never invent percentages, tax, or payable balances. Enforce json/md/pdf
+  agreement and EA x exact rate per line. Package amounts sum lines (known
+  subtotals with omissions); unresolved regions/rooms/inputs/ledger entries
+  carry reasons and blank the grand total even if every surviving line prices.
 
 ## 6. Side files (regenerable, gitignored)
 
