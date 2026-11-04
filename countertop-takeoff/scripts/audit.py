@@ -1584,24 +1584,21 @@ def audit_region_checks(spec, results, calibrations, audit,
                   " (degrades locally; V3 stopped the job)")
     for w in ov_warn:
         audit.add("instance overlap", "warn", w)
-    base_by_id = {r["region_id"]: r for r in results if r["kind"] == "base"
-                  and r.get("status") != "unresolved"}
-    unresolved_base_ids = {r["region_id"] for r in results
-                           if r["kind"] == "base"
-                           and r.get("status") == "unresolved"}
+    base_by_id = {r["region_id"]: r for r in results if r["kind"] == "base"}
     for r in results:
         if r["kind"] != "recheck":
             continue
         if r.get("status") == "unresolved":
             continue
-        if r.get("of") in unresolved_base_ids:
+        base = base_by_id.get(r.get("of"))
+        # An earlier recheck may have withheld this base during this loop.
+        if base is not None and base.get("status") == "unresolved":
             audit.add_callout(
                 f"recheck {r['region_id']}",
                 f"base region {r.get('of')!r} is unresolved - the recheck"
                 " has nothing to compare against and is excluded from QA",
                 blank_fields=["recheck_deviation"], pages=[r["page"]])
             continue
-        base = base_by_id.get(r.get("of"))
         if base is None:
             audit.add("recheck", "warn",
                       f"recheck {r['region_id']}: base region"

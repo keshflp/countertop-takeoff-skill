@@ -23,6 +23,67 @@ from audit import Audit, audit_region_checks
 
 
 class SimplifyRegressions(unittest.TestCase):
+    def test_recheck_a_then_b_withholds_locally(self):
+        self._assert_multiple_rechecks_complete(("A", "B"))
+
+    def test_recheck_b_then_a_withholds_locally(self):
+        self._assert_multiple_rechecks_complete(("B", "A"))
+
+    def _assert_multiple_rechecks_complete(self, order):
+        for b_area in (10, 14):
+            with self.subTest(order=order, b_area=b_area), tempfile.TemporaryDirectory() as tmp:
+                areas = {"base": 10, "healthy": 5, "A": 12, "B": b_area}
+                rows = []
+                for i, rid in enumerate(("base", "healthy", *order)):
+                    x = i * 20
+                    rows.append({"region_id": rid, "source_id": "plans", "page": 1,
+                                 "viewport": "main", "kind": "base" if i < 2 else "recheck",
+                                 "of": "base" if i >= 2 else None, "type": "A", "variant": None,
+                                 "area_sf": areas[rid], "expected_sf_range": [0, 20],
+                                 "expected_range_ok": True, "gross_area_policy": "gross",
+                                 "factor_pt_per_ft": 1,
+                                 "polygon": [(x, 0), (x + 10, 0), (x + 10, 1), (x, 1)],
+                                 "boundary_seg_ids": list(range(4 * i, 4 * i + 4))})
+                bases = rows[:2]
+                spec = {"_sources": [{"source_id": "plans", "path": "plans.pdf", "sha256": "0" * 64}],
+                        "geometry": {}, "mode": "individual_rooms", "policy": {"gross_area": "gross"},
+                        "scope": {"pages": [{"page": 1, "disposition": "measured",
+                                             "expected_regions": [r["region_id"] for r in bases]}]},
+                        "_assemblies": [{"assembly_id": r["region_id"], "type": "A", "package": "base",
+                                         "pieces": [r["region_id"]], "quantity_basis": {"mode": "enumerated"}}
+                                        for r in bases],
+                        "_pieces": [{"piece_id": r["region_id"], "assembly_id": r["region_id"],
+                                     "region_id": r["region_id"], "route": "geometry"} for r in bases]}
+                audit = Audit()
+                audit_region_checks(spec, rows, {("plans", 1, "main"): {"factor_pt_per_ft": 1}}, audit)
+                self.assertEqual(rows[0]["status"], "unresolved")
+                self.assertIsNone(rows[0]["area_sf"])
+                self.assertEqual(rows[0]["measured_area_sf"], 10)
+                self.assertTrue(any(c["scope"] == "region base" for c in audit.callouts))
+                if areas[order[0]] != 10:
+                    dependent = [c for c in audit.callouts if c["scope"] == f"recheck {order[1]}"]
+                    self.assertEqual(len(dependent), 1)
+                    self.assertEqual(dependent[0]["blank_fields"], ["recheck_deviation"])
+                    self.assertIn("excluded from QA", dependent[0]["reason"])
+                output = Path(tmp) / "results.json"
+                args = measure.parse_args(["unused.json", "--json", str(output)])
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(measure.finish(spec, {}, {}, audit, rows, 2, args, None), 0)
+                result = json.loads(output.read_text(encoding="utf-8"))
+                regions = {r["region_id"]: r for r in result["regions"]}
+                pieces = {p["piece_id"]: p for p in result["piece_boq"]}
+                assemblies = {a["assembly_id"]: a for a in result["assembly_boq"]}
+                self.assertIsNone(regions["base"]["area_sf"])
+                self.assertIsNone(pieces["base"]["extension_sf"])
+                self.assertIsNone(assemblies["base"]["extended_sf"])
+                self.assertEqual(regions["healthy"]["area_sf"], 5)
+                self.assertEqual(pieces["healthy"]["extension_sf"], 5)
+                self.assertEqual(assemblies["healthy"]["extended_sf"], 5)
+                self.assertEqual(result["totals"]["project_sf"], 5)
+                self.assertFalse(result["totals"]["project_sf_complete"])
+                self.assertEqual(result["run_status"], "complete_with_callouts")
+                self.assertFalse(audit.failed)
+
     def test_conflict_ids_withhold_only_affected_regions(self):
         id_pairs = [("left", "right"), ("men's vanity", "women's vanity"),
                     ("kitchen and bath", "pantry and sink")]
