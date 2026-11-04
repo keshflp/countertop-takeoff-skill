@@ -274,13 +274,13 @@ def shell_from_segments(segments, seg_ids, label, snap_tol=SNAP_DEFAULT):
     return poly
 
 
-def _require_strict_interior(poly, seed, label):
+def _require_strict_interior(poly, seed, label, margin):
     p = Point(seed[0], seed[1])
-    if not poly.contains(p) or poly.boundary.distance(p) <= SEED_MARGIN_PT:
-        if poly.boundary.distance(p) <= SEED_MARGIN_PT:
+    if not poly.contains(p) or poly.boundary.distance(p) <= margin:
+        if poly.boundary.distance(p) <= margin:
             raise RegionError(
                 f"{label}: seed ({seed[0]}, {seed[1]}) lies ON or within"
-                f" {SEED_MARGIN_PT} pt of the boundary - v1's covers() accepted"
+                f" {margin} coordinate units of the boundary - v1's covers() accepted"
                 " boundary-on-seed; v2 requires a strictly interior seed")
         raise RegionError(
             f"{label}: seed ({seed[0]}, {seed[1]}) is not inside the measured"
@@ -297,11 +297,12 @@ def _cutout_polygons(region, segments, label, snap_tol):
 
 
 def measure_region(region, page, factor, policy, snap_tol=SNAP_DEFAULT,
-                   viewport_box=None):
+                   viewport_box=None, seed_margin=SEED_MARGIN_PT):
     """Measure one region dict against one geometry page.
 
     factor: pt per real foot for this region's (page, viewport) - the ACTUAL
     factor used, recorded in the result. policy: gross-area policy string.
+    seed_margin: interior margin in page coordinates (PDF default: 0.01 pt).
     viewport_box: the viewport's displayed bounding box, when declared; the
     region seed must sit inside it (a region outside its viewport is a
     selection error, not a measurement).
@@ -319,7 +320,7 @@ def measure_region(region, page, factor, policy, snap_tol=SNAP_DEFAULT,
     segs = page["segments"]
     shell = shell_from_segments(segs, region["boundary"]["seg_ids"],
                                 label, snap_tol)
-    _require_strict_interior(shell, region["seed"], label)
+    _require_strict_interior(shell, region["seed"], label, seed_margin)
     by_id = {s["id"]: s for s in segs}
     curved = any(by_id[i].get("op") == "c"
                  for i in region["boundary"]["seg_ids"])

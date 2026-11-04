@@ -21,6 +21,27 @@ from audit import Audit
 
 
 class SimplifyRegressions(unittest.TestCase):
+    def test_cad_seed_margin_is_physical(self):
+        for units, factor in (("in", 12), ("mm", 304.8), ("ft", 1), ("m", .3048)):
+            with self.subTest(units=units):
+                points = [(0, 0), (factor, 0), (factor, factor), (0, factor)]
+                page = {"segments": [dict(id=i, x0=a[0], y0=a[1], x1=b[0], y1=b[1])
+                        for i, (a, b) in enumerate(zip(points, points[1:] + points[:1]))]}
+                spec = {"_sources": [{"source_id": "cad"}], "policy": {"gross_area": "gross"},
+                        "regions": [{"region_id": str(inset), "page": 1, "type": "A",
+                                     "seed": [inset * factor, factor / 2],
+                                     "boundary": {"seg_ids": [0, 1, 2, 3]},
+                                     "expected_sf_range": [.99, 1.01]}
+                                    for inset in (-.02, 0, .005, .01, .02)]}
+                audit = Audit()
+                rows = measure.measure_all_regions(spec, {("cad", 1): page},
+                    {("cad", 1, "main"): {"factor_pt_per_ft": factor, "units": units}}, .05, audit, ".")
+                self.assertTrue(all(r["area_sf"] is None and r["status"] == "unresolved"
+                                    for r in rows[:-1]))
+                self.assertEqual(rows[-1]["area_sf"], 1)
+                self.assertEqual(len(audit.callouts), 4)
+                self.assertFalse(audit.failed)
+
     def test_seed_margin_withholds_only_affected_regions(self):
         points = [(0, 0), (10, 0), (10, 10), (0, 10)]
         page = {"segments": [{"id": i, "x0": a[0], "y0": a[1], "x1": b[0], "y1": b[1]}

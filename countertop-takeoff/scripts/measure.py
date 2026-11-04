@@ -139,13 +139,16 @@ def measure_all_regions(spec, pages_by_no, calibrations, snap, audit_obj,
         # geometry lives in DRAWING UNITS, so the snap tolerance scales with
         # the verified units-per-foot (0.05 units/18 reference scale).
         snap_eff = snap
+        seed_margin = regions_mod.SEED_MARGIN_PT
         if cal.get("units") is not None:
             snap_eff = max(1e-9, snap * cal["factor_pt_per_ft"] / 18.0)
+            # CAD's interior margin is 0.01 ft in the verified drawing units.
+            seed_margin = 0.01 * cal["factor_pt_per_ft"]
         try:
             r = regions_mod.measure_region(
                 region, pages_by_no[(sid, pno)], cal["factor_pt_per_ft"],
                 spec["policy"]["gross_area"], snap_eff,
-                viewport_box=cal.get("viewport_box"))
+                viewport_box=cal.get("viewport_box"), seed_margin=seed_margin)
         except regions_mod.RegionError as exc:
             r = unresolved_result(region, sid, str(exc))
             print(f"UNRESOLVED {rid}: {exc}")
