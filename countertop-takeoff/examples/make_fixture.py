@@ -104,6 +104,10 @@ def plan_page(doc, sheet, title, unit, kitchen, kitchen_label_at, vanity,
     text_centered(page, 108, 545, "BATH", size=8)
     for p1, p2, label, cx, by in dims:
         dimension(page, p1, p2, label, cx, by)
+    tags = ('UNIT 101 TYPE A; UNIT 104 TYPE A; UNIT 112 TYPE A'
+            if sheet == 'A-101' else 'UNIT 201 TYPE B; UNIT 202 TYPE B')
+    text_left(page, 72, 660, tags, size=9)
+    text_left(page, 72, 678, 'TYPICAL PLAN APPLIES TO EACH TAGGED UNIT.', size=8)
     return page
 
 
@@ -145,16 +149,18 @@ def main():
     for x in cols:
         p1.draw_line((x, rows[0]), (x, rows[-1]), color=INK, width=1.0)
     for i, h in enumerate(header):
-        text_centered(p1, (cols[i] + cols[i + 1]) / 2, rows[0] + 18, h, size=9)
+        text_centered(p1, (cols[i] + cols[i + 1]) / 2, rows[0] - 8, h, size=9)
     for r, row in enumerate(data):
         for i, cell in enumerate(row):
             text_centered(p1, (cols[i] + cols[i + 1]) / 2, rows[r + 1] - 10,
                           cell, size=9)
+    text_left(p1, 100, 312, 'TOTAL UNITS: 5', size=9)
     notes = [
         "GENERAL NOTES:",
-        '1. KITCHEN COUNTERTOPS: POST-FORMED PLASTIC LAMINATE, 25 IN. DEEP,',
+        '1. KITCHEN COUNTERTOPS: POST-FORMED PLASTIC LAMINATE, 30 IN. DEEP,',
         "   CONTINUOUS ALONG DIMENSIONED RUNS. NO SINK OR RANGE CUTOUTS THIS PHASE.",
-        "2. VANITY TOPS: CULTURED MARBLE, 21 IN. DEEP.",
+        "2. ONE CULTURED-MARBLE VANITY PER UNIT THIS PHASE, 21 IN. DEEP.",
+        "   OTHER BATHROOMS AND THEIR COUNTERS ARE EXCLUDED FROM THIS PHASE.",
         "3. COUNTERTOP EXTENTS DIMENSIONED ON FLOOR PLANS A-101 AND A-102.",
         "4. UNITS 104 AND 112 (TYPE A) ARE MIRRORED PLANS OF UNIT 101.",
         "5. NO UNIT COUNT CHANGES WITHOUT ADDENDUM.",

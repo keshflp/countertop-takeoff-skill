@@ -79,13 +79,15 @@ def schedule_table_lines(spec):
     for t in sched["types"]:
         vs = [v["name"] for v in sched.get("variants", [])
               if v["type"] == t["type"]]
-        lines.append(f"| {t['type']} | {t['count']} | {t['row_text'][:60]} "
+        quote = t['row_text'][:60].replace('|', r'\|')
+        lines.append(f"| {t['type']} | {t['count']} | {quote} "
                      f"| {', '.join(vs) or '-'} |")
     for v in sched.get("variants", []):
         flag = ("included in parent total" if v["included_in_parent_total"]
                 else "additional")
+        quote = v['row_text'][:60].replace('|', r'\|')
         lines.append(f"| {v['type']}:{v['name']} | {v['count']} "
-                     f"| {v['row_text'][:60]} | {flag} |")
+                     f"| {quote} | {flag} |")
     st = sched.get("stated_totals")
     if st:
         pf = st.get("per_floor") or {}
@@ -126,6 +128,35 @@ def _fmt_factor(v):
                                  else str(v))
 
 
+def quantity_map_text(value):
+    if value is None:
+        return "BLANK"
+    return ", ".join(f"{k}={_fmt(v) if v is not None else 'BLANK'}"
+                     for k, v in value.items()) or "none declared"
+
+
+def quantity_csv(value):
+    return "" if value is None else json.dumps(value, sort_keys=True)
+
+
+def selection_text(source):
+    return ''.join(f" {kind} {','.join(map(str, source[field]))}"
+                   for kind, field in (("words", "word_ids"), ("segments", "seg_ids"))
+                   if source.get(field))
+
+
+def piece_source_text(spec, row):
+    meta = row.get("region_meta") or {}
+    refs = meta.get("sources") or [meta]
+    paths = {s["source_id"]: s["path"] for s in spec["_sources"]}
+    return "; ".join(
+        f"{paths.get(ref.get('source_id'), ref.get('source_id') or '?')}"
+        f" p.{ref.get('page') or '?'}"
+        + (f" [{ref['property']}]" if ref.get("property") else "")
+        + selection_text(ref)
+        for ref in refs)
+
+
 def takeoff_lines(spec, types, total, totals_meta=None):
     lines = ["", "## Takeoff by region", ""]
     mode = spec.get("mode")
@@ -148,11 +179,18 @@ def takeoff_lines(spec, types, total, totals_meta=None):
             ident = row.get("assembly") or row.get("region_id") or "-"
             if row.get("material_canonical"):
                 ident += f" / {row['material_canonical']}"
+            sources = r.get("sources") or []
+            location = "; ".join(
+                f"{s.get('source_id')}:{s.get('sheet') or '?'} p{s.get('page')} [{s['property']}]"
+                + selection_text(s)
+                for s in sources)
+            if not location:
+                location = (f"{r.get('sheet') or '?'} ({r.get('page') or '-'},"
+                            f" {r.get('viewport') or '-'})")
             lines.append(
                 f"| {row.get('region_id') or '-'} | {row.get('variant') or '-'} "
                 f"| {ident} "
-                f"| {r.get('sheet') or '?'} ({r.get('page') or '-'},"
-                f" {r.get('viewport') or '-'}) "
+                f"| {location} "
                 f"| {_fmt(row.get('sf'))} | {_fmt(row.get('count'))} "
                 f"| {_fmt(row.get('extended_sf'))} "
                 f"| {_fmt_factor(r.get('factor_pt_per_ft')) or '-'} |")
@@ -303,13 +341,8 @@ def piece_boq_lines(piece_rows):
         dims = " x ".join(_fmt(d.get(k)) for k in
                            ("width", "depth", "height")) if d else \
             "(geometry route)"
-        edges = ", ".join(
-            (f"{k}={v:.2f}" if v is not None else f"{k}=BLANK")
-            for k, v in (r.get("edge_lf_by_profile") or {}).items()) or "-"
-        edge_ext = ", ".join(
-            f"{k}={v:.2f}" for k, v in (r.get("edge_lf_ext") or {}).items()
-        ) or ("-" if r.get("edge_lf_ext") is None or
-              not r.get("edge_lf_ext") else "-")
+        edges = quantity_map_text(r.get("edge_lf_by_profile"))
+        edge_ext = quantity_map_text(r.get("edge_lf_ext"))
         splash = (f"{_fmt(r.get('splash_lf'))}/{_fmt(r.get('splash_sf'))}"
                   if (r.get("splash_lf") is not None
                       or r.get("splash_sf") is not None) else "-")
@@ -317,10 +350,8 @@ def piece_boq_lines(piece_rows):
                     f"{_fmt(r.get('splash_sf_ext'))}"
                     if (r.get("splash_lf_ext") is not None
                         or r.get("splash_sf_ext") is not None) else "-")
-        cuts = ", ".join(f"{k}={v}" for k, v in
-                         (r.get("cutouts_ea") or {}).items()) or "-"
-        cuts_x = ", ".join(f"{k}={v}" for k, v in
-                           (r.get("cutouts_ea_ext") or {}).items()) or "-"
+        cuts = quantity_map_text(r.get("cutouts_ea"))
+        cuts_x = quantity_map_text(r.get("cutouts_ea_ext"))
         lines.append(
             f"| {r['piece_id']} | {r['assembly_id']} | {dims}"
             f" | {_fmt(r.get('sf'))} | {edges} | {edge_ext} | {splash}"
@@ -474,8 +505,7 @@ def _resolved_csv_rows(spec, types, piece_rows, project_total):
             meta.get("viewport") or "stated",
             _fmt(r.get("sf")), _fmt(r.get("ea")), _fmt(r.get("extension_sf")),
             _fmt_factor(meta.get("factor")),
-            (f"{src} p.{meta.get('page')}" if meta.get("page")
-             else f"{src} (stated dims)"),
+            piece_source_text(spec, r),
             notes])
     for t in types:
         t_total = t.get("extended_sf")
@@ -494,8 +524,7 @@ def _resolved_csv_rows(spec, types, piece_rows, project_total):
                      " added into the grand total"])
     rows.append(["grand_total", "", "", "", "", "", "", "", "",
                  f"{round(project_total, 2):.2f}", "", "",
-                 "equals the project total and BOTH BoQ view totals (one"
-                 " resolved model)"])
+                 "known piece subtotal; compare BoQ views only over the same area-resolved subset"])
     return rows, round(project_total, 2)
 
 
@@ -521,11 +550,12 @@ PIECE_CSV_COLUMNS = ["piece_id", "assembly_id", "room", "type", "package",
                      "edge_lf_by_profile_xEA", "splash_lf", "splash_sf",
                      "splash_lf_xEA", "splash_sf_xEA", "splash_runs",
                      "cutouts_ea", "cutouts_ea_xEA", "ea", "extension_sf",
-                     "state", "blank_fields", "source_pages"]
+                     "state", "blank_fields", "source_pages", "source_links",
+                     "sf_state", "quantity_complete"]
 
 ASSEMBLY_CSV_COLUMNS = ["assembly_id", "room", "type", "variant", "package",
                         "finish_tag", "width_in", "depth_in", "height_in",
-                        "handing", "ea", "basis", "state"]
+                        "handing", "ea", "basis", "state", "sf_state", "quantity_complete", "sources"]
 
 
 def _num(v):
@@ -550,18 +580,17 @@ def write_piece_csv(path, piece_rows):
                 r.get("finish_tag") or "", r["route"],
                 _num(d_.get("width")), _num(d_.get("depth")),
                 _num(d_.get("height")), _num(r.get("sf")),
-                json.dumps(r.get("edge_lf_by_profile") or {}, sort_keys=True),
-                json.dumps(r.get("edge_lf_ext") or {}, sort_keys=True)
-                if r.get("edge_lf_ext") is not None else "",
+                quantity_csv(r.get("edge_lf_by_profile")),
+                quantity_csv(r.get("edge_lf_ext")),
                 _num(r.get("splash_lf")), _num(r.get("splash_sf")),
                 _num(r.get("splash_lf_ext")), _num(r.get("splash_sf_ext")),
-                json.dumps(r.get("splash_detail") or [], sort_keys=True),
-                json.dumps(r.get("cutouts_ea") or {}, sort_keys=True),
-                json.dumps(r.get("cutouts_ea_ext") or {}, sort_keys=True)
-                if r.get("cutouts_ea_ext") is not None else "",
+                quantity_csv(r.get("splash_detail")),
+                quantity_csv(r.get("cutouts_ea")),
+                quantity_csv(r.get("cutouts_ea_ext")),
                 _num(r.get("ea")), _num(r.get("extension_sf")),
                 r["state"], ";".join(r.get("blank_fields") or []),
-                ";".join(str(p) for p in pages)])
+                ";".join(str(p) for p in pages), json.dumps(links, sort_keys=True),
+                r.get("sf_state"), r.get("quantity_complete", False)])
     return len(piece_rows)
 
 
@@ -579,7 +608,8 @@ def write_assembly_csv(path, assembly_rows):
                 r.get("finish_tag") or "", _num(r.get("width_in")),
                 _num(r.get("depth_in")), _num(r.get("height_in")),
                 r.get("handing") or "", _num(r.get("ea")), r["basis"],
-                r["state"]])
+                r["state"], r.get("sf_state"), r.get("quantity_complete", False),
+                json.dumps(r.get("sources") or [], sort_keys=True)])
     return len(assembly_rows)
 
 

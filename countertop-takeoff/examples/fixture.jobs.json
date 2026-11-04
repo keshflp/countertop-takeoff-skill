@@ -2,18 +2,13 @@
   "schema": "countertop-takeoff/v2",
   "source": {
     "pdf": "examples/fixture.pdf",
-    "sha256": "c211e10bc4fddf718a01bae097b18780e0acf9a196f08c6981cc235f6182a9bf"
+    "sha256": "90908a6b4dc4d928bf7acd3c4a7f4a774b28abeac47e0bcbb0bd3510fca9c90a"
   },
   "geometry": "build/fixture.geometry.json",
   "mode": "repeated_types",
   "policy": {
     "gross_area": "gross",
-    "declarations": [
-      {
-        "kind": "plan_spec_conflict",
-        "detail": "Schedule notes say kitchen counters 25 IN. DEEP, but both plans dimension 2'-6\" (30 in.) counter depth. Area is measured from drawn geometry per method.md; the conflict is flagged for the reviewer."
-      }
-    ]
+    "declarations": []
   },
   "schedule": {
     "page": 1,
@@ -43,7 +38,18 @@
       }
     ],
     "variants": [],
-    "stated_totals": { "project": 5 }
+    "stated_totals": { "project": 5 },
+    "room_inventory": {
+      "per_type_counts": {"A": 3, "B": 2},
+      "rooms": [
+        {"room": "101", "type": "A", "page": 2},
+        {"room": "104", "type": "A", "page": 2},
+        {"room": "112", "type": "A", "page": 2},
+        {"room": "201", "type": "B", "page": 3},
+        {"room": "202", "type": "B", "page": 3}
+      ],
+      "dedupe_notes": ["Typical plans list all applicable unit tags; each unique unit is counted once."]
+    }
   },
   "scope": {
     "pages": [
@@ -110,32 +116,6 @@
       "viewport": "main",
       "boundary": { "seg_ids": [10, 11, 12, 13] },
       "seed": [100, 505],
-      "expected_sf_range": [5, 10]
-    },
-    {
-      "region_id": "A:kitchen@recheck",
-      "kind": "recheck",
-      "of": "A:kitchen",
-      "type": "A",
-      "variant": null,
-      "page": 2,
-      "sheet": "A-101",
-      "viewport": "main",
-      "boundary": { "seg_ids": [4, 5, 6, 7, 8, 9] },
-      "seed": [200, 380],
-      "expected_sf_range": [25, 40]
-    },
-    {
-      "region_id": "A:vanity@recheck",
-      "kind": "recheck",
-      "of": "A:vanity",
-      "type": "A",
-      "variant": null,
-      "page": 2,
-      "sheet": "A-101",
-      "viewport": "main",
-      "boundary": { "seg_ids": [10, 11, 12, 13] },
-      "seed": [110, 510],
       "expected_sf_range": [5, 10]
     },
     {

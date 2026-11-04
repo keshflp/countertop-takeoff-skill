@@ -789,6 +789,9 @@ def validate_pieces(spec, region_ids):
                 require(v is None or (finite(v) and v > 0),
                         f"piece {pid}: dims_in.{k} must be positive or null"
                         " (unknown stays blank, never 0)")
+        for field in ("edge_runs", "splash_runs", "cutouts"):
+            require(p.get(field) is None or isinstance(p[field], list),
+                    f"piece {pid}: {field} must be a list or null (unknown)")
         for run in p.get("edge_runs") or []:
             require(isinstance(run, dict), f"piece {pid}: edge_runs entries")
             require(isinstance(run.get("profile"), str) and run["profile"],
@@ -818,7 +821,10 @@ def validate_pieces(spec, region_ids):
         for c in p.get("cutouts") or []:
             require(isinstance(c, dict) and isinstance(c.get("kind"), str)
                     and c["kind"], f"piece {pid}: cutouts need a kind")
-            pos_int(c.get("ea"), f"piece {pid}: cutout ea")
+            value = c.get("ea")
+            require(value is None or (isinstance(value, int)
+                    and not isinstance(value, bool) and value >= 0),
+                    f"piece {pid}: cutout ea must be a non-negative integer or null")
             if c.get("source") is not None:
                 validate_source_link(c["source"], f"piece {pid} cutout"
                                      " source")

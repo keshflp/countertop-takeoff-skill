@@ -508,6 +508,15 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
     payload["totals"]["known_subtotal_sf"] = round(total, 2)
     payload["totals"].update(totals_meta)
     payload["scope_incomplete"] = scope_unknown
+    payload["property_gaps"] = [
+        {"item": f"piece {p['piece_id']}", "kind": "property", "state": "unresolved",
+         "blank_fields": p["blank_fields"], "source_links": p.get("source_links") or {},
+         "source": {k: (p.get("region_meta") or {}).get(k)
+                    for k in ("source_id", "page", "sheet")}}
+        for p in piece_rows if p.get("blank_fields")]
+    payload["totals"]["quantity_complete"] = None if not spec.get("_assemblies") else not (
+        scope_unknown or any(not p.get("quantity_complete", False)
+                             for p in piece_rows if p["state"] != "package_excluded"))
     payload["unavailable_inputs"] = spec.get("_unavailable_inputs") or []
     payload["totals"]["excluded_package_sf"] = round(
         resolved.get("excluded_total_sf", 0.0), 2)

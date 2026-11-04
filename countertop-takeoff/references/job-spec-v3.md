@@ -147,6 +147,13 @@ schedule|detail|other, "note"?}}}`
   an unknown edge blanks THAT profile's LF (never folded into a known
   length of the same profile); an unknown splash height blanks splash SF
   (never 0); handed splash runs keep `handing`/`returns_in` in the BoQ.
+- Omitted or `null` `edge_runs`, `splash_runs`, and `cutouts` mean unknown.
+  An explicit empty list means **declared none**, not a placeholder for missing
+  information. For example, use `"cutouts": null` when the cutout sheet is
+  missing; use `"cutouts": []` only when no cutouts are in the declared scope.
+  Cutout `ea` may be a nonnegative integer (including a verified zero), or
+  `null` for an unknown count of a known kind. An unknown contributing run
+  keeps its entire profile/kind and extension null; known other profiles survive.
 - Piece extensions (SF, edge LF, splash, cutouts) are multiplied by the
   SAME resolved assembly EA; the piece BoQ and the assembly BoQ are two
   views of the same resolved records — never summed with each other.
