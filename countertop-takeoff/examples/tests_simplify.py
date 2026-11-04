@@ -21,6 +21,24 @@ from audit import Audit
 
 
 class SimplifyRegressions(unittest.TestCase):
+    def test_seed_margin_withholds_only_affected_regions(self):
+        points = [(0, 0), (10, 0), (10, 10), (0, 10)]
+        page = {"segments": [{"id": i, "x0": a[0], "y0": a[1], "x1": b[0], "y1": b[1]}
+                             for i, (a, b) in enumerate(zip(points, points[1:] + points[:1]))]}
+        spec = {"_sources": [{"source_id": "plans"}], "policy": {"gross_area": "gross"}, "regions": [
+            {"region_id": str(x), "page": 1, "type": "A", "seed": [x, 5],
+             "boundary": {"seg_ids": [0, 1, 2, 3]}, "expected_sf_range": [0.9, 1.1]}
+            for x in (0, -0.02, 0.005, 0.01, 0.02)]}
+        audit = Audit()
+        rows = measure.measure_all_regions(spec, {("plans", 1): page},
+            {("plans", 1, "main"): {"factor_pt_per_ft": 10}}, .05, audit, ".")
+        for row in rows[:-1]:
+            self.assertIsNone(row["area_sf"])
+            self.assertEqual(row["status"], "unresolved")
+        self.assertEqual(rows[-1]["area_sf"], 1)
+        self.assertEqual(len(audit.callouts), 4)
+        self.assertFalse(audit.failed)
+
     def test_intake_legacy_pairing_and_unavailable_inputs(self):
         for flag in ("--name", "--cloud-id", "--cloud-rev"):
             for sources, values in ((["A"], ["A_ID"]), (["A", "B"], ["A_ID", "B_ID"]),

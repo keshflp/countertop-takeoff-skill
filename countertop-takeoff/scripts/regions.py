@@ -11,7 +11,7 @@ V2 rules (all errors are hard stops with explicit messages):
   - the selection must close into EXACTLY one cycle (every node degree 2);
     dangling endpoints (open boundary, stray hatch tick) and branched nodes
     (ambiguous junction) are named in the error
-  - the seed must be STRICTLY interior (boundary distance > 0), never on the
+  - the seed must be STRICTLY interior (boundary distance > 0.01 pt), never on the
     shell
   - gross-area policy is explicit: "gross" ignores inner loops; declared
     cutouts are subtracted only under "net_of_declared_cutouts"
@@ -277,7 +277,7 @@ def shell_from_segments(segments, seg_ids, label, snap_tol=SNAP_DEFAULT):
 
 def _require_strict_interior(poly, seed, label):
     p = Point(seed[0], seed[1])
-    if not poly.contains(p):
+    if not poly.contains(p) or poly.boundary.distance(p) <= SEED_MARGIN_PT:
         if poly.boundary.distance(p) <= SEED_MARGIN_PT:
             raise RegionError(
                 f"{label}: seed ({seed[0]}, {seed[1]}) lies ON or within"
