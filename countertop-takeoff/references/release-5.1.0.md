@@ -24,6 +24,8 @@ Crop hashes prove pixel identity; schedule reading still needs independent check
   and fabricated a grand total. The same total/package assertions remain.
 
 No V3 checks are superseded. No check is skipped.
+SIMPLIFY round 2 migrates V3's sparse intake setup to structured `--entry`:
+the ambiguous legacy invocation now refuses; its assertions/counts are unchanged.
 
 ## Test evidence
 

@@ -350,8 +350,8 @@ def intake_tests():
     r = subprocess.run([sys.executable,
                         os.path.join(SKILL, "scripts", "intake.py"),
                         "--job-dir", jobdir, "--expect", "2",
-                        "--source", src_pdf, "--cloud-id", "drvH1",
-                        "--cloud-rev", "2",
+                        "--entry", json.dumps({"requested": src_pdf,
+                            "cloud_id": "drvH1", "cloud_revision": "2"}),
                         "--source", "drive://plans-latest.pdf"],
                        capture_output=True, text=True, cwd=SKILL)
     manifest = json.load(open(os.path.join(jobdir, "intake_manifest.json"),

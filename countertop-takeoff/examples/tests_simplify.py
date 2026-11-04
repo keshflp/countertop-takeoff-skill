@@ -4,20 +4,46 @@
 # ///
 """Bounded SIMPLIFY regressions; run with uv run examples/tests_simplify.py."""
 import json
+import io
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from contextlib import redirect_stderr
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import calibrate
 import estimate
 import image_measure
+import intake
 import measure
 from audit import Audit
 
 
 class SimplifyRegressions(unittest.TestCase):
+    def test_intake_legacy_pairing_and_unavailable_inputs(self):
+        for flag in ("--name", "--cloud-id", "--cloud-rev"):
+            for sources, values in ((["A"], ["A_ID"]), (["A", "B"], ["A_ID", "B_ID"]),
+                                    (["A", "B"], ["B_ID"])):
+                with self.subTest(flag=flag, sources=sources, values=values), tempfile.TemporaryDirectory() as tmp:
+                    job = Path(tmp) / "job"
+                    args = ["--job-dir", str(job)] + [a for s in sources for a in ("--source", str(Path(tmp) / s))]
+                    args += [a for v in values for a in (flag, v)]
+                    if len(sources) != len(values):
+                        error = io.StringIO()
+                        with redirect_stderr(error), self.assertRaisesRegex(SystemExit, "2"):
+                            intake.main(args)
+                        self.assertIn(f"sparse {flag} metadata", error.getvalue())
+                        self.assertFalse(job.exists())
+                        continue
+                    args += ["--entry", json.dumps({"requested": "structured", "cloud_id": "S_ID"})]
+                    self.assertEqual(intake.main(args), 0)
+                    manifest = json.loads((job / "intake_manifest.json").read_text())
+                    self.assertIn("unavailable_inputs", manifest["verdict"])
+                    self.assertEqual(manifest["sources"][0]["cloud_id"], "S_ID")
+                    key = {"--name": "name", "--cloud-id": "cloud_id", "--cloud-rev": "cloud_revision"}[flag]
+                    self.assertEqual([e[key] for e in manifest["sources"][1:]], values)
+
     def test_standalone_rate_codes_are_nonempty_and_unique(self):
         for codes in (["SAME"] * 4, ["", "B", "C", "D"],
                       [" ", "B", "C", "D"], [1, "B", "C", "D"]):

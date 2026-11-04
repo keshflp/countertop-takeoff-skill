@@ -11,15 +11,10 @@ and an expected-count verdict. Unavailable inputs are recorded as
 `unavailable` entries (disclosed callouts downstream) - the job completes
 with what arrived and names what did not.
 
-V4 repairs (P1.2):
-  - COLLISION-SAFE destinations: two sources with the same basename land on
-    distinct files (name.pdf, name-2.pdf, ...); every entry records BOTH
-    the requested name and the actual destination, so a collision can never
-    silently overwrite evidence
-  - STRUCTURED per-source metadata: pass --entry JSON (one object per
-    source: requested/local_path/name/cloud_id/cloud_revision/kind/note) -
-    no positional pairing of flags; the positional --source/--name/--cloud-*
-    flags still work for quick runs
+Destinations are collision-safe (name.pdf, name-2.pdf, ...), retaining requested
+and destination names. Use --entry JSON for sparse per-source metadata;
+legacy --name/--cloud-id/--cloud-rev each require one value per --source if used.
+Agent-side downloads:
   - the DRIVE FETCH IS AN AGENT-SIDE CONTRACT: this script imports LOCAL
     paths only. The host agent fetches Drive/OneDrive/attachment binaries
     into the job dir FIRST (or supplies structured entries with their cloud
@@ -177,16 +172,21 @@ def main(argv=None):
                     help="requested source: a local path, or a name/URL not"
                          " yet fetched (recorded as unavailable)")
     ap.add_argument("--name", action="append", default=[],
-                    help="original display name for the preceding --source"
-                         " (attachments); repeat as needed")
+                    help="original display names, one per --source in order;"
+                         " use --entry for sparse metadata")
     ap.add_argument("--cloud-id", action="append", default=[],
-                    help="cloud file id for the preceding --source")
+                    help="cloud file ids, one per --source in order")
     ap.add_argument("--cloud-rev", action="append", default=[],
-                    help="cloud revision for the preceding --source")
+                    help="cloud revisions, one per --source in order")
     ap.add_argument("--expect", type=int, default=None,
                     help="expected number of sources; mismatch is disclosed"
                          " in the manifest verdict")
     args = ap.parse_args(argv)
+    for flag, values in (("name", args.name), ("cloud-id", args.cloud_id),
+                         ("cloud-rev", args.cloud_rev)):
+        if values and len(values) != len(args.source):
+            ap.error(f"sparse --{flag} metadata: supply one value per --source"
+                     " in source order, or use structured --entry metadata")
 
     # normalize BOTH input shapes into structured entry dicts (P1.2)
     entries_in = []
@@ -217,13 +217,16 @@ def main(argv=None):
 
     resolved = [e for e in entries if e["status"] == "resolved"]
     errors = [e for e in entries if e["status"] == "error"]
-    verdict = "ok"
+    verdict = ""
     if errors:
         verdict = (f"source_errors: {len(errors)} source(s) failed during"
                    " intake (retained in the manifest; re-run intake for"
                    " them)")
+    unavailable = sum(e["status"] == "unavailable" for e in entries)
+    if unavailable:
+        verdict += (" + " if verdict else "") + f"unavailable_inputs: {unavailable}"
     if args.expect is not None and len(resolved) != args.expect:
-        if errors:
+        if verdict:
             verdict += " + "
         verdict += ("expected_count_mismatch: requested"
                     f" {len(entries)}, resolved {len(resolved)},"
@@ -235,7 +238,7 @@ def main(argv=None):
         "generated_utc": datetime.now(timezone.utc).isoformat(
             timespec="seconds"),
         "expected_count": args.expect,
-        "verdict": verdict,
+        "verdict": verdict or "ok",
         "sources": entries,
     }
     out = os.path.join(args.job_dir, "intake_manifest.json")
@@ -255,7 +258,7 @@ def main(argv=None):
             print(f"  UNAVAILABLE: {e['requested']} - {note}")
     for e in errors:
         print(f"  ERROR: {e['requested']} - {e.get('error', '')[:90]}")
-    print(f"  verdict: {verdict}")
+    print(f"  verdict: {manifest['verdict']}")
     return 0
 
 
