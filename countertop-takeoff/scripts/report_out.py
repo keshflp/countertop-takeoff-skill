@@ -132,12 +132,12 @@ def takeoff_lines(spec, types, total, totals_meta=None):
     for t in types:
         title = f"### {t['room_type']}"
         if spec.get("_assemblies"):
-            title += (f" - resolved EA {t['std_units']}"
+            title += (f" - resolved EA {_fmt(t['std_units'])}"
                       + (f" (schedule count {t['schedule_count']})"
                          if t.get("schedule_count") is not None else ""))
         elif mode == "repeated_types" and "schedule_count" in t:
             title += (f" - schedule count {t['schedule_count']}"
-                      f" ({t['std_units']} standard unit(s) + variants)")
+                      f" ({_fmt(t['std_units'])} standard unit(s) + variants)")
         lines += [title, "",
                   "| region | variant | assembly/material | sheet (page, viewport) | SF |"
                   " count | extended SF | factor pt/ft |",
@@ -181,12 +181,12 @@ def takeoff_lines(spec, types, total, totals_meta=None):
                        f" {meta.get('unknown_contribution_count', '?')}"
                        " contribution(s) unknown - see CALLOUTS)")
     lines.append(total_line)
-    if meta.get("assembly_ea") is not None:
+    if spec.get("_assemblies"):
         lines.append("")
         lines.append(
-            f"**Assembly EA total: {meta['assembly_ea']} EA** (summed resolved"
+            f"**Assembly EA total: {_fmt(meta.get('assembly_ea'))} EA** (summed resolved"
             " assembly quantities - DISTINCT from the"
-            f" {meta.get('unit_count', '?')} unit(s) in the room schedule;"
+            f" {_fmt(meta.get('unit_count'))} unit(s) in the room schedule;"
             " one counts rooms, the other counts assembled instances)")
     lines.append("")
     return lines
@@ -419,8 +419,8 @@ def _csv_rows(spec, types, results):
         rows.append([
             "base", row["room_type"], row.get("variant") or "", rid or "",
             r.get("sheet") or "?", r.get("page") or "",
-            r.get("viewport") or "", f"{row['sf']:.2f}", row["count"],
-            f"{row['extended_sf']:.2f}", _fmt_factor(factor),
+            r.get("viewport") or "", f"{row['sf']:.2f}", _fmt(row["count"]),
+            _fmt(row["extended_sf"]), _fmt_factor(factor),
             f"{src} p.{r.get('page')} ({r.get('sheet') or '?'})", notes])
     for r in results:
         if r["kind"] != "recheck":
@@ -446,8 +446,8 @@ def _csv_rows(spec, types, results):
             f"QA recheck of {r.get('of')}; never extended"])
     for t in types:
         rows.append(["type_total", t["room_type"], "", "", "", "", "",
-                     "", "", f"{t['extended_sf']:.2f}", "", "", ""])
-    total = round(sum(t["extended_sf"] for t in types), 2)
+                     "", "", _fmt(t["extended_sf"]), "", "", ""])
+    total = round(sum(t["extended_sf"] for t in types if t["extended_sf"] is not None), 2)
     rows.append(["grand_total", "", "", "", "", "", "", "", "",
                  f"{total:.2f}", "", "", ""])
     return rows, total

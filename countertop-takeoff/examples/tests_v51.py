@@ -173,7 +173,7 @@ def documentation_tests(t):
             all(term in readme for term in ("git remote set-url origin $repoUrl",
                 "WriteAllText", "git pull --ff-only", "Separately-copied skill folder",
                 "does NOT update itself")))
-    t.check("release version is 5.1.0", "version: 5.1.0" in skill and "5.1.0" in readme)
+    t.check("release version is 5.1.0", "Version **5.1.0**" in readme)
 
 
 def publishing_tests(t):

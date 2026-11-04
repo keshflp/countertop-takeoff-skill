@@ -1,6 +1,5 @@
 ---
 name: countertop-takeoff
-version: 5.1.0
 description: >-
   Countertop takeoffs (SF, edge feet, splash, cutouts) from plan PDFs, DXF,
   and rasters. Preflights inputs; reads bitmap schedules with crop-hash evidence;

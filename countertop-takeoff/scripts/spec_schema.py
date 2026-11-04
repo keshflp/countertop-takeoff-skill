@@ -478,11 +478,15 @@ def validate_schedule(spec):
                     " col: str}} pointing at a transcribed evidence cell")
     variants = sched.get("variants", [])
     require(isinstance(variants, list), "schedule.variants must be a list")
+    variant_keys = set()
     for v in variants:
         vname = str(v.get("name", "")).strip()
         require(vname, "variant needs a name")
         require(v.get("type") in names,
                 f"variant {vname}: parent type {v.get('type')!r} not in types")
+        key = (v["type"], vname)
+        require(key not in variant_keys, f"duplicate schedule variant {key!r}")
+        variant_keys.add(key)
         pos_int(v.get("count"), f"variant {vname} count")
         require(isinstance(v.get("included_in_parent_total"), bool),
                 f"variant {vname}: included_in_parent_total must be an explicit"

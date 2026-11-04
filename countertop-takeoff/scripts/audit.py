@@ -287,9 +287,11 @@ def audit_schedule(spec, results, audit):
                   " counts once")
         return {}
     base = [r for r in results if r["kind"] == "base"]
+    construction = spec.get("_assemblies") or base
+    coverage_label = "assembly recorded" if spec.get("_assemblies") else "region measured"
     for t in sched["types"]:
         name = t["type"]
-        std = [r for r in base if r["type"] == name and r["variant"] is None]
+        std = [r for r in construction if r["type"] == name and r.get("variant") is None]
         incl = [v for v in sched.get("variants", [])
                 if v["type"] == name and v["included_in_parent_total"]]
         std_units = t["count"] - sum(v["count"] for v in incl)
@@ -304,7 +306,7 @@ def audit_schedule(spec, results, audit):
         elif not std:
             audit.add_callout(
                 f"schedule coverage type {name}",
-                f"schedule count {t['count']} but NO standard region measured"
+                f"schedule count {t['count']} but NO standard {coverage_label}"
                 " - the type's SF stays blank and its count is excluded from"
                 " extensions (never defaulted to 1)",
                 blank_fields=["area_sf", "extended_sf"],
@@ -314,16 +316,16 @@ def audit_schedule(spec, results, audit):
                       f"type {name}: count {t['count']} = {std_units} standard"
                       + (f" + {sum(v['count'] for v in incl)} variant" if incl
                          else "")
-                      + f" unit(s), {len(std)} standard region(s) measured"
+                      + f" unit(s), {len(std)} standard construction record(s)"
                       f" (evidence: sheet {sched['sheet']}, page"
                       f" {sched['page']}, row {t['row_text'][:60]!r})")
     for v in sched.get("variants", []):
-        vr = [r for r in base if r["type"] == v["type"] and r["variant"] == v["name"]]
+        vr = [r for r in construction if r["type"] == v["type"] and r.get("variant") == v["name"]]
         if not vr:
             audit.add_callout(
                 f"variant coverage {v['name']}",
                 f"variant {v['name']} of type {v['type']}: declared count"
-                f" {v['count']} but no region measured - its SF stays blank",
+                f" {v['count']} but no {coverage_label} - its SF stays blank",
                 blank_fields=["area_sf", "extended_sf"],
                 pages=[sched.get("page")])
         else:
@@ -331,7 +333,7 @@ def audit_schedule(spec, results, audit):
                       f"variant {v['name']} of type {v['type']}: count"
                       f" {v['count']}, included_in_parent_total"
                       f" {v['included_in_parent_total']},"
-                      f" measured separately (no double-count)")
+                      f" recorded separately (no double-count); resolved coverage checked in ledger")
     piece_regions = {p.get("region_id") for p in spec.get("_pieces") or []}
     extras = [r for r in base if sched is not None
               and r["variant"] is None
@@ -402,6 +404,22 @@ def reconcile_totals(sched, audit):
     return unit_total
 
 
+def validated_unit_total(sched):
+    """Room units after evidence and room reconciliation, never assembly EA.
+
+    Included variants partition a parent count; an unknown partition does
+    not invalidate an independently supported parent room total.
+    """
+    if not sched:
+        return None
+    contributions = list(sched["types"]) + [
+        v for v in sched.get("variants", [])
+        if not v["included_in_parent_total"]]
+    if any(r.get("_evidence_ok") is False for r in contributions):
+        return None
+    return sum(r["count"] for r in contributions)
+
+
 LEDGER_STATES = {"measured", "package_excluded", "superseded", "unresolved",
                  "included_scope"}
 
@@ -418,7 +436,7 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
     hotel-203 case - is its own unresolved entry), every scope-dispositioned
     page (superseded pages appear here, not just in callouts), assemblies
     and pieces. Entries distinguish measured evidence from included scope:
-    variants counted inside a parent total carry included_scope; package-
+    covered variants counted inside a parent total carry included_scope; package-
     excluded GR entries carry package_excluded with their measured-evidence
     detail.
     """
@@ -432,7 +450,73 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
             continue
         by_type.setdefault((r.get("type"), r.get("variant")), []).append(r)
 
+    assemblies_by_type = {}
+    for a in resolved.get("assemblies", {}).values():
+        assemblies_by_type.setdefault((a["type"], a.get("variant")), []).append(a)
+    quantity_bases = {a["assembly_id"]: a["quantity_basis"]
+                      for a in spec.get("_assemblies") or []}
+    room_tags = ((spec.get("schedule") or {}).get("room_inventory") or {}).get("rooms") or []
+    pieces_by_region = {}
+    for p in resolved.get("pieces", {}).values():
+        if p.get("region_id"):
+            pieces_by_region.setdefault(p["region_id"], []).append(p)
+
+    def construction_state(key, record):
+        ea, _ = resolve_assembly_ea(spec, {"quantity_basis": {
+            "mode": "room_type_count", "type": key[0], "variant": key[1]}})
+        if spec.get("_assemblies"):
+            rows = assemblies_by_type.get(key, [])
+            # Matching labels alone do not cover a scheduled room count.
+            # A prototype must use this schedule entry; enumerated work must
+            # cover distinct inventoried rooms, not multiple assemblies in one.
+            prototypes = [a for a in rows
+                          if quantity_bases[a["assembly_id"]].get("mode") == "room_type_count"
+                          and (quantity_bases[a["assembly_id"]].get("type"),
+                               quantity_bases[a["assembly_id"]].get("variant")) == key]
+            tagged_rooms = {r["room"] for r in room_tags
+                            if (r["type"], r.get("variant")) == key}
+            enumerated_rooms = {a["room"] for a in rows if a.get("room")
+                                and quantity_bases[a["assembly_id"]]["mode"] == "enumerated"}
+            if rows and ea != 0 and not prototypes and not (
+                    ea is not None and len(tagged_rooms) == ea
+                    and tagged_rooms <= enumerated_rooms):
+                return "unresolved", "construction quantity basis does not cover schedule entry - known quantities retained"
+            active = [a for a in rows if a["state"] != "package_excluded"]
+            if rows and not active:
+                return "package_excluded", "construction excluded by package policy"
+            if record.get("_evidence_ok") is False:
+                return "unresolved", "schedule count unsupported - extension withheld"
+            if not rows:
+                # All parent units may legitimately be allocated to variants.
+                if ea == 0:
+                    return "measured", "resolved zero; no standard construction needed"
+                return "unresolved", "declared but no assembly/piece construction - SF blank"
+            for a in active:
+                own = [resolved["pieces"].get(pid) for pid in a["pieces"]]
+                if (a.get("ea") is None or not own
+                        or any(p is None or p.get("orphan")
+                               or p.get("extension_sf") is None for p in own)):
+                    return "unresolved", "assembly/piece construction incomplete - SF blank"
+            return "measured", f"{len(active)} assembly record(s) with resolved construction"
+        if key[0] in excluded_types:
+            return "package_excluded", "type excluded by policy; reported separately"
+        if key[1] and not record["included_in_parent_total"]:
+            ea = record["count"] if record.get("_evidence_ok") is not False else None
+        if record.get("_evidence_ok") is False or ea is None:
+            return "unresolved", "schedule count unsupported - extension withheld"
+        rows = by_type.get(key, [])
+        if not rows or any(region_state(r) == "unresolved" for r in rows):
+            if not rows and ea == 0:
+                return "measured", "resolved zero; no standard region needed"
+            return "unresolved", "declared region coverage missing or unresolved - SF blank"
+        return "measured", f"{len(rows)} region(s) measured with schedule evidence"
+
     def region_state(r):
+        if not spec.get("_assemblies") and r.get("type") in excluded_types:
+            return "package_excluded"
+        pieces = pieces_by_region.get(r["region_id"], [])
+        if pieces and all(p["state"] == "package_excluded" for p in pieces):
+            return "package_excluded"
         if r["region_id"] in resolved.get("measured_orphans", []):
             return "unresolved"
         if r.get("status") == "unresolved":
@@ -457,57 +541,28 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
         sched = spec.get("schedule") or {"types": []}
         for t in sched.get("types", []):
             name = t["type"]
-            rows = by_type.get((name, None), [])
-            measured_rows = [r for r in rows if r.get("status") !=
-                             "unresolved"]
-            evidence_ok = t.get("_evidence_ok") is not False
-            if name in excluded_types:
-                state, detail = "package_excluded", (
-                    "count known but excluded by policy; reported separately")
-            elif not measured_rows:
-                state = "unresolved"
-                detail = ("schedule count present but no region measured -"
-                          " SF blank")
-            elif not evidence_ok:
-                state = "unresolved"
-                detail = ("measured SF but unsupported schedule count -"
-                          " extension withheld")
-            else:
-                state, detail = "measured", (
-                    f"{len(measured_rows)} region(s) measured with schedule"
-                    " evidence")
+            state, detail = construction_state((name, None), t)
             ledger.append({"item": f"type {name} x{t['count']}",
-                           "kind": "type",
+                           "kind": "type", "room_type": name,
                            "source": {"pages": [sched.get("page")]},
                            "state": state, "detail": detail})
         for v in sched.get("variants", []):
             key = (v["type"], v["name"])
-            rows = by_type.get(key, [])
-            measured_rows = [r for r in rows
-                             if r.get("status") != "unresolved"]
-            if v.get("_evidence_ok") is False:
-                state = "unresolved"
-                detail = ("variant evidence unsupported - extension"
-                          " withheld")
-            elif v["included_in_parent_total"]:
-                # counted INSIDE the parent total: included scope, not a
-                # separate measured count
+            state, detail = construction_state(key, v)
+            if state == "measured" and v["included_in_parent_total"]:
                 state = "included_scope"
-                detail = (f"{len(measured_rows)} region(s) measured; count"
-                          " included in the parent total (subtracted from"
-                          " it), never added again")
-            elif measured_rows:
-                state, detail = "measured", (
-                    f"{len(measured_rows)} region(s) measured")
-            else:
-                state = "unresolved"
-                detail = "declared but no region measured - SF blank"
+                detail += "; count included in parent total, never added again"
             ledger.append({
                 "item": f"variant {v['type']}:{v['name']} x{v['count']}",
-                "kind": "variant",
+                "kind": "variant", "room_type": v["type"], "variant": v["name"],
                 "source": {"pages": [sched.get("page")]},
                 "state": state, "detail": detail,
             })
+        for entry in ledger:
+            if entry["state"] == "unresolved" and entry["kind"] in {"type", "variant"}:
+                audit.add_callout(entry["item"], entry["detail"],
+                                  blank_fields=["extended_sf"],
+                                  pages=[sched.get("page")])
         for r in results:
             if r["kind"] != "base":
                 continue
@@ -1685,16 +1740,18 @@ def aggregate_types(spec, results, audit, resolved=None):
     for t in sched["types"]:
         name = t["type"]
         std = [r for r in base if r["type"] == name and r["variant"] is None]
-        incl = [v for v in sched.get("variants", [])
-                if v["type"] == name and v["included_in_parent_total"]]
-        std_units = t["count"] - sum(v["count"] for v in incl)
-        sf_unit = round(sum(r["area_sf"] for r in std), 4)
-        ext = sf_unit * std_units
-        if t.get("_evidence_ok") is False:
+        std_units, _ = resolve_assembly_ea(spec, {"quantity_basis": {
+            "mode": "room_type_count", "type": name}})
+        std_sf = round(sum(r["area_sf"] for r in std), 4)
+        std_unresolved = any(r.get("status") == "unresolved" for r in results
+                             if r["kind"] == "base" and r["type"] == name
+                             and r["variant"] is None)
+        sf_unit = std_sf if std and not std_unresolved else None
+        ext = std_sf * std_units if std_units is not None else 0.0
+        known = bool(std) and std_units is not None
+        if std_units is None:
             # unsupported schedule count: the measured per-unit SF is real
             # evidence, but the multiplication is withheld (blank)
-            std_units = 0
-            ext = 0.0
             audit.add_callout(
                 f"totals type {name}",
                 "schedule count unsupported - per-unit SF is measured but"
@@ -1704,7 +1761,8 @@ def aggregate_types(spec, results, audit, resolved=None):
                  "assembly": r.get("assembly"),
                  "material_canonical": r.get("material_canonical"),
                  "sf": r["area_sf"], "count": std_units,
-                 "extended_sf": round(r["area_sf"] * std_units, 2),
+                 "extended_sf": (round(r["area_sf"] * std_units, 2)
+                                 if std_units is not None else None),
                  "regions": [r]} for r in std]
         for v in sched.get("variants", []):
             if v["type"] != name:
@@ -1712,7 +1770,11 @@ def aggregate_types(spec, results, audit, resolved=None):
             vr = [r for r in base if r["type"] == name
                   and r["variant"] == v["name"]]
             vsf = round(sum(r["area_sf"] for r in vr), 4)
-            if v.get("_evidence_ok") is False:
+            variant_count, _ = resolve_assembly_ea(spec, {"quantity_basis": {
+                "mode": "room_type_count", "type": name, "variant": v["name"]}})
+            if not v["included_in_parent_total"]:
+                variant_count = v["count"] if v.get("_evidence_ok") is not False else None
+            if variant_count is None:
                 # P0.2: invalid variant evidence -> its SF extension is
                 # withheld (blank), not silently added
                 audit.add_callout(
@@ -1721,13 +1783,16 @@ def aggregate_types(spec, results, audit, resolved=None):
                     " withheld (blank), not added to the total",
                     blank_fields=["extended_sf"], pages=[sched.get("page")])
             else:
-                ext += vsf * v["count"]
+                ext += vsf * variant_count
+                known = known or bool(vr)
             rows += [{"room_type": name, "variant": v["name"],
                       "region_id": r["region_id"],
                       "assembly": r.get("assembly"),
                       "material_canonical": r.get("material_canonical"),
-                      "sf": r["area_sf"], "count": v["count"],
-                      "extended_sf": round(r["area_sf"] * v["count"], 2),
+                      "sf": r["area_sf"],
+                      "count": variant_count,
+                      "extended_sf": (round(r["area_sf"] * variant_count, 2)
+                                      if variant_count is not None else None),
                       "regions": [r]} for r in vr]
         if name in pkg_excluded_types:
             excluded_total += ext
@@ -1737,14 +1802,13 @@ def aggregate_types(spec, results, audit, resolved=None):
                       " separately, excluded from the project total")
         types.append({"room_type": name, "schedule_count": t["count"],
                       "std_units": std_units, "sf_per_unit": sf_unit,
-                      "extended_sf": round(ext, 2), "rows": rows})
+                      "extended_sf": (round(ext, 2) if known or name in pkg_excluded_types
+                                      else None), "rows": rows})
         total += ext
     total = round(total, 2)
-    units = sum(t["count"] for t in sched["types"]) + sum(
-        v["count"] for v in sched.get("variants", [])
-        if not v["included_in_parent_total"])
+    units = validated_unit_total(sched)
     audit.add("totals", "pass",
-              f"repeated_types: {len(types)} type(s), {units} unit(s),"
+              f"repeated_types: {len(types)} type(s), {units if units is not None else 'BLANK'} unit(s),"
               f" project total {total:.2f} SF"
               + (f" (+ {round(excluded_total, 2):.2f} SF package-excluded,"
                  " reported separately)" if excluded_total else ""))
@@ -1782,6 +1846,8 @@ def aggregate_types_resolved(spec, resolved, audit, base):
             groups[name]["known"] = True
         if any(p.get("extension_sf") is None for p in active_own):
             groups[name]["unknown"] = True
+        if arow["state"] != "package_excluded" and not active_own:
+            groups[name]["unknown"] = True
         region_meta = next((p["region_meta"] for p in own
                             if p.get("region_meta")), None)
         first_pid = (own[0]["piece_id"] if own else arow["assembly_id"])
@@ -1814,8 +1880,13 @@ def aggregate_types_resolved(spec, resolved, audit, base):
             groups[name]["rows"].append(row)
             continue
         groups[name]["extended"] += ext
-        groups[name]["ea"] += arow.get("ea") or 0
-        groups[name]["sf_pi"] += arow.get("sf_per_instance") or 0.0
+        ea, sf_pi = arow.get("ea"), arow.get("sf_per_instance")
+        groups[name]["ea"] = (groups[name]["ea"] + ea
+                               if groups[name]["ea"] is not None and ea is not None
+                               else None)
+        groups[name]["sf_pi"] = (groups[name]["sf_pi"] + sf_pi
+                                  if groups[name]["sf_pi"] is not None and sf_pi is not None
+                                  else None)
         groups[name]["rows"].append(row)
     types = []
     total = 0.0
@@ -1833,7 +1904,7 @@ def aggregate_types_resolved(spec, resolved, audit, base):
             "room_type": name,
             "schedule_count": sched_count,
             "std_units": g["ea"],
-            "sf_per_unit": round(g["sf_pi"], 4),
+            "sf_per_unit": round(g["sf_pi"], 4) if g["sf_pi"] is not None else None,
             "extended_sf": type_total,
             "complete": (not g["unknown"]),
             "excluded_extended_sf": round(g["excluded"], 2),
@@ -1850,7 +1921,8 @@ def aggregate_types_resolved(spec, resolved, audit, base):
                   f"type rows sum to {total:.2f} SF but the resolved project"
                   f" total is {resolved_total:.2f} SF - internal model"
                   " inconsistency")
-    unit_count = sum(t["std_units"] for t in types)
+    unit_count = (sum(t["std_units"] for t in types)
+                  if all(t["std_units"] is not None for t in types) else "BLANK")
     audit.add("totals", "pass",
               f"resolved model: {len(types)} type(s), {unit_count} unit(s),"
               f" project total {total:.2f} SF"

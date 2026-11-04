@@ -32,6 +32,12 @@ Sections, in order:
 
 Input dispositions (`measured | intentionally_skipped | superseded | unresolved`)
 describe page plans; coverage-ledger states describe resolved output scope.
+An included variant earns `included_scope` only when its construction is
+resolved (assembly/pieces, including stated dimensions, or legacy regions).
+Repeated assemblies must use the matching schedule type/variant quantity basis;
+enumerated assemblies cover distinct rooms in the recorded room inventory.
+Missing or unresolved construction makes its type and project incomplete;
+package-excluded construction stays excluded. Known SF survives as a subtotal.
 
 ## 2. CSV (`--csv`) — completed runs, including callouts
 
@@ -93,6 +99,13 @@ Schema: `countertop-takeoff/v3 results`. Input-derived selections follow the
 | `assembly_boq[]`, `piece_boq[]` | Resolved quantities (§1/§2) |
 | `unavailable_inputs[]` | `item`, `detail`, optional `source` |
 | `review_status`, `geometry_page_classes` | Initially `independent_audit_pending`; page-to-class mapping |
+
+Active aggregate counts and SF per unit stay `null` if any contribution is
+unknown; reports and CSVs show blank markers. Genuine zero stays zero, and
+excluded assemblies do not affect active aggregates. `unit_count` uses counts
+validated by schedule evidence and room reconciliation, independently of summed
+`assembly_ea`. An unknown included-variant split can leave the parent room count
+known while assembly EA is withheld.
 
 `audit_pack.py --record-receipt` writes `results.json.receipt.json` without
 modifying results: `status: independent_audit_recorded`, `reviewer`, `verdict`

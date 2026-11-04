@@ -4,6 +4,7 @@
 # ///
 """Bounded SIMPLIFY regressions; run with uv run examples/tests_simplify.py."""
 import json
+import copy
 import io
 import hashlib
 import math
@@ -19,17 +20,36 @@ from shapely.geometry import Polygon
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import calibrate
 import cad_input
+import audit
 import audit_pack
 import estimate
 import image_measure
 import intake
 import measure
 import proposal
+import spec_schema
 import pymupdf
 from audit import Audit, audit_region_checks
 
 
 class SimplifyRegressions(unittest.TestCase):
+    def test_variant_identity_is_unique_within_parent(self):
+        boxes = [{"t": "2", "x0": 0, "y0": 0, "x1": 10, "y1": 10}]
+        for included in (False, True):
+            with self.subTest(included=included):
+                variant = {"type": "A", "name": "ADA", "count": 2,
+                           "included_in_parent_total": included,
+                           "row_text": "ADA 2", "word_boxes": boxes}
+                spec = {"mode": "repeated_types", "_sources": [{"source_id": "plans"}], "schedule": {
+                    "page": 1, "sheet": "S1", "types": [
+                        {"type": name, "count": 10, "row_text": f"{name} 10",
+                         "word_boxes": boxes} for name in ("A", "B")],
+                    "variants": [variant, copy.deepcopy(variant)]}}
+                with self.assertRaisesRegex(spec_schema.SpecError, "duplicate schedule variant"):
+                    spec_schema.validate_schedule(spec)
+                spec["schedule"]["variants"][1]["type"] = "B"
+                spec_schema.validate_schedule(spec)
+
     def test_pricing_manifest_aliases_preserve_inputs(self):
         for command in ("estimate", "proposal"):
             for linked in (False, True):
@@ -455,6 +475,363 @@ class SimplifyRegressions(unittest.TestCase):
                 self.assertFalse(result["quality"]["usable"])
                 self.assertEqual(result["anchor_independence"]["usable_anchors"], 1)
                 self.assertTrue(result["warnings"])
+
+
+class CoverageAndAggregateRegressions(unittest.TestCase):
+    """Synthetic selections verify arithmetic/failure behavior, not unseen-plan recognition."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tests_v2
+        from test_support import sh
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.tmp.name)
+        skill = Path(__file__).resolve().parents[1]
+        pdf = cls.root / "orig.pdf"
+        geo = cls.root / "orig.geometry.json"
+        sh(str(skill / "examples/make_fixture.py"), "--out", str(pdf))
+        sh(str(skill / "scripts/extract_geometry.py"), str(pdf),
+           "--pages", "all", "--out", str(geo))
+        cls.fixture = tests_v2.spec_original({"orig": str(pdf)}, {"orig": str(geo)})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def original(self, assemblies=True):
+        spec = copy.deepcopy(self.fixture)
+        if assemblies:
+            spec["assemblies"], spec["pieces"] = [], []
+            for name in ("A", "B"):
+                regions = [r for r in spec["regions"] if r["kind"] == "base" and r["type"] == name]
+                spec["assemblies"].append({"assembly_id": name, "type": name, "package": "millwork",
+                    "quantity_basis": {"mode": "room_type_count", "type": name},
+                    "pieces": ["p:" + r["region_id"] for r in regions]})
+                spec["pieces"] += [{"piece_id": "p:" + r["region_id"], "assembly_id": name,
+                    "route": "geometry", "region_id": r["region_id"]} for r in regions]
+        return spec
+
+    def variant(self, spec, included=True, construction="missing"):
+        spec["schedule"]["variants"] = [{"type": "A", "name": "ADA", "count": 2,
+            "included_in_parent_total": included, "row_text": "ADA 2",
+            "word_boxes": copy.deepcopy(spec["schedule"]["types"][1]["word_boxes"])}]
+        if construction != "missing":
+            spec["assemblies"].append({"assembly_id": "ADA", "type": "A", "variant": "ADA",
+                "package": "millwork", "quantity_basis": {"mode": "room_type_count", "type": "A",
+                "variant": "ADA"}, "pieces": ["p:ADA"]})
+            spec["pieces"].append({"piece_id": "p:ADA", "assembly_id": "ADA", "route": "stated",
+                "dims_in": {"width": None if construction == "unknown" else 24, "depth": 24}})
+
+    def run_job(self, spec, tag, price=False):
+        job, result, report, csv = [self.root / (tag + suffix) for suffix in
+                                    (".jobs.json", ".results.json", ".report.md", ".csv")]
+        job.write_text(json.dumps(spec), encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(measure.main([str(job), "--json", str(result),
+                                           "--report", str(report), "--csv", str(csv)]), 0)
+        payload = json.loads(result.read_text(encoding="utf-8"))
+        if not price:
+            return payload, report.read_text(encoding="utf-8")
+        rates, est_path = [self.root / (tag + suffix) for suffix in (".rates.json", ".estimate.json")]
+        rates.write_text(json.dumps({"currency": "USD", "rates": [
+            {"item_code": name, "match": {"assembly_kind": name}, "uom": "EA", "unit_price": 100}
+            for name in sorted({a["type"] for a in payload["assembly_boq"]})]}), encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            est = estimate.build_estimate(str(result), str(rates), out_json=str(est_path))
+            prop = proposal.build_proposal(str(result), str(est_path), str(rates))
+        return payload, est, prop
+
+    def type_a(self, payload):
+        return next(t for t in payload["types"] if t["room_type"] == "A")
+
+    def test_missing_variants_withhold_complete_totals(self):
+        for assemblies in (False, True):
+            for included in (False, True):
+                with self.subTest(assemblies=assemblies, included=included):
+                    spec = self.original(assemblies)
+                    self.variant(spec, included)
+                    tag = f"missing-{assemblies}-{included}"
+                    if assemblies:
+                        payload, est, prop = self.run_job(spec, tag, price=True)
+                        self.assertIsNone(est["grand_total"])
+                        self.assertIsNone(prop["grand_total"])
+                        self.assertEqual(est["priced_subtotal"], 300 if included else 500)
+                    else:
+                        payload, _ = self.run_job(spec, tag)
+                    entry = next(e for e in payload["coverage_ledger"] if e["kind"] == "variant")
+                    self.assertEqual(entry["state"], "unresolved")
+                    self.assertFalse(payload["totals"]["project_sf_complete"])
+                    self.assertFalse(self.type_a(payload).get("complete", True))
+                    self.assertEqual(payload["totals"]["known_subtotal_sf"], 92.25 if included else 168.75)
+
+    def test_stated_variant_construction_earns_coverage(self):
+        for included in (False, True):
+            with self.subTest(included=included):
+                spec = self.original()
+                self.variant(spec, included, "stated")
+                # Also cover a schedule type entirely through stated pieces.
+                spec["pieces"] = [p for p in spec["pieces"] if p["assembly_id"] != "A"]
+                spec["pieces"].append({"piece_id": "p:stated-A", "assembly_id": "A", "route": "stated",
+                                       "dims_in": {"width": 24, "depth": 24}})
+                spec["assemblies"][0]["pieces"] = ["p:stated-A"]
+                spec["regions"] = [r for r in spec["regions"] if r["type"] != "A"]
+                spec["scope"]["pages"][1].update(disposition="intentionally_skipped", reason="stated construction")
+                payload, est, prop = self.run_job(spec, f"stated-{included}", price=True)
+                entry = next(e for e in payload["coverage_ledger"] if e["kind"] == "variant")
+                self.assertEqual(entry["state"], "included_scope" if included else "measured")
+                self.assertTrue(payload["totals"]["project_sf_complete"])
+                self.assertTrue(self.type_a(payload)["complete"])
+                self.assertEqual(payload["totals"]["project_sf"], 66 if included else 74)
+                self.assertEqual(est["grand_total"], 500 if included else 700)
+                self.assertEqual(prop["grand_total"], est["grand_total"])
+                self.assertFalse(any("no region measured" in c["reason"] for c in payload["callouts"]))
+
+    def test_variant_construction_must_cover_its_schedule_quantity(self):
+        for included in (False, True):
+            for basis in ({"mode": "enumerated"},
+                          {"mode": "room_type_count", "type": "A"},
+                          {"mode": "room_type_count", "type": "B"}):
+                with self.subTest(included=included, basis=basis):
+                    spec = self.original()
+                    self.variant(spec, included, "stated")
+                    spec["assemblies"][-1]["quantity_basis"] = basis
+                    payload, est, prop = self.run_job(spec, f"wrong-basis-{included}-{basis.get('type')}", price=True)
+                    entry = next(e for e in payload["coverage_ledger"] if e["kind"] == "variant")
+                    self.assertEqual(entry["state"], "unresolved")
+                    self.assertFalse(self.type_a(payload)["complete"])
+                    self.assertFalse(payload["totals"]["project_sf_complete"])
+                    self.assertGreater(est["priced_subtotal"], 0)
+                    self.assertIsNone(est["grand_total"])
+                    self.assertIsNone(prop["grand_total"])
+                    ada = next(a for a in payload["assembly_boq"] if a["assembly_id"] == "ADA")
+                    self.assertEqual(ada["ea"], 1 if basis["mode"] == "enumerated" else
+                                     (2 if basis["type"] == "B" else 1 if included else 3))
+
+    def test_excluded_construction_must_still_correspond_to_schedule(self):
+        spec = self.original()
+        self.variant(spec, included=False, construction="stated")
+        spec["assemblies"][-1].update(package="FFE", quantity_basis={"mode": "enumerated"})
+        spec["policy"]["packages"] = {"exclude": ["FFE"]}
+        payload, est, prop = self.run_job(spec, "excluded-wrong-basis", price=True)
+        self.assertEqual(next(e for e in payload["coverage_ledger"] if e["kind"] == "variant")["state"], "unresolved")
+        self.assertIsNone(est["grand_total"])
+        self.assertIsNone(prop["grand_total"])
+
+    def test_stated_type_single_enumerated_record_is_only_partial(self):
+        spec = self.original()
+        spec["assemblies"][0].update(quantity_basis={"mode": "enumerated"}, pieces=["p:stated-A"])
+        spec["pieces"] = [p for p in spec["pieces"] if p["assembly_id"] != "A"]
+        spec["pieces"].append({"piece_id": "p:stated-A", "assembly_id": "A", "route": "stated",
+                               "dims_in": {"width": 24, "depth": 24}})
+        spec["regions"] = [r for r in spec["regions"] if r["type"] != "A"]
+        spec["scope"]["pages"][1].update(disposition="intentionally_skipped", reason="stated dimensions")
+        payload, est, prop = self.run_job(spec, "stated-type-enumerated", price=True)
+        self.assertFalse(self.type_a(payload)["complete"])
+        self.assertEqual(self.type_a(payload)["extended_sf"], 4)
+        self.assertEqual(payload["totals"]["project_sf"], 58)
+        self.assertEqual(est["priced_subtotal"], 300)
+        self.assertIsNone(est["grand_total"])
+        self.assertIsNone(prop["grand_total"])
+
+    def test_enumerated_schedule_coverage_counts_distinct_inventoried_rooms(self):
+        for duplicate_room in (False, True):
+            with self.subTest(duplicate_room=duplicate_room):
+                spec = self.original()
+                spec["assemblies"] = [a for a in spec["assemblies"] if a["type"] != "A"]
+                spec["pieces"] = [p for p in spec["pieces"] if p["assembly_id"] != "A"]
+                spec["regions"] = [r for r in spec["regions"] if r["type"] != "A"]
+                spec["scope"]["pages"][1].update(disposition="intentionally_skipped", reason="stated room dimensions")
+                spec["schedule"]["room_inventory"] = {"rooms": [
+                    {"room": str(i), "type": "A", "page": 2} for i in range(3)],
+                    "per_type_counts": {"A": 3}}
+                for i in range(3):
+                    aid = f"enum-{i}"
+                    spec["assemblies"].append({"assembly_id": aid, "type": "A", "package": "millwork",
+                        "room": "0" if duplicate_room else str(i), "quantity_basis": {"mode": "enumerated"},
+                        "pieces": [aid]})
+                    spec["pieces"].append({"piece_id": aid, "assembly_id": aid, "route": "stated",
+                        "dims_in": {"width": 24, "depth": 24}})
+                payload, est, prop = self.run_job(spec, f"enum-rooms-{duplicate_room}", price=True)
+                state = next(e["state"] for e in payload["coverage_ledger"] if e["kind"] == "type" and e["room_type"] == "A")
+                self.assertEqual(state, "unresolved" if duplicate_room else "measured")
+                self.assertEqual(payload["totals"]["assembly_ea"], 5)
+                self.assertEqual(payload["totals"]["project_sf_complete"], not duplicate_room)
+                self.assertEqual(est["grand_total"], None if duplicate_room else 500)
+                self.assertEqual(prop["grand_total"], est["grand_total"])
+
+    def test_unresolved_variant_preserves_valid_ea_and_known_sf(self):
+        for included in (False, True):
+            with self.subTest(included=included):
+                spec = self.original()
+                self.variant(spec, included, "unknown")
+                payload, est, prop = self.run_job(spec, f"unknown-variant-{included}", price=True)
+                self.assertEqual(next(e for e in payload["coverage_ledger"] if e["kind"] == "variant")["state"], "unresolved")
+                self.assertFalse(self.type_a(payload)["complete"])
+                self.assertIsNone(self.type_a(payload)["sf_per_unit"])
+                self.assertEqual(self.type_a(payload)["std_units"], 3 if included else 5)
+                self.assertEqual(payload["totals"]["project_sf"], 92.25 if included else 168.75)
+                self.assertEqual(est["priced_subtotal"], 500 if included else 700)
+                self.assertIsNone(est["grand_total"])
+                self.assertIsNone(prop["grand_total"])
+
+    def test_legacy_unresolved_variant_region_is_not_covered(self):
+        spec = self.original(False)
+        self.variant(spec)
+        for r in spec["regions"]:
+            if r["type"] == "A":
+                r["variant"] = "ADA"
+                if r["kind"] == "base":
+                    r["expected_sf_range"] = [200, 300]
+        payload, _ = self.run_job(spec, "legacy-unknown-variant")
+        self.assertEqual(next(e for e in payload["coverage_ledger"] if e["kind"] == "variant")["state"], "unresolved")
+        self.assertFalse(payload["totals"]["project_sf_complete"])
+
+    def test_legacy_measured_included_variant_is_covered(self):
+        spec = self.original(False)
+        self.variant(spec)
+        for r in spec["regions"]:
+            if r["type"] == "A":
+                r["variant"] = "ADA"
+        payload, _ = self.run_job(spec, "legacy-covered-variant")
+        self.assertEqual(next(e for e in payload["coverage_ledger"] if e["kind"] == "variant")["state"], "included_scope")
+        self.assertEqual(payload["totals"]["project_sf"], 130.5)
+        self.assertFalse(self.type_a(payload).get("complete", True))  # The standard unit has no construction.
+
+    def test_package_excluded_unknown_variant_does_not_contaminate_scope(self):
+        spec = self.original()
+        self.variant(spec, construction="unknown")
+        spec["assemblies"][-1]["package"] = "FFE"
+        spec["policy"]["packages"] = {"exclude": ["FFE"]}
+        payload, est, prop = self.run_job(spec, "excluded-variant", price=True)
+        self.assertEqual(next(e for e in payload["coverage_ledger"] if e["kind"] == "variant")["state"], "package_excluded")
+        self.assertTrue(payload["totals"]["project_sf_complete"])
+        self.assertTrue(self.type_a(payload)["complete"])
+        self.assertEqual(self.type_a(payload)["sf_per_unit"], 38.25)
+        self.assertEqual(payload["totals"]["assembly_ea"], 3)
+        self.assertEqual(est["grand_total"], 300)
+        self.assertEqual(prop["grand_total"], 300)
+
+    def test_withheld_counts_remain_null_in_active_aggregates_and_report(self):
+        for assemblies in (False, True):
+            for all_unknown in (False, True):
+                with self.subTest(assemblies=assemblies, all_unknown=all_unknown):
+                    spec = self.original(assemblies)
+                    spec["schedule"]["types"][0]["count"] = 30
+                    if all_unknown:
+                        spec["schedule"]["types"][1]["count"] = 20
+                    spec["schedule"]["stated_totals"]["project"] = 50 if all_unknown else 32
+                    tag = f"withheld-{assemblies}-{all_unknown}"
+                    payload, report = self.run_job(spec, tag)
+                    self.assertIsNone(self.type_a(payload)["std_units"])
+                    self.assertIsNone(self.type_a(payload)["extended_sf"])
+                    self.assertIsNone(payload["totals"]["assembly_ea"])
+                    self.assertIsNone(payload["totals"]["unit_count"])
+                    self.assertEqual(payload["totals"]["project_sf"], 0 if all_unknown else 54)
+                    if assemblies:
+                        self.assertIn("### A - resolved EA __blank__", report)
+                        self.assertIn("Assembly EA total: __blank__ EA", report)
+                        self.assertIn("__blank__ unit(s) in the room schedule", report)
+                    else:
+                        self.assertIn("(__blank__ standard unit(s) + variants)", report)
+                    self.assertIn("__blank__", (self.root / (tag + ".csv")).read_text(encoding="utf-8"))
+                    self.assertEqual(self.type_a(payload)["sf_per_unit"], 38.25)
+
+    def test_mixed_known_unknown_counts_within_type_remain_null(self):
+        spec = self.original()
+        spec["schedule"]["types"][0]["count"] = 30
+        spec["assemblies"].append({"assembly_id": "extra-A", "type": "A", "package": "public_BOH",
+            "quantity_basis": {"mode": "enumerated"}, "pieces": ["p:extra-A"]})
+        spec["pieces"].append({"piece_id": "p:extra-A", "assembly_id": "extra-A", "route": "stated",
+            "dims_in": {"width": 24, "depth": 24}})
+        payload, _ = self.run_job(spec, "mixed-withheld")
+        self.assertIsNone(self.type_a(payload)["std_units"])
+        self.assertEqual(self.type_a(payload)["extended_sf"], 4)
+        self.assertFalse(self.type_a(payload)["complete"])
+        self.assertEqual(payload["totals"]["project_sf"], 58)
+
+    def test_unknown_sf_preserves_partial_piece_subtotal(self):
+        spec = self.original()
+        p = next(p for p in spec["pieces"] if p["piece_id"] == "p:A:vanity")
+        p.update(route="stated", dims_in={"width": None, "depth": 24})
+        spec["regions"] = [r for r in spec["regions"] if r["region_id"] != "A:vanity"]
+        spec["scope"]["pages"][1]["expected_regions"].remove("A:vanity")
+        payload, _ = self.run_job(spec, "partial-assembly")
+        self.assertIsNone(self.type_a(payload)["sf_per_unit"])
+        self.assertEqual(self.type_a(payload)["extended_sf"], 93.75)
+        self.assertFalse(self.type_a(payload)["complete"])
+        self.assertEqual(payload["totals"]["assembly_ea"], 5)
+        self.assertEqual(payload["totals"]["project_sf"], 147.75)
+
+    def test_all_unknown_sf_stays_null(self):
+        spec = {"_assemblies": [{"assembly_id": "one", "type": "PUB", "package": "public_BOH",
+            "quantity_basis": {"mode": "enumerated"}, "pieces": ["p"]}],
+            "_pieces": [{"piece_id": "p", "assembly_id": "one", "route": "stated",
+                         "dims_in": {"width": None, "depth": 24}}]}
+        a = Audit()
+        resolved = audit.resolve_quantities(spec, [], a)
+        types, _ = audit.aggregate_types_resolved(spec, resolved, a, [])
+        self.assertIsNone(types[0]["sf_per_unit"])
+        self.assertIsNone(types[0]["extended_sf"])
+        self.assertEqual(types[0]["std_units"], 1)
+
+    def test_genuine_zero_stays_zero_despite_missing_variant_scope(self):
+        spec = self.original()
+        self.variant(spec)
+        spec["schedule"]["variants"][0].update(count=3,
+            word_boxes=copy.deepcopy(spec["schedule"]["types"][0]["word_boxes"]))
+        payload, report = self.run_job(spec, "genuine-zero")
+        zero = self.type_a(payload)
+        self.assertEqual(zero["std_units"], 0)
+        self.assertEqual(zero["extended_sf"], 0)
+        self.assertFalse(zero.get("complete", True))
+        self.assertEqual(payload["totals"]["assembly_ea"], 2)
+        self.assertIn("### A - resolved EA 0", report)
+
+    def test_all_parent_units_can_be_covered_by_stated_variant_only(self):
+        spec = self.original()
+        self.variant(spec, construction="stated")
+        spec["schedule"]["variants"][0].update(count=3,
+            word_boxes=copy.deepcopy(spec["schedule"]["types"][0]["word_boxes"]))
+        spec["assemblies"] = [a for a in spec["assemblies"] if a["assembly_id"] != "A"]
+        spec["pieces"] = [p for p in spec["pieces"] if p["assembly_id"] != "A"]
+        spec["regions"] = [r for r in spec["regions"] if r["type"] != "A"]
+        spec["scope"]["pages"][1].update(disposition="intentionally_skipped", reason="stated construction")
+        payload, est, prop = self.run_job(spec, "variant-only", price=True)
+        self.assertTrue(self.type_a(payload)["complete"])
+        self.assertTrue(payload["totals"]["project_sf_complete"])
+        self.assertEqual(payload["totals"]["project_sf"], 66)
+        self.assertEqual(est["grand_total"], 500)
+        self.assertEqual(prop["grand_total"], 500)
+
+    def test_room_total_is_validated_after_reconciliation(self):
+        spec = self.original()
+        spec["schedule"]["room_inventory"] = {"rooms": [
+            {"room": "101", "type": "A", "page": 2}], "per_type_counts": {"A": 1}}
+        payload, _ = self.run_job(spec, "room-mismatch")
+        self.assertIsNone(payload["totals"]["unit_count"])
+        self.assertIsNone(self.type_a(payload)["std_units"])
+
+    def test_unknown_included_split_preserves_parent_room_total(self):
+        spec = self.original()
+        self.variant(spec, construction="stated")
+        spec["schedule"]["variants"][0]["count"] = 1  # Retained evidence quotes 2.
+        payload, _ = self.run_job(spec, "unknown-included-split")
+        self.assertEqual(payload["totals"]["unit_count"], 5)
+        self.assertIsNone(payload["totals"]["assembly_ea"])
+        spec["schedule"]["variants"][0]["included_in_parent_total"] = False
+        payload, _ = self.run_job(spec, "unknown-additional-count")
+        self.assertIsNone(payload["totals"]["unit_count"])
+
+    def test_excluded_unknown_counts_do_not_contaminate_assembly_ea(self):
+        spec = self.original()
+        spec["schedule"]["types"][0]["count"] = 30
+        spec["assemblies"][0]["package"] = "FFE"
+        spec["policy"]["packages"] = {"exclude": ["FFE"]}
+        payload, _ = self.run_job(spec, "excluded-unknown-count")
+        self.assertEqual(payload["totals"]["assembly_ea"], 2)
+        self.assertEqual(payload["totals"]["project_sf"], 54)
+        self.assertTrue(payload["totals"]["project_sf_complete"])
+        self.assertIsNone(payload["totals"]["unit_count"])  # Still an unknown number of rooms.
 
 
 if __name__ == "__main__":

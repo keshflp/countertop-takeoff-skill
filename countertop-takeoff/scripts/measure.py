@@ -443,7 +443,7 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
     # V5 (P1.1): room counts (the schedule/inventory unit count) stay
     # DISTINCT from the summed assembly EA - both are reported, neither
     # overwrites the other
-    schedule_unit_total = unit_total
+    schedule_unit_total = audit_mod.validated_unit_total(spec.get("schedule"))
     profile_summary = None
     if profile:
         profile_summary = {k: profile.get(k) for k in (
@@ -457,6 +457,11 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
     ledger = audit_mod.build_coverage_ledger(
         spec, results, audit_obj, results_by_id=results_by_id,
         resolved=resolved)
+    incomplete_types = {e["room_type"] for e in ledger
+                        if e["kind"] in {"type", "variant"}
+                        and e["state"] == "unresolved"}
+    for t in types:
+        t["complete"] = t.get("complete", True) and t["room_type"] not in incomplete_types
     assembly_rows = audit_mod.build_assembly_boq(spec, audit_obj, resolved)
     piece_rows = audit_mod.build_piece_boq(spec, audit_obj, resolved)
     audit_mod.audit_dual_boq(assembly_rows, piece_rows, audit_obj,
@@ -471,9 +476,10 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
                       if p["state"] != "package_excluded"
                       and not p.get("orphan")
                       and p.get("extension_sf") is None]
-    assembly_ea = (sum(a.get("ea") or 0 for a in assembly_rows
-                       if a["state"] != "package_excluded")
-                   if spec.get("_assemblies") else None)
+    active_ea = [a.get("ea") for a in assembly_rows
+                 if a["state"] != "package_excluded"]
+    assembly_ea = (sum(active_ea) if spec.get("_assemblies")
+                   and all(ea is not None for ea in active_ea) else None)
     from scope_state import unresolved_scope
     scope_unknown = unresolved_scope(ledger, spec.get("_unavailable_inputs") or [])
     totals_meta = {
@@ -494,7 +500,7 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
         print(f"wrote {args.report}")
     payload = report_out.build_results(
         spec, geometry_map, calibrations, types, total, audit_obj, results,
-        review_status, settings, unit_total, coverage_ledger=ledger)
+        review_status, settings, schedule_unit_total, coverage_ledger=ledger)
     payload["run_status"] = run_status
     payload["status"] = run_status
     payload["assembly_boq"] = assembly_rows
@@ -503,8 +509,6 @@ def finish(spec, geometry_map, calibrations, audit_obj, results, unit_total,
     payload["totals"].update(totals_meta)
     payload["scope_incomplete"] = scope_unknown
     payload["unavailable_inputs"] = spec.get("_unavailable_inputs") or []
-    payload["totals"]["unit_count"] = schedule_unit_total
-    payload["totals"]["assembly_ea"] = assembly_ea
     payload["totals"]["excluded_package_sf"] = round(
         resolved.get("excluded_total_sf", 0.0), 2)
     payload["totals"]["piece_view_sf"] = round(
