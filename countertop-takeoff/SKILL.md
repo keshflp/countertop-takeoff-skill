@@ -89,6 +89,13 @@ evidence is withheld (blank + callout) — the invented-count guard.
    full-plan tracing. Stated dimensions beat scaling: DO NOT SCALE DRAWINGS
    sheets get stated values from sections/elevations joined to plan lengths.
 
+   For a selected scan detail, optional `scripts/scan_detail.py` cleans a
+   separate copy and suggests closed linework. Inspect the ORIGINAL and
+   suggestion overlay; explicitly adopt/edit an outline before supplying
+   points to `image_measure.py`. Suggestions are not countertop recognition,
+   calibration, measurement proof or completeness. See the
+   [scan assistance procedure](references/method.md#selected-scan-detail-assistance).
+
 ### Step 4. Build the job spec
 `references/job-spec-v3.md` is the schema; `examples/fixture.jobs.json` and
 the output of `examples/make_hotel_jobs.py` are working examples. You write

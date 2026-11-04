@@ -106,6 +106,44 @@ labeled anchors, selected boundary points, and mandatory overlay proof.
 Measurement recomputes area from selections; changing a result number while
 retaining pixels fails evidence validation. CAD/image bytes are re-hashed.
 
+### Selected scan-detail assistance
+
+Optional, local, free OpenCV assistance for a selected PNG crop:
+
+```powershell
+uv run scripts/scan_detail.py --crop build/detail.png --out-dir build/detail-suggestions --provenance build/detail.provenance.json
+```
+
+The optional provenance JSON contains `source_id`, 1-based `page`, displayed
+`crop_bbox: [x0,y0,x1,y1]`, and `render_zoom`. Use a pixel-aligned bbox (each
+coordinate times zoom is an integer) matching the original PNG dimensions.
+The helper records this declaration; it does not verify the PDF source.
+Without provenance, page mapping stays null. uv installs pinned OpenCV/NumPy
+only for this helper; ordinary measurement commands need neither.
+
+Outputs are `cleaned.png`, `suggestions.png` (on the original pixels), and
+`suggestions.json`. Local thresholding and tiny-speck removal preserve pixel
+positions and dimensions: no deskew, resize, gap closing, or new size reference.
+JSON records identity cleanup mapping, optional crop-to-page mapping, original
+hash, and unreviewed outline points in ORIGINAL crop pixels. File aliases
+refuse before writing, protecting the original and optional provenance file.
+
+Inspect both original and overlay. A closed contour can be a cabinet, sink or
+wall; overlapping/nested outlines are alternatives, never additive scope.
+Explicitly choose/edit one appropriate outline's `points` into a NEW points
+JSON. Do not feed the suggestions JSON directly to measurement. Run
+`image_measure.py` on the ORIGINAL crop, with independently selected readable
+dimension anchors and the matching source/page/bbox/zoom. Its own anchor and
+boundary overlay remains mandatory; a suggestion overlay is not that proof.
+If labels or extents are unreadable, reject the suggestion and retain named
+BLANK quantities. Enlarging or cleaning a blurry scan proves no extra detail.
+
+This helper outputs no quantities, counts, quality acceptance or job status.
+Unadopted suggestions never enter the takeoff, and omission/completeness and
+pricing rules still apply. [Generated experiment evidence](scan-detail-experiment.md)
+describes its observed misses, false proposals and geometry differences;
+real checked drawings have not been evaluated.
+
 ## 4. Resolved quantities and audit
 
 The run ASSERTS the PIECE and ASSEMBLY BoQs agree over the SAME fully resolved
