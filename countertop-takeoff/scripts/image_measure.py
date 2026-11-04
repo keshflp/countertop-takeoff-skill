@@ -84,6 +84,10 @@ def measure_from_points(anchors, points):
     for i, a in enumerate(anchors):
         real_ft = a.get("real_ft")
         parsed = cal_mod.parse_dim_text(a.get("label") or "")
+        if parsed is not None and parsed <= 0:
+            warnings.append(f"anchor {i} label {a.get('label')!r}:"
+                            " parsed dimension must be positive")
+            continue
         if real_ft is None:
             real_ft = parsed
         if not real_ft or real_ft <= 0:

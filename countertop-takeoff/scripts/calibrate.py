@@ -136,6 +136,9 @@ def calibrate_entry(entry, page):
         text = word_line_text(label_ids, words_by_id)
         real_ft = sp.get("real_ft")
         parsed = parse_dim_text(text)
+        if parsed is not None and parsed <= 0:
+            raise CalibrationError(
+                f"span {i} ({text!r}): parsed dimension must be positive")
         if real_ft is not None:
             if not finite(real_ft) or real_ft <= 0:
                 raise CalibrationError(
