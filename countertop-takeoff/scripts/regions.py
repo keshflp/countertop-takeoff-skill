@@ -22,10 +22,9 @@ V2 rules (all errors are hard stops with explicit messages):
 
 import hashlib
 import json
-import math
 import os
 
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
 from image_measure import measure_from_points

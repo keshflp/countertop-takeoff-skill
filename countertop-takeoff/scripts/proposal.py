@@ -45,23 +45,12 @@ import re
 import textwrap
 import sys
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import estimate as estimate_mod  # noqa: E402
+from estimate import BLANK, cents, money
 from preflight_lib import file_sha256 as sha256_file
-
-BLANK = estimate_mod.BLANK
-
-
-def cents(d):
-    return estimate_mod.D(d).quantize(Decimal("0.01"),
-                                      rounding=ROUND_HALF_UP)
-
-
-def money(d):
-    return estimate_mod.money(d)
-
 
 def load_estimate(estimate_path, results_path):
     """Load + validate the CORRECTED estimate this proposal prices from."""

@@ -19,7 +19,6 @@ V3 changes (graduated degradation + tolerant identity):
 
 import os
 import re
-import statistics
 
 import preflight_lib as pl
 import sheet_identity

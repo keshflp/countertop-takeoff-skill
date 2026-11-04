@@ -40,8 +40,6 @@ import preflight_lib as pl  # noqa: E402
 import sheet_identity  # noqa: E402
 
 # --- text patterns (kept in sync with the other scripts) --------------------
-SHEET_RE = re.compile(r"(?im)^\s*SHEET\s*[:#]?\s*([A-Z]{0,3}[-\s]?\d{1,4}[A-Z]?)\s*$")
-SHEET_FALLBACK_RE = re.compile(r"(?im)^\s*([A-Z]{1,3}-\d{1,4})\s*$")
 DIM_WORD_RE = re.compile(
     r"^\s*(\d{1,3})\s*'\s*-?\s*(\d{1,2}(?:\.\d+)?)?\s*(?:\"|''|”)?\s*$"
 )
@@ -58,27 +56,12 @@ SCHEDULE_TABLE_TITLE_RE = re.compile(
 SHEET_INDEX_TITLE_RE = re.compile(r"sheet\s+index|drawing\s+index|list\s+of\s+drawings", re.I)
 QTY_RE = re.compile(r"\b(qty|quantity|units|count)\b", re.I)
 TYPE_TAG_RE = re.compile(r"\btype\s+([a-z0-9]{1,4})\b", re.I)
-TYPE_TAG_WORD_RE = re.compile(r"^type$", re.I)
 PLAN_RE = re.compile(r"floor plan|\bplan\b|enlarged", re.I)
 COUNTER_RE = re.compile(r"countertop|counter|vanity|kitchen|cabinet", re.I)
 SPEC_RE = re.compile(r"specification|division\s*\d{1,2}", re.I)
 FINISH_RE = re.compile(r"finish", re.I)
 SCALE_LINE_RE = re.compile(r"\bscale\b", re.I)
 REVISION_RE = re.compile(r"\brev(?:ision)?\s*[.:#-]?\s*([A-Z0-9]{1,4})\b", re.I)
-
-
-def room_tag_boxes(words):
-    """Word-level room/type tags with boxes (V3): 'TYPE A' style pairs and
-    bare room-number tags are inventoried so plan-derived counts can be
-    reconciled against schedule cells (the 3->30 guard)."""
-    tags = []
-    for i, w in enumerate(words):
-        if TYPE_TAG_WORD_RE.match(w["t"]):
-            nxt = words[i + 1] if i + 1 < len(words) else None
-            if nxt and abs(nxt["y0"] - w["y0"]) < (w["y1"] - w["y0"]) * 1.5:
-                tags.append({"tag": nxt["t"].upper(), "kind": "type_tag",
-                             "box": [w["x0"], w["y0"], nxt["x1"], nxt["y1"]]})
-    return tags
 
 
 def extract_index_sheet_numbers(text):
@@ -101,11 +84,6 @@ def parse_dim_word(word):
     inches = float(m.group(2)) if m.group(2) else 0.0
     real_ft = feet + inches / 12.0
     return real_ft if real_ft >= 0.5 else None
-
-
-def detect_sheet(text):
-    m = SHEET_RE.search(text) or SHEET_FALLBACK_RE.search(text)
-    return m.group(1).replace(" ", "-").upper() if m else None
 
 
 def title_guess(text, sheet):
@@ -172,8 +150,8 @@ def preflight_page(doc, page):
     flags = text_flags(text)
     return {
         "page": page.number + 1,
-        "sheet": detect_sheet(text),
-        "title": title_guess(text, detect_sheet(text)),
+        "sheet": pl.detect_sheet(text),
+        "title": title_guess(text, pl.detect_sheet(text)),
         "width": round(page.rect.width, 2),
         "height": round(page.rect.height, 2),
         "dim_labels": dim_labels(text),
@@ -186,7 +164,7 @@ def preflight_page(doc, page):
                                           for p in rt_bad]},
         "word_count": len(words),
         "content_regions": regions,
-        "room_tags": room_tag_boxes(words),
+        "room_tags": pl.room_tag_boxes(words),
         "schedule_detection": {
             "title_flags": flags["schedule_table_title"],
             "suspect_image_tables": [

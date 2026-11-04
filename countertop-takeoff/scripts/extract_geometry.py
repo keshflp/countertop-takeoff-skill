@@ -40,24 +40,7 @@ import pymupdf  # noqa: E402
 import preflight_lib as pl  # noqa: E402
 import sheet_identity  # noqa: E402
 
-SHEET_RE = re.compile(
-    r"(?im)^\s*SHEET\s*[:#]?\s*([A-Z]{0,3}[-\s]?\d{1,4}[A-Z]?)\s*$")
-SHEET_FALLBACK_RE = re.compile(r"(?im)^\s*([A-Z]{1,3}-\d{1,4})\s*$")
 REVISION_RE = re.compile(r"\brev(?:ision)?\s*[.:#-]?\s*([A-Z0-9]{1,4})\b", re.I)
-TYPE_TAG_WORD_RE = re.compile(r"^type$", re.I)
-
-
-def index_pdf_tags(words):
-    """Word-level 'TYPE X' tags with displayed boxes, so plan-derived room
-    inventories can be reconciled against schedule cells (the 3->30 guard)."""
-    tags = []
-    for i, w in enumerate(words):
-        if TYPE_TAG_WORD_RE.match(w["t"]):
-            nxt = words[i + 1] if i + 1 < len(words) else None
-            if nxt and abs(nxt["y0"] - w["y0"]) < (w["y1"] - w["y0"]) * 1.5:
-                tags.append({"tag": nxt["t"].upper(), "kind": "type_tag",
-                             "box": [w["x0"], w["y0"], nxt["x1"], nxt["y1"]]})
-    return tags
 
 
 def parse_pages(spec, page_count):
@@ -77,11 +60,6 @@ def parse_pages(spec, page_count):
     if bad:
         sys.exit(f"ERROR: page(s) {bad} out of range 1..{page_count}")
     return sorted(set(out))
-
-
-def detect_sheet(text):
-    m = SHEET_RE.search(text) or SHEET_FALLBACK_RE.search(text)
-    return m.group(1).replace(" ", "-").upper() if m else None
 
 
 def page_record(doc, pno):
@@ -125,7 +103,7 @@ def page_record(doc, pno):
     rt_ok, rt_bad = pl.transform_roundtrip_ok(rt_pts, page.rect)
     return {
         "page": pno,
-        "sheet": detect_sheet(text),
+        "sheet": pl.detect_sheet(text),
         "identity": pl.page_identity(doc, page),
         "transforms": pl.coordinate_transforms(page),
         "transform_check": {"ok": rt_ok,
@@ -137,7 +115,7 @@ def page_record(doc, pno):
         "segments": segments,
         "words": words,
         "content_regions": regions,
-        "room_tags": index_pdf_tags(words),
+        "room_tags": pl.room_tag_boxes(words),
         "preflight": {
             "op_counts": stats["op_counts"],
             "segment_bounds": stats["segment_bounds"],

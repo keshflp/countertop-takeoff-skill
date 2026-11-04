@@ -33,6 +33,11 @@ measurable).
 
 import hashlib
 import json
+import re
+
+SHEET_RE = re.compile(r"(?im)^\s*SHEET\s*[:#]?\s*([A-Z]{0,3}[-\s]?\d{1,4}[A-Z]?)\s*$")
+SHEET_FALLBACK_RE = re.compile(r"(?im)^\s*([A-Z]{1,3}-\d{1,4})\s*$")
+TYPE_TAG_WORD_RE = re.compile(r"^type$", re.I)
 
 # Classification thresholds, in PERCENT of page area (0-100). V2 defined
 # these as fractions (0.20/0.60) but compared them against the percent value
@@ -53,6 +58,23 @@ MIN_TEXT_CHARS = 200            # searchable-raster heuristic needs real text
 #                      over a vector title block) - NOT trustworthy for area
 #   uncertain        - mixed/ambiguous signals - human must look
 VECTOR_CLASSES = {"vector"}
+
+
+def detect_sheet(text):
+    m = SHEET_RE.search(text) or SHEET_FALLBACK_RE.search(text)
+    return m.group(1).replace(" ", "-").upper() if m else None
+
+
+def room_tag_boxes(words):
+    """Word-level TYPE X pairs with displayed boxes for room reconciliation."""
+    tags = []
+    for i, w in enumerate(words):
+        if TYPE_TAG_WORD_RE.match(w["t"]):
+            nxt = words[i + 1] if i + 1 < len(words) else None
+            if nxt and abs(nxt["y0"] - w["y0"]) < (w["y1"] - w["y0"]) * 1.5:
+                tags.append({"tag": nxt["t"].upper(), "kind": "type_tag",
+                             "box": [w["x0"], w["y0"], nxt["x1"], nxt["y1"]]})
+    return tags
 
 
 def file_sha256(path):
