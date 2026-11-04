@@ -13,7 +13,7 @@ description: >-
   quantity requests on plan sets.
 ---
 
-# Countertop Takeoff (5.1.0: correctness and scope-safe documents)
+# Countertop Takeoff
 
 You are doing a countertop takeoff on a drawing set for a countertop
 subcontractor. Run to completion, then notify once — no approval gates, no
@@ -38,8 +38,7 @@ THIS skill folder via uv (`uv run scripts/<name>.py`; uv provisions Python
    supports a count of 30; image-evidence types AND variants cite `count_cells`);
    uncertain/unsupported referenced cells withhold the count and dependent
    standard allocation. Crop hashes prove pixel identity only; transcription
-   is the agent's job. Plan
-   room tags are DEDUPED RECORDS, and a supplied summary contradicting them
+   is the agent's job. Plan room tags are DEDUPED RECORDS; a contradictory summary
    withholds the type. Missing counts stay missing — never defaulted to 1.
 3. **Graduated degradation.** Bad boundary, missing calibration, unusable
    raster, disagreed count, range breach, overlap, unplanned region,
@@ -71,7 +70,7 @@ expected-count verdict). Unavailable inputs are disclosed callouts.
 content classes and REGIONS (a pasted bitmap schedule under a vector header
 is flagged for vision reading), duplicate pages, sheet-alias candidates,
 drawing-index gaps, revision marks. Disposition EVERY page (measured /
-intentionally_skipped / superseded) keyed by (source_id, page). For CAD:
+intentionally_skipped / superseded / unresolved) keyed by (source_id, page). For CAD:
 `uv run scripts/cad_input.py <file.dxf> --out ...` (DWG: convert via the
 free ODA File Converter first; unitless files refuse without `--units`).
 
@@ -130,41 +129,26 @@ Use `references/first-run-checklist.md` for supervision and the blind
 synthetic exercise. No approval gate is added.
 
 ### Step 7. Estimate (when the shop asks for pricing)
-Receipt storage is separate from results: `audit_pack.py --record-receipt`
-writes `results.json.receipt.json` and NEVER modifies results.json. Its
-`results_sha256` hashes the exact immutable results bytes. Pricing/proposal
-hashes therefore stay current even if the independent receipt is recorded
-later. Receipts travel beside the results; they are not embedded in pricing.
-With a rate profile (`examples/example.rate-profile.json` shows the v2
-pricing schema — rates[] pin `match.assembly_kind` plus dims/finish, uom
-EA, unit_price, includes[]): `uv run scripts/estimate.py
+Receipt storage writes `results.json.receipt.json` and NEVER modifies results.json.
+See `references/output-format.md` for immutable hash/receipt and pricing contracts.
+With a rate profile (`examples/example.rate-profile.json`): `uv run scripts/estimate.py
 build/results.json --profile <rate-profile.json> --out-md
 build/estimate.md --out-json build/estimate.json --out-pdf
-build/estimate.pdf` (or add `--estimate-profile` to the measure command;
-`--estimate-md/--estimate-json/--estimate-pdf` set EXPLICIT output paths —
-an estimate may never overwrite its own evidence package, and paths that
-would alias the results/report de-alias automatically for derived defaults;
-explicit paths must be distinct). Each in-scope
-assembly prices EA × exact rate; unmatched or ambiguous rates and withheld
-quantities stay BLANK behind callouts; omitted in-scope scope (a room
-covered by NO assembly) is an UNKNOWN amount — priced lines survive, the
-grand total stays BLANK, and the callout names what is missing. A
-`stopped` run or a results file without `assembly_boq` refuses to be
-priced. The .pdf is a PyMuPDF render of estimate.md whose rendered amounts
-are re-checked against estimate.json — render a richer PDF from the same
-md with the host's document tooling if you have one; the grand total must
-agree.
+build/estimate.pdf`. Alternatively use measure's `--estimate-profile` and
+`--estimate-md/--estimate-json/--estimate-pdf`; explicit paths must be distinct
+from evidence and other outputs. Each assembly prices EA × exact rate.
+Unmatched/ambiguous rates, withheld quantities, or omitted in-scope scope
+leave unknown amounts BLANK with callouts; priced lines survive, grand total
+stays BLANK. Stopped runs or results without `assembly_boq` refuse pricing.
 
 ### Step 7b. Proposal-lite (when the shop asks for a customer-facing quote)
 `uv run scripts/proposal.py build/results.json --estimate
 build/estimate.json --profile <rate-profile.json> --out-md
 build/proposal.md --out-json build/proposal.json --out-pdf
-build/proposal.pdf` builds a branded proposal/BoQ from the CORRECTED
-estimate: fixed layout, short cover note, package summaries grouped FROM
-THE DATA, unchanged EA quantities and exact rates, exclusions assembled
-from the estimate's exclusions + open items, the profile's SUPPLIED terms,
-and blank signature lines. Never invent percentages, tax treatment, or
-payable balances. json/md/pdf totals must agree (the script enforces it).
+build/proposal.pdf` builds a branded proposal/BoQ from the corrected estimate:
+unchanged EA/rates, package summaries, exclusions/open items, supplied terms,
+and blank signature lines. Never invent percentages, tax treatment, or payable
+balances. JSON/Markdown/PDF totals must agree.
 
 ### Step 8. Deliver
 Then deliver report, CSVs (piece BoQ + assembly BoQ — same resolved
@@ -176,10 +160,7 @@ and the coverage ledger (every inventoried item: measured | included_scope
 carry "brand/color TBD" flags.
 
 ## Method & output details
-Method, calibration bands, boundary closure, curve tolerance:
-`references/method.md` · V3/V4 schema: `references/job-spec-v3.md` · output
-formats (incl. estimate + proposal): `references/output-format.md` ·
-company profile + rate profile (v2 pricing schema, terms):
-`references/company-profile.md` · QuickBooks import groundwork (docs only,
-no integration): `references/quickbooks-mapping.md` · CAD landscape +
-optional CAD-MCP escalation (docs only): `references/cad-context.md`
+Method/tolerances: `references/method.md` · schema: `references/job-spec-v3.md` ·
+outputs/pricing/receipts: `references/output-format.md` · company/rate profiles:
+`references/company-profile.md` · QuickBooks groundwork (no integration):
+`references/quickbooks-mapping.md` · CAD routes: `references/cad-context.md`

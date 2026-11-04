@@ -1,97 +1,101 @@
 # countertop-takeoff-skill
 
-Version **5.1.0** — correctness fixes and first-run supervision guidance.
+Version **5.1.0**. An agent skill for countertop takeoffs from architectural
+PDFs, DXF exports, and rasters: square feet, edge feet, splash, and cutouts.
+Built for subcontractors bidding apartments and hotels; harness-agnostic.
 
-An agent skill that does **countertop takeoffs** — square feet, edge linear
-feet, splash, and cutout counts — from architectural plan/spec PDFs, DXF
-exports, and rasters. Built for countertop subcontractors bidding
-apartments and hotels.
+The agent inventories inputs, reads schedules with evidence, reconciles room
+tags, calibrates each viewport, measures, audits, and delivers once at the end.
+Unresolvable quantities stay **BLANK**, never zero, behind named CALLOUTS.
+Run status: `complete`, `complete_with_callouts`, or `stopped` (exit 0/0/2).
 
-Give your AI agent a set of plans and it will:
+Exactly three kinds of DATA failure stop a job: no valid calibration anywhere
+(verified CAD units qualify), no schedule and no repeatable pattern, or a
+source-file integrity mismatch. Malformed job specs refuse before measurement:
+that is spec validation, not a fourth takeoff stop.
 
-1. **Intake** — collect every file (local paths, chat attachments, Drive /
-   OneDrive files fetched by your agent) into one job directory with a
-   manifest: requested vs resolved, sizes, SHA-256 hashes, page counts,
-   expected-count verdict. The Drive fetch is an agent-side contract: the
-   scripts import local paths; your agent fetches the cloud binaries into
-   the job dir first.
-2. **Preflight the pack** — page inventory with content classes and content
-   regions (a pasted bitmap schedule under a vector header is flagged for
-   vision reading), duplicate pages, revision conflicts, tolerant sheet
-   identity (wrong duplicate title blocks and sheets missing from the
-   drawing index become named callouts).
-3. **Transcribe schedules with evidence** — text rows quoted with word
-   boxes; bitmap schedules read from a hash-verified crop; counts
-   cross-validated against plan room tags so invented counts (a schedule
-   cell "edited" from 3 to 30) are caught and withheld.
-4. **Calibrate per sheet-and-viewport** from TWO agreeing labeled
-   dimensions the code measures — never the title block, never typed.
-5. **Measure three ways, in order** — vector PDF geometry; supplied DXF
-   with verified units (DWG: convert first with the free ODA File
-   Converter); calibrated image-space measurement for decent rasters.
-6. **Audit and deliver** — coverage ledger reconciling every room/type/
-   assembly (measured | package_excluded | included_scope | superseded |
-   unresolved), overlay PNGs, an independent-audit receipt, a PIECE BoQ and
-   an ASSEMBLY BoQ from ONE resolved quantity model (for jobs that declare
-   assemblies the run asserts equality over the same fully resolved subset;
-   project/report/CSV equal the full known piece subtotal, including valid
-   parts of incomplete assemblies), and — with
-   a rate profile — an assembly-EA estimate (`estimate.md` / `.json` /
-   `.pdf`): EA × exact rate, blank while any in-scope amount is unknown —
-   plus a proposal-lite PDF/BoQ quote document built from that corrected
-   estimate.
+## Quick start (Windows PowerShell)
 
-The skill **runs to completion** and reports once at the end. Anything
-unresolvable stays **BLANK** (never zero) behind a named CALLOUT; the run
-status is `complete`, `complete_with_callouts`, or `stopped` (exit codes
-0 / 0 / 2). Exactly three kinds of DATA failure stop a job: no valid
-calibration anywhere, no schedule and no repeatable pattern, or a
-source-file integrity mismatch. A MALFORMED job spec (schema violations,
-bad hashes, invalid evidence structure) also refuses to run — that is
-spec validation, not a takeoff stop.
-
-## Who it's for
-
-- **The countertop subcontractor** who bids multifamily/hospitality jobs
-  and today counts square feet by hand from printed plans.
-- **Their AI agent** — Codex, Claude Code, Cursor, pi, or any agent that
-  can install skills and run shell commands. Harness-agnostic; people are
-  referred to neutrally throughout (operator, installer, reviewer).
-
-## Install (Windows, copy-paste)
-
-### Step 1 — install uv (one-time, ~30 seconds)
-
-Open **PowerShell** and run:
+Install uv once, then reopen PowerShell and check `uv --version`:
 
 ```powershell
 powershell -ExecutionPolicy ByPass -c "irm https://get.uv.dev | iex"
 ```
 
-Close and reopen PowerShell, then check `uv --version`. No admin rights and
-no Python install needed — uv provisions Python for the skill's scripts.
-
-### Step 2 — get the skill folder
-
-This README ships inside the skill repo. If you are reading it after a
-to-org transfer, replace `ORG-URL-PLACEHOLDER` below with the repository
-URL your organization publishes at transfer time (the transferor should
-substitute their own repo URL, or publish the repo under the new org and
-update this line before handing over).
+No admin rights or system Python needed; uv provisions Python and script deps.
+Clone the repository (or use GitHub's **Code > Download ZIP**):
 
 ```powershell
 cd $env:USERPROFILE\Downloads
-git clone ORG-URL-PLACEHOLDER
+git clone https://github.com/keshflp/countertop-takeoff-skill.git
+cd countertop-takeoff-skill
 ```
 
-For the organization handoff, run this exact swap from the repo root after
-the transfer (set `$repoUrl` to the published owner/org URL first):
+Tell your agent where `countertop-takeoff/SKILL.md` is, or copy the skill
+folder to the skills directory its documentation specifies. For Claude Code,
+run from the repository root:
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills" | Out-Null
+Copy-Item -Recurse -Force .\countertop-takeoff "$env:USERPROFILE\.claude\skills\countertop-takeoff"
+```
+
+Then ask: "Do the countertop takeoff on `C:\Jobs\Riverside\plans`.
+I need total SF by unit type and CSVs." The agent follows the
+[workflow](countertop-takeoff/SKILL.md); commands run from the skill folder.
+
+## Host matrix
+
+| Interface | Where the job runs | Setup |
+|---|---|---|
+| Desktop app | Local machine with access to the plans | Sign in, enable session auto-start, keep host awake (Sleep Never when plugged in) |
+| Phone | Paired desktop host | Pair using the host app's remote QR code; phone steers, desktop runs |
+| Web chat | Cloud workspace | Transfer plans, skill folder, and profile into that workspace first |
+| CLI | Local machine | Agent CLI + PowerShell + uv; keep host awake |
+
+A cloud workspace cannot see local files or profiles automatically.
+
+## Intake and delivery
+
+Supply local paths, chat attachments, or Drive/OneDrive files fetched by your
+agent. The scripts import local files; the agent fetches cloud binaries first.
+Intake records requested/resolved files, sizes, hashes, page counts, and the
+expected-count verdict in one job directory. Unavailable inputs get callouts.
+
+Routes, in order: selected vector PDF boundaries; supplied DXF with verified
+units (convert DWG first); calibrated image measurement for legible rasters.
+Schedule counts need word-box or crop/cell evidence plus plan-tag reconciliation.
+
+Delivery includes a report, `takeoff.csv`, `pieces.csv`, `assemblies.csv`,
+`results.json`, overlay PNGs, and an independent-audit receipt (or disclosed
+unavailability). A rate profile adds `estimate.md/.json/.pdf`; a quote request
+adds proposal-lite documents. See [output formats](countertop-takeoff/references/output-format.md)
+and the [rate-profile example](countertop-takeoff/examples/example.rate-profile.json).
+
+The run asserts, for jobs that declare assemblies, that both BoQs reconcile over the
+same fully resolved subset; project/report/CSV show the full known piece
+subtotal, including valid parts of incomplete assemblies. The hotel fixture
+has **123.00 SF** in the resolved subset and **146.98 SF** full known subtotal.
+Omissions keep completeness false and the pricing grand total blank.
+
+## Updating
+
+- **Cloned repo (recommended):** run `git pull --ff-only` in the clone.
+  If it refuses, preserve local edits on their own branch before updating.
+- **Separately-copied skill folder:** a copy does NOT update itself.
+  Update/re-download the repo, then re-copy `countertop-takeoff/` into the
+  agent's skills directory, preserving any local edits separately.
+
+## Organization transfer
+
+Transfer the repository on GitHub, then publish the new clone URL and update
+existing remotes. From the repo root, substitute the actual organization URL:
 
 ```powershell
 $repoUrl = 'https://github.com/YOUR-ORG/countertop-takeoff-skill.git'
 $readmePath = Join-Path (Get-Location) 'README.md'
 $readmeText = [IO.File]::ReadAllText($readmePath)
-[IO.File]::WriteAllText($readmePath, $readmeText.Replace('ORG-URL-' + 'PLACEHOLDER', $repoUrl), [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($readmePath, $readmeText.Replace('https://github.com/keshflp/countertop-takeoff-skill.git', $repoUrl), [Text.UTF8Encoding]::new($false))
 git remote set-url origin $repoUrl
 Push-Location countertop-takeoff
 uv run examples/tests_v5.py
@@ -101,209 +105,46 @@ git commit -m "docs: publish organization clone URL"
 git push origin main
 ```
 
-The acceptance test permits any owner/org URL; it does not require the
-placeholder or a particular account. Existing clones should update their
-`origin` to the published URL and continue using `git pull --ff-only`.
+Existing clones then use `git pull --ff-only`; separately installed copies
+still need re-copying. Any published GitHub owner/org URL is supported.
 
-(No git? Click **Code → Download ZIP** on the GitHub page and unzip.)
+## Verification
 
-### Step 3 — put it where your agent looks
-
-- **Claude Code**: copy the skill into your skills folder:
-  ```powershell
-  New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills" | Out-Null
-  Copy-Item -Recurse -Force .\countertop-takeoff-skill\countertop-takeoff "$env:USERPROFILE\.claude\skills\countertop-takeoff"
-  ```
-- **Any other agent**: copy the `countertop-takeoff\` folder into the
-  skills directory your agent documents — or skip copying and just tell the
-  agent where the folder is.
-- **Zero-step option**: tell your agent *"Install the countertop-takeoff
-  skill from <the repository URL your organization published>"* — a good
-  agent will clone the repo and follow `SKILL.md` on its own.
-
-## Host interfaces (where the takeoff runs)
-
-The takeoff runs on a machine that can reach your plan files. Pick ONE
-interface and keep it awake for the whole job:
-
-- **Desktop app = the local host.** Install the agent desktop app, sign in,
-  and enable auto-start with the session so a job can run unattended. The
-  machine must stay awake (power settings: Sleep Never when plugged in) —
-  a machine that sleeps mid-job stalls the takeoff.
-- **Phone = steering.** Pair your phone to the desktop host via the app's
-  remote-pairing QR code; from the job site you can launch, steer, and
-  approve local tasks. The phone steers; the desktop machine runs.
-- **Web (browser chat) = cloud workspace.** A cloud workspace does not see
-  this local machine or its files/profile — for this workflow the files and
-  the skill folder must be transferred into the workspace (upload the plan
-  set and the skill) before the takeoff runs there.
-- **CLI = an alternative local host.** No desktop app? Run the same skill
-  from an agent CLI on the machine (Windows: PowerShell + uv, no admin
-  rights, no system Python needed).
-
-## Usage
-
-Put the project files anywhere (drag them into the chat, share a Drive
-link for YOUR AGENT to fetch, or point at a folder), open your agent, and
-say:
-
-> Here's a project — do the countertop takeoff. Plans are in
-> `C:\Jobs\Riverside\plans\`. I need total SF by unit type and a CSV.
-
-or just:
-
-> Install the countertop-takeoff skill from the repo URL your organization
-> published (see Step 2), then do the countertop takeoff on the PDFs in
-> this folder.
-
-The agent runs to completion and reports once: a markdown report (scope
-ledger, schedule evidence, calibration spans with actual factors, CALLOUTS,
-coverage ledger, both BoQ views), `takeoff.csv` + `pieces.csv` +
-`assemblies.csv`, `results.json` (the full evidence package), overlay PNGs,
-the independent-audit receipt — and, when you hand it a rate profile
-(`examples/example.rate-profile.json` shows the schema), `estimate.md` /
-`estimate.json` / `estimate.pdf` pricing each assembly EA × exact rate.
-
-### Does it actually work?
-
-Yes — on synthetic fixtures with **known** dimensions the pipeline recovers
-the areas exactly:
-
-- Clean apartment fixture: **168.75 SF** exact (18.0000 pt/ft from three
-  agreeing spans per page).
-- Hostile "messy" fixture: **990.00 SF** gross / **936.00 SF** net exact —
-  rotated sheet with two viewports at different scales, island + sink loop,
-  ADA variant, split/fractional dimension text, a REV B duplicate sheet,
-  and a searchable raster scan — plus thirteen refusal/degradation
-  mutations verified.
-- Hotel fixture (V3, re-proven under V4): every page rotated 270°, a bitmap
-  room schedule under a vector header read via crop-hash evidence, room-tag
-  reconciliation (an omitted room is caught as a coverage callout), three
-  viewports with three scales on one sheet, a wrong duplicate title block,
-  sheets missing from the drawing index, cross-sheet section→length joins,
-  GR guestroom FF&E excluded as a package and reported separately, one
-  legible scan measured through the image route (~24 SF) and one unusable
-  scan left blank — **146.98 SF full known subtotal**, matching project,
-  report and CSVs; both BoQ views reconcile **123.00 SF** over the same
-  fully resolved assembly subset. Partial assembly contributions explain
-  the difference; omissions keep completeness false and pricing total blank.
-- V4: a MIXED job (repeated + enumerated + public + excluded scope with
-  included ADA variants) totals identically in every view; a schedule cell
-  edited 3→30 over a retained "3" quote is caught; an edited image result
-  number over unchanged pixels is rejected; CAD measures 25.00 SF exactly
-  at three unit encodings (in/ft-mm/m) with MINSERT arrays expanded and
-  bulge arcs within a disclosed 0.5% area tolerance.
-
-Reproduce:
+Run from `countertop-takeoff/` (sequentially; suites share fixture paths):
 
 ```powershell
-cd countertop-takeoff
-uv run examples\make_fixture.py --out examples\fixture.pdf
-uv run scripts\index_pdf.py examples\fixture.pdf
-uv run scripts\extract_geometry.py examples\fixture.pdf --pages all --out build\fixture.geometry.json
-uv run scripts\measure.py examples\fixture.jobs.json --report build\report.md --csv build\takeoff.csv --json build\results.json
-uv run scripts\audit_pack.py build\results.json --pack build\audit_pack
-uv run examples\tests_v2.py     # 47 checks (V2 exactness + behavior)
-uv run examples\tests_v3.py     # 34 checks (V3 hotel traps, routes, intake)
-uv run examples\tests_v4.py     # V4 checks (resolved model, evidence binding, degradation, CAD, estimate)
-uv run examples\tests_v5.py     # V5 + 5.1 correctness regressions
+uv run examples/make_fixture.py --out examples/fixture.pdf
+uv run scripts/index_pdf.py examples/fixture.pdf
+uv run scripts/extract_geometry.py examples/fixture.pdf --pages all --out build/fixture.geometry.json
+uv run scripts/measure.py examples/fixture.jobs.json --report build/report.md --csv build/takeoff.csv --json build/results.json
+uv run scripts/audit_pack.py build/results.json --pack build/audit_pack
+uv run examples/tests_v2.py     # 47 checks
+uv run examples/tests_v3.py     # 34 checks
+uv run examples/tests_v4.py     # 40 checks
+uv run examples/tests_v5.py     # 125 checks, including 5.1 regressions
 ```
 
-## Legal / data-handling notes
+The [example walkthrough](countertop-takeoff/examples/run_example.md) describes
+synthetic fixtures. They verify known geometry and failure handling; they do
+not prove recognition on an unseen job. Use the [first-run checklist](countertop-takeoff/references/first-run-checklist.md)
+for supervised validation and a drawings-only blind exercise.
 
-- **Do not auto-scrape planroom websites.** Download plans manually, per
-  the planroom vendor's terms of service. The skill contains no scraping.
-- **Confidentiality**: plan sets are the client's/GC's property. Measured
-  quantities are for your own bid. Both fixtures are 100% synthetic. The
-  scripts and fixtures keep everything on the machine where the agent runs —
-  but the AGENT ITSELF may send page excerpts (crops, quoted schedule rows)
-  to your model provider when it reads the plans with vision; that transfer
-  is the agent host's, not this skill's. Check your provider's data terms
-  before pointing it at client drawings.
-- **Verify before you bid.** The skill is a measuring tool with guardrails
-  — evidence-backed counts, coverage ledger, CALLOUTS, an independent
-  audit — not a stamp.
+## Limits and legal notes
 
-## Updating
+- No guessed scales or counts. Unusable geometry/evidence withholds affected
+  fields; supported routes and evidence requirements are in the [method](countertop-takeoff/references/method.md)
+  and [job-spec contract](countertop-takeoff/references/job-spec-v3.md).
+- Proposal-lite is a quote document. Official invoices, payments, tax/progress
+  billing, shop drawings, slab nesting/yield, and hosted integrations are out
+  of scope. V6 drawing outputs are **Exploratory** only, **not promised**.
+- [QuickBooks mapping](countertop-takeoff/references/quickbooks-mapping.md) is
+  CSV groundwork requiring a real account sample, with no API/OAuth/sync.
+- Do not auto-scrape planrooms; download manually under the vendor's terms.
+- Plans belong to the client/GC. Scripts keep files on the execution host,
+  but agent vision may send crops/quotes to its model provider. Check that
+  provider's data terms before using confidential drawings.
+- Verify before bidding: evidence, callouts, coverage, and independent audit
+  assist judgment; this tool is not a stamp. Fixtures are entirely synthetic.
 
-Two situations, two workflows:
-
-- **Cloned repo (recommended).** You installed by cloning. Update with
-  ```powershell
-  git pull --ff-only
-  ```
-  inside the cloned repo — `--ff-only` refuses a tangled history instead
-  of silently merging local edits; if it stops, your local changes need a
-  branch of their own. Or just tell your agent: *"update the
-  countertop-takeoff skill from its repository with `git pull --ff-only`"*.
-- **Separately-copied skill folder.** You copied `countertop-takeoff\`
-  into an agent skills directory. A copy does NOT update itself: re-clone
-  or re-download the repo, then re-copy the folder (and re-do any local
-  edits you made). Prefer the clone workflow so `git pull --ff-only`
-  keeps you current.
-
-## Roadmap
-
-| Phase | Scope |
-|---|---|
-| V1 | Square footage per unit type, schedule multiplication, QA report + CSV |
-| V2 | Pack preflight, scope ledger, evidence-backed schedule, per-viewport calibration, selected-boundary measurement, audit pack |
-| V3 | Multiple sources (PDF/DXF/raster), bitmap-schedule transcription, room-tag reconciliation, graduated degradation with CALLOUTS + coverage ledger, assemblies/pieces with edges/splash/cutouts, dual BoQ views, package rules, intake manifest, hotel-grade field traps |
-| V4 | One resolved quantity model; BoQ equality over the fully resolved subset, project/report/CSV over the full known piece subtotal; included variants subtracted; evidence binding, local degradation, CAD units/arcs, EA pricing and intake metadata |
-| V5 (this repo) | Publish safety (de-aliased estimate paths, stale-artifact quarantine + stopped diagnostics), evidence identity repairs (row_text descriptive-only, reciprocal piece/assembly membership, repeated-geometry withholding, declared reuse, uncertain included variants), estimate scope inheritance (stopped/missing-BoQ refusal, omitted scope = unknown amounts, one currency), consistent uncertainty (zero EA, named edge blanks, strict-pair reconciliation, completeness flags, blank-not-zero type totals), audit-pack + estimate-PDF repairs, proposal-lite quote document (json/md/pdf), QuickBooks mapping groundwork (docs only) |
-| V6 | Exploratory only: drawing outputs derived from the measured polygons — scope undecided, not promised |
-
-5.1.0 repairs bitmap cell/variant withholding, identity conflicts, omitted-scope
-pricing, Windows path aliases, stopped-run cleanup, immutable receipt storage,
-exact rate validation and contractor PDFs. See
-[`references/release-5.1.0.md`](countertop-takeoff/references/release-5.1.0.md)
-for the probe matrix and deliberate test replacements. Begin supervision with
-the [first-run checklist](countertop-takeoff/references/first-run-checklist.md).
-
-## Repo layout
-
-```
-countertop-takeoff/            <- the skill folder (this is what you install)
-  SKILL.md                     <- the V5 workflow your agent follows
-  references/job-spec-v3.md    <- the V3 job-spec (evidence document) schema
-  references/method.md         <- preflight, calibration, boundaries, audit
-  references/output-format.md  <- exact report/CSV/JSON/pack formats
-  references/company-profile.md<- profile schema + package defaults
-  references/quickbooks-mapping.md <- QB import groundwork (docs only)
-  references/cad-context.md    <- CAD landscape + optional escalations
-  scripts/preflight_lib.py     <- shared page stats/fingerprints/classes
-  scripts/index_pdf.py         <- pack preflight + page inventory
-  scripts/extract_geometry.py  <- id'd, rotation-aware vectors
-  scripts/cad_input.py         <- DXF adapter (verified units; DWG=convert)
-  scripts/image_measure.py     <- calibrated image-space route
-  scripts/intake.py            <- step 0: job dir + intake manifest
-  scripts/measure.py           <- the V3 measurement pipeline
-  scripts/spec_schema.py       <- job-spec validation (v2 + v3)
-  scripts/calibrate.py         <- per-viewport span calibration
-  scripts/regions.py           <- boundary closure + measurement
-  scripts/sheet_identity.py    <- tolerant sheet identity
-  scripts/audit.py             <- completeness/reconciliation/BoQ audit
-  scripts/report_out.py        <- report/CSV/evidence-JSON writers
-  scripts/audit_pack.py        <- overlay PNGs + audit receipt
-  scripts/estimate.py          <- assembly-EA estimate (rate x EA; md/json/pdf)
-  scripts/proposal.py          <- proposal-lite quote document (json/md/pdf)
-  scripts/requirements.txt     <- pinned: pymupdf, shapely, ezdxf
-  examples/make_fixture.py     <- fixtures (--case original|messy|hotel)
-  examples/make_hotel_jobs.py  <- canonical V3 hotel job-spec builder
-  examples/example.profile.json          <- identity profile (SF workflow)
-  examples/example.rate-profile.json     <- rate profile (v2 pricing schema)
-  examples/tests_v2.py         <- V2 acceptance suite (47 checks)
-  examples/tests_v3.py         <- V3 acceptance suite (34 checks)
-  examples/tests_v4.py         <- V4 acceptance suite (resolved model,
-                                  evidence binding, degradation, CAD,
-                                  estimate, intake)
-  examples/tests_v5.py         <- V5 acceptance suite (publish safety,
-                                  identity, estimate scope, uncertainty,
-                                  audit-pack/PDF repairs, proposal)
-README.md                      <- this file
-LICENSE                        <- MIT
-```
-
-MIT licensed. The scripts keep every byte on the machine where the agent
-runs (agent-hosted vision may send page excerpts to your model provider —
-see Legal notes), no planroom scraping, no guessed scales.
+[5.1.0 release details](countertop-takeoff/references/release-5.1.0.md) document
+correctness fixes and probe coverage. MIT licensed; see [LICENSE](LICENSE).
