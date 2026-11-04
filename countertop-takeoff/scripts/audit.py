@@ -23,7 +23,7 @@ import re
 import preflight_lib as pl
 import sheet_identity
 from regions import check_duplicate_boundaries, check_overlaps
-from spec_schema import SpecError, TakeoffError
+from spec_schema import SpecError, TakeoffError, finite
 
 RECHECK_TOLERANCE_PCT = 2.0
 _NUM_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?")
@@ -1522,6 +1522,10 @@ def audit_region_checks(spec, results, calibrations, audit,
                     source_id=r.get("source_id"))
             continue
         if r.get("route") == "image":
+            if not finite(r.get("area_sf")) or r["area_sf"] <= 0 \
+                    or not (r.get("image_quality") or {}).get("usable"):
+                withhold(r, "image-route geometry or quality is unusable")
+                continue
             if not r.get("expected_range_ok"):
                 # V4: an image-route range breach degrades LOCALLY like the
                 # vector route (V3 made it a job stop)
@@ -1561,8 +1565,8 @@ def audit_region_checks(spec, results, calibrations, audit,
         for r in results:
             if r["region_id"] in ids and r.get("status") != "unresolved":
                 r["identity_conflict"] = True
-                withhold(r, "duplicate boundary selection - this segment"
-                         " set is already used by another region; one"
+                withhold(r, "duplicate boundary selection - this boundary"
+                         " is already used by another region; one"
                          " counter cannot be two regions (both records"
                          " withheld)")
         audit.add("duplicate boundaries", "warn", e + " - both records"

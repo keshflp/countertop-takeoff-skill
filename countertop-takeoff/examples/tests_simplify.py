@@ -5,6 +5,7 @@
 """Bounded SIMPLIFY regressions; run with uv run examples/tests_simplify.py."""
 import json
 import io
+import hashlib
 import sys
 import tempfile
 import unittest
@@ -17,10 +18,64 @@ import estimate
 import image_measure
 import intake
 import measure
-from audit import Audit
+import pymupdf
+from audit import Audit, audit_region_checks
 
 
 class SimplifyRegressions(unittest.TestCase):
+    def test_image_route_recovery_and_qa(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            crop = Path(tmp) / "crop.png"
+            doc = pymupdf.open()
+            doc.new_page(width=300, height=300).get_pixmap().save(str(crop))
+            doc.close()
+            def region(rid, x, zoom, edit):
+                points = [{"px": [a * zoom, b * zoom]} for a, b in
+                          ((0, 0), (50, 0), (50, 50), (0, 50))]
+                if edit == "collinear":
+                    points = [{"px": [n, n]} for n in (0, 50, 100)]
+                m = image_measure.measure_from_points([
+                    {"label": "1'", "p1": [0, 0], "p2": [50 * zoom, 0]},
+                    {"label": "2'", "p1": [0, 10], "p2": [100 * zoom, 10]}], points)
+                m.update(crop=str(crop), crop_sha256=hashlib.sha256(crop.read_bytes()).hexdigest(),
+                         overlay=str(Path(tmp) / f"{rid}.overlay.png"), provenance={"source_id": "plans", "page": 1,
+                         "crop_bbox": [x, 0, x + 300, 300], "render_zoom": zoom})
+                image_measure.render_overlay(str(crop), m, m["overlay"])
+                if edit == "collinear":
+                    self.assertIsNone(m["area_sf"])
+                    self.assertTrue(m["warnings"])
+                    m.update(area_sf=0, warnings=[])  # also reject old zero-area artifacts
+                if isinstance(edit, dict):
+                    m.update(edit)
+                path = Path(tmp) / f"{rid}.json"
+                path.write_text(edit if edit in ("{", "[]") else json.dumps(m), encoding="utf-8")
+                return {"region_id": rid, "route": "image", "source_id": "plans", "page": 1,
+                        "type": "A", "image_measurement": str(path), "expected_sf_range": [0, 2]}
+            cases = [("separate", 100, 2, None, 0), ("duplicate", 0, 2, None, 2),
+                     ("overlap", 25, 2, None, 2), ("json", 100, 1, "{", 1),
+                     ("shape", 100, 1, "[]", 1), ("collinear", 100, 1, "collinear", 1)]
+            cases += [(str(v), 100, 1, {"area_sf": v}, 1) for v in (None, 0, -1, "bad", float("nan"))]
+            for name, x, zoom, edit, blanks in cases:
+                with self.subTest(case=name):
+                    spec = {"_sources": [{"source_id": "plans"}], "regions": [
+                        region("healthy", 0, 1, None), region("affected", x, zoom, edit)]}
+                    audit = Audit()
+                    rows = measure.measure_all_regions(spec, {("plans", 1): {}}, {}, .05, audit, tmp)
+                    audit_region_checks(spec, rows, {}, audit)
+                    self.assertEqual(sum(r["area_sf"] is None for r in rows), blanks)
+                    self.assertEqual(len(audit.callouts), blanks)
+                    self.assertTrue(all(r["status"] == "unresolved" and r["blank_fields"]
+                                        for r in rows if r["area_sf"] is None))
+                    if blanks < 2:
+                        self.assertEqual(rows[0]["area_sf"], 1)
+                    self.assertFalse(audit.failed)
+                    if name == "separate":
+                        for bad in (dict(area_sf=0), dict(image_quality={"usable": False})):
+                            broken, qa = dict(rows[1], **bad), Audit()
+                            audit_region_checks(spec, [broken], {}, qa)
+                            self.assertIsNone(broken["area_sf"])
+                            self.assertEqual(len(qa.callouts), 1)
+
     def test_cad_seed_margin_is_physical(self):
         for units, factor in (("in", 12), ("mm", 304.8), ("ft", 1), ("m", .3048)):
             with self.subTest(units=units):

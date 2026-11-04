@@ -38,6 +38,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import calibrate as cal_mod  # noqa: E402
+from spec_schema import finite
 
 MIN_ANCHOR_PPI = 25.0     # px per foot below which quality degrades hard
 MAX_ANCHOR_SPREAD_PCT = 5.0
@@ -90,7 +91,7 @@ def measure_from_points(anchors, points):
             continue
         if real_ft is None:
             real_ft = parsed
-        if not real_ft or real_ft <= 0:
+        if not finite(real_ft) or real_ft <= 0:
             warnings.append(f"anchor {i} label {a.get('label')!r} is not a"
                             " parseable dimension")
             continue
@@ -150,6 +151,9 @@ def measure_from_points(anchors, points):
     poly = [p["px"] for p in points]
     if len(poly) >= 3 and px_per_ft:
         area_sf = round(polygon_area(poly) / px_per_ft ** 2, 4)
+        if not finite(area_sf) or area_sf <= 0:
+            warnings.append("boundary has non-finite or non-positive area - unusable polygon")
+            area_sf = None
     return {
         "anchors": scales,
         "selections": {"anchors": anchors, "points": points},

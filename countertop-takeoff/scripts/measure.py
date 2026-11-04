@@ -111,7 +111,12 @@ def measure_all_regions(spec, pages_by_no, calibrations, snap, audit_obj,
         if region.get("route") == "image":
             # P0.6 route 3: the crop anchors ARE the calibration; no vector
             # calibration entry is required for this region.
-            r = regions_mod.measure_region_image(region, base_dir)
+            try:
+                r = regions_mod.measure_region_image(region, base_dir)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError,
+                    IndexError, ArithmeticError) as exc:
+                r = unresolved_result(region, sid, f"invalid image measurement: {exc}")
+                r["route"] = "image"
             results.append(r)
             if r.get("status") == "unresolved":
                 print(f"UNRESOLVED {rid} (image route):"

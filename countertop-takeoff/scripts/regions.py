@@ -92,6 +92,10 @@ def measure_region_image(region, base_dir):
                         " re-measure")
     # ---- P0.2: crop must bind to (source, page, transform) -----------
     prov = m.get("provenance") or {}
+    bbox, zoom = prov.get("crop_bbox"), prov.get("render_zoom")
+    if not isinstance(bbox, list) or len(bbox) != 4 or not all(map(finite, bbox)) \
+            or bbox[2] <= bbox[0] or bbox[3] <= bbox[1] or not finite(zoom) or zoom <= 0:
+        warnings.append("invalid crop transform - crop_bbox and render_zoom must be usable")
     if not prov.get("source_id") or not prov.get("page") \
             or not prov.get("crop_bbox") or not prov.get("render_zoom"):
         warnings.insert(0, "image measurement is NOT bound to (source, page,"
@@ -128,6 +132,8 @@ def measure_region_image(region, base_dir):
         sel = measure_from_points(re_anchors, re_points)
         recomputed = sel.get("area_sf")
         recomputed_scale = sel.get("px_per_ft")
+        if not Polygon(sel["polygon_px"]).is_valid:
+            warnings.append("invalid image boundary polygon")
         for w in sel.get("warnings") or []:
             if w not in warnings:
                 warnings.append(f"recomputed selections: {w}")
@@ -135,14 +141,16 @@ def measure_region_image(region, base_dir):
         warnings.append("recorded selections missing - the result cannot be"
                         " recomputed from unchanged pixels; re-measure")
     recorded = m.get("area_sf")
-    if recomputed is not None and recorded is not None \
+    if not finite(recorded) or recorded <= 0:
+        warnings.append("recorded area_sf must be finite and positive")
+    elif recomputed is not None \
             and abs(recomputed - recorded) > max(0.01, 0.002 * recorded):
         warnings.insert(0, f"RECORDED RESULT REJECTED: area_sf {recorded} does"
                         f" not reproduce from the recorded selections"
                         f" (recomputed {recomputed}) - an edited result number"
                         " over unchanged pixels is never accepted")
     area = recomputed if recomputed is not None else None
-    if area is None or warnings:
+    if not finite(area) or area <= 0 or warnings:
         return dict(base, status="unresolved",
                     unresolved_reason="; ".join(warnings)
                     or "image measurement unusable",
@@ -157,13 +165,13 @@ def measure_region_image(region, base_dir):
     return dict(base, status="measured", area_sf=area,
                 recorded_area_sf=recorded,
                 factor_px_per_ft=(recomputed_scale or m.get("px_per_ft")),
-                image_quality=m.get("quality"),
+                image_quality=sel["quality"],
                 image_warnings=[w for w in warnings if w],
                 crop_sha256=m.get("crop_sha256"),
                 provenance=prov or None, overlay=overlay,
                 expected_range_ok=ok(area),
                 polygon=[[float(x), float(y)] for x, y in
-                         (m.get("polygon_px") or [])])
+                         sel["polygon_px"]])
 
 
 def image_calibration_usable(region, base_dir):
@@ -182,15 +190,18 @@ def image_calibration_usable(region, base_dir):
         m = json.load(open(path, encoding="utf-8"))
     except Exception:
         return False
-    if not m.get("px_per_ft") or m.get("warnings"):
+    if not isinstance(m, dict) or not finite(m.get("px_per_ft")) \
+            or m["px_per_ft"] <= 0 or m.get("warnings"):
         return False
     scales = m.get("anchors") or []
-    if len(scales) < 2:
+    if not isinstance(scales, list) or len(scales) < 2:
         return False
     spread = m.get("anchor_spread_pct")
-    if spread is None or spread > 5.0:
+    if not finite(spread) or spread < 0 or spread > 5.0:
         return False
     overlay = m.get("overlay")
+    if not isinstance(overlay, str):
+        return False
     if overlay and not os.path.isabs(overlay) \
             and not os.path.exists(overlay):
         overlay = os.path.join(base_dir, overlay)
@@ -380,6 +391,16 @@ def _same_page(a, b):
     return (a.get("source_id"), a["page"]) == (b.get("source_id"), b["page"])
 
 
+def _page_polygon(r):
+    """Image points are crop pixels; vector points already use page coordinates."""
+    if r.get("route") != "image":
+        return Polygon(r["polygon"])
+    p = r["provenance"]
+    x0, y0 = p["crop_bbox"][:2]
+    return Polygon([(x0 + x / p["render_zoom"], y0 + y / p["render_zoom"])
+                    for x, y in r["polygon"]])
+
+
 def check_duplicate_boundaries(results):
     """Two base regions selected via identical segment sets on the SAME
     (source, page) = one region measured twice (a scope error, not a
@@ -390,11 +411,15 @@ def check_duplicate_boundaries(results):
     for i in range(len(base)):
         for j in range(i + 1, len(base)):
             a, b = base[i], base[j]
-            if _same_page(a, b) and \
-                    set(a["boundary_seg_ids"]) == set(b["boundary_seg_ids"]):
+            if not _same_page(a, b):
+                continue
+            same = (_page_polygon(a).equals(_page_polygon(b))
+                    if "image" in (a.get("route"), b.get("route")) else
+                    set(a["boundary_seg_ids"]) == set(b["boundary_seg_ids"]))
+            if same:
                 errors.append(
                     f"regions {a['region_id']!r} and {b['region_id']!r} use"
-                    " the identical boundary segment set - one counter cannot"
+                    " the identical boundary - one counter cannot"
                     " be two regions")
     return errors
 
@@ -414,12 +439,14 @@ def check_overlaps(results):
             a, b = base[i], base[j]
             if not _same_page(a, b):
                 continue
-            pa = Polygon(a["polygon"])
-            pb = Polygon(b["polygon"])
+            pa = _page_polygon(a)
+            pb = _page_polygon(b)
             inter = pa.intersection(pb).area
             if inter <= OVERLAP_EPS_PT2:
                 continue
-            inter_sf = inter / (a["factor_pt_per_ft"] ** 2)
+            factor = (a["factor_px_per_ft"] / a["provenance"]["render_zoom"]
+                      if a.get("route") == "image" else a["factor_pt_per_ft"])
+            inter_sf = inter / factor ** 2
             detail = (f"regions {a['region_id']!r} and {b['region_id']!r} on"
                       f" page {a['page']} overlap by {inter_sf:.2f} SF")
             if (a["type"], a["variant"]) == (b["type"], b["variant"]):
