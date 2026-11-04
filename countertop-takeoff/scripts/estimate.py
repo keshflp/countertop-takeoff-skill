@@ -157,12 +157,19 @@ def load_profile(path):
         raise SystemExit(f"ERROR: profile {path} carries no rates[] - the"
                          " v4 estimate prices EA x rate (see"
                          " references/company-profile.md)")
+    codes = set()
     for i, r in enumerate(rates):
         if not isinstance(r, dict):
             raise SystemExit(f"ERROR: profile rates[{i}] must be an object")
         for k in ("item_code", "match", "uom", "unit_price"):
             if k not in r:
                 raise SystemExit(f"ERROR: profile rates[{i}] missing {k!r}")
+        code = r["item_code"]
+        if not isinstance(code, str) or not code.strip():
+            raise SystemExit(f"ERROR: profile rates[{i}].item_code must be a non-empty string")
+        if code in codes:
+            raise SystemExit(f"ERROR: profile rates[{i}]: duplicate item_code {code!r}")
+        codes.add(code)
         if r["uom"] != "EA":
             raise SystemExit(f"ERROR: profile rates[{i}] uom must be 'EA'")
         validate_match(r)

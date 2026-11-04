@@ -3,18 +3,33 @@
 # dependencies = ["pymupdf==2.1", "shapely==2.2.0"]
 # ///
 """Bounded SIMPLIFY regressions; run with uv run examples/tests_simplify.py."""
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import calibrate
+import estimate
 import image_measure
 import measure
 from audit import Audit
 
 
 class SimplifyRegressions(unittest.TestCase):
+    def test_standalone_rate_codes_are_nonempty_and_unique(self):
+        for codes in (["SAME"] * 4, ["", "B", "C", "D"],
+                      [" ", "B", "C", "D"], [1, "B", "C", "D"]):
+            with self.subTest(codes=codes), tempfile.TemporaryDirectory() as tmp:
+                rates = [{"item_code": code, "match": {"assembly_kind": kind},
+                          "uom": "EA", "unit_price": "55.55"}
+                         for code, kind in zip(codes, ("A", "B", "C", "D"))]
+                path = Path(tmp) / "rates.json"
+                path.write_text(json.dumps({"currency": "USD", "rates": rates}), encoding="utf-8")
+                with self.assertRaisesRegex(SystemExit, "item_code"):
+                    estimate.load_profile(path)
+
     def test_vector_zero_label_withholds_locally(self):
         page = {"words": [{"id": i, "t": t} for i, t in enumerate(['0"', "2'", "3'"])],
                 "segments": [{"id": i, "x0": 0, "y0": i, "x1": n, "y1": i}
