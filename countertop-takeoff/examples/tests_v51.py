@@ -162,11 +162,13 @@ def documentation_tests(t):
             all("123.00" in doc and "146.98" in doc for doc in (skill, readme,
                 (refs / "method.md").read_text(encoding="utf-8"),
                 (refs / "output-format.md").read_text(encoding="utf-8"))))
+    # Replace the published URL: the former placeholder is no longer in README.
+    # Check the clone command too, so each owner exercises its own URL.
     for owner in ("keshflp", "example-org", "Another.Owner"):
-        swapped = readme.replace("ORG-URL-PLACEHOLDER",
-                                 f"https://github.com/{owner}/countertop-takeoff-skill.git")
+        url = f"https://github.com/{owner}/countertop-takeoff-skill.git"
+        swapped = readme.replace("https://github.com/keshflp/countertop-takeoff-skill.git", url)
         t.check("P1.6 transfer URL assertion accepts owner " + owner,
-                t.install_docs_ok(swapped))
+                f"git clone {url}" in swapped and t.install_docs_ok(swapped))
     t.check("P1.6 turnkey transfer keeps clone-vs-copy and ff-only guidance",
             all(term in readme for term in ("git remote set-url origin $repoUrl",
                 "WriteAllText", "git pull --ff-only", "Separately-copied skill folder",
