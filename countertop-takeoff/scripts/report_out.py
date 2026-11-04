@@ -604,18 +604,6 @@ def calibration_key(source_id, page, viewport, multi):
             else f"{page}:{viewport}")
 
 
-def find_calibration(results, region):
-    """Look up the calibration a region actually used (source-qualified
-    first, V2 key as fallback)."""
-    cals = results.get("calibrations") or {}
-    sid = region.get("source_id")
-    if sid:
-        hit = cals.get(f"{sid}:{region['page']}:{region['viewport']}")
-        if hit:
-            return hit
-    return cals.get(f"{region['page']}:{region['viewport']}")
-
-
 def build_results(spec, geometry_map, calibrations, types, total, audit,
                   results, review_status, settings, unit_total,
                   coverage_ledger=None):

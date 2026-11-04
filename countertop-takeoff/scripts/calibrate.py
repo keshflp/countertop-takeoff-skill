@@ -41,7 +41,6 @@ _DIM_TOTAL_INCHES_RE = re.compile(
 )
 _DIM_FEET_ONLY_RE = re.compile(
     r"^\s*(\d{1,4}(?:\.\d+)?)\s*'(?:\s*-?\s*(?:0\s*\")?)?\s*$")
-SCALE_LINE_WORDS = {"scale", "scale:"}
 
 
 def _fraction_to_float(whole_txt, num_txt, den_txt):

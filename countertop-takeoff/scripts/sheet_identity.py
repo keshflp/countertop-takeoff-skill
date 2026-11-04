@@ -45,54 +45,6 @@ def alias_candidates(label):
     return out
 
 
-def signals_from_page(page_record, index_sheets=None, pdf_label=None):
-    """Collect the identity signals of one geometry/index page record.
-
-    page_record: index_pdf/extract_geometry page dict (has text-derived
-    sheet/title/fingerprint). index_sheets: sheet numbers listed on the
-    drawing-index page(s) of the set. pdf_label: PDF page label if any.
-    """
-    tb = page_record.get("sheet")
-    title = page_record.get("title")
-    pf = page_record.get("preflight", {})
-    idx_ref = None
-    if index_sheets and tb:
-        for listed in index_sheets:
-            if normalize(listed) in alias_candidates(tb):
-                idx_ref = listed
-                break
-    return {
-        "title_block_label": tb,
-        "index_ref": idx_ref,
-        "pdf_label": pdf_label,
-        "title": title,
-        "revision_marks": pf.get("revision_marks") or [],
-        "content_fingerprint": pf.get("fingerprint"),
-    }
-
-
-def resolve_identity(signals_a, signals_b=None):
-    """Compare one page's signals. With signals_b (another page carrying the
-    same title-block label) the pair is classified:
-
-      identical_fingerprint  - true duplicate scan/placement
-      content_conflict       - same label, different content (wrong duplicate
-                               title block or a superseded revision)
-    """
-    out = {"alias_matches": [], "status": "single"}
-    if signals_b is None:
-        if signals_a.get("title_block_label") is None:
-            out["status"] = "unlabeled"
-        return out
-    fa, fb = signals_a.get("content_fingerprint"), signals_b.get(
-        "content_fingerprint")
-    if fa and fb and fa == fb:
-        out["status"] = "identical_fingerprint"
-    else:
-        out["status"] = "content_conflict"
-    return out
-
-
 def audit_identity(pages, scope_by_page, index_sheets, add_callout):
     """Tolerant identity audit over one source's pages.
 

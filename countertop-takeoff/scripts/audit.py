@@ -1368,12 +1368,6 @@ def audit_room_reconciliation(spec, audit):
                 " disagreement is resolved from evidence")
 
 
-def build_piece_boq_legacy(spec, results_by_id, assembly_rows, audit):
-    """(superseded V3 builder - kept as a thin alias for older callers;
-    the V4 pipeline calls build_piece_boq with the resolved model)."""
-    return build_piece_boq(spec, audit, None)
-
-
 def audit_dual_boq(assembly_rows, piece_rows, audit, project_total=None):
     """Three-way reconciliation (P0.1): the PIECE view, the ASSEMBLY view
     and the PROJECT total are reconciled AGAINST EACH OTHER - not by

@@ -311,12 +311,6 @@ def render_pack(results, pack_dir, zoom, base_dir=None):
     print(f"wrote {index} ({len(files_by_region)} region(s))")
 
 
-def args_results_path(results):
-    """Best-effort base dir for resolving relative geometry paths (kept
-    for older callers; render_pack now takes base_dir directly)."""
-    return os.path.dirname(results.get("_results_path") or ".")
-
-
 def _marker_png(text):
     """A tiny valid PNG rendered with pymupdf carrying the note text."""
     doc = pymupdf.open()
