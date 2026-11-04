@@ -548,7 +548,7 @@ def estimate_tests():
     doc = pymupdf.open(os.path.join(BUILD, "v4_est.pdf"))
     txt = "".join(pg.get_text() for pg in doc)
     check("estimate: pdf carries the SAME grand total as md/json",
-          "GRAND TOTAL: __blank__" in txt
+          "GRAND TOTAL: BLANK" in txt
           and f"{payload['priced_subtotal']:,.2f}" in txt,
           txt[:80])
     check("estimate: exclusions carry GR package, never priced",

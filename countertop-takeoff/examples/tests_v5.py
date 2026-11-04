@@ -823,13 +823,13 @@ def estimate_pdf_tests():
     first = next(ln for ln in txt.split("\n") if ln.strip())
     check("estimate-pdf: the first text line is the title, below the page"
           " top (extractable, not clipped)",
-          first.strip().startswith("# Countertop Estimate"), repr(first))
+          first.strip().startswith("Countertop Estimate"), repr(first))
     check("estimate-pdf: every rendered line total agrees with"
           " estimate.json",
           all(f"{l['line_total']:,.2f}" in txt
               for l in payload["lines"] if l["line_total"] is not None)
           and (f"{payload['grand_total']:,.2f}" in txt if payload["grand_total"] is not None
-               else "GRAND TOTAL: __blank__" in txt), txt[:200])
+               else "GRAND TOTAL: BLANK" in txt), txt[:200])
 
     # long descriptions wrap; many lines paginate
     spec = mixed_v5_spec()
@@ -913,7 +913,7 @@ def proposal_tests():
     check("proposal: json/md/pdf agree on the BLANK total",
           "ESTIMATE TOTAL: __blank__" in mdb
           and jsb["grand_total"] is None
-          and "ESTIMATE TOTAL: __blank__" in txtb,
+          and "ESTIMATE TOTAL: BLANK" in txtb,
           mdb[-400:])
     check("proposal: signature lines are blank and the terms section carries"
           " the SUPPLIED terms",
@@ -936,17 +936,24 @@ def proposal_tests():
           and "payable" not in mdb.lower().replace("payable balances", ""),
           "")
 
-    # (2) PRICED-case proposal: agreement with a fully-priced estimate
-    est_priced = os.path.join(BUILD, "v5_est_203.json")
-    est2 = json.load(open(est_priced, encoding="utf-8"))
-    est2["grand_total"] = est2["priced_subtotal"]
-    est2["scope_complete"] = True
-    est2["unknown_scope"] = []
-    est2["callouts"] = []
+    # (2) Genuinely complete scope; never erase omissions to fabricate it.
+    spec = orig_spec()
+    spec["assemblies"], spec["pieces"] = [], []
+    for typ, finish, width in (("A", "PL", 72), ("B", "ST", 96)):
+        pids = [typ + ":kitchen", typ + ":vanity"]
+        spec["assemblies"].append({"assembly_id": typ, "type": typ,
+            "package": "millwork", "finish_tag": finish, "width_in": width,
+            "depth_in": 25.5, "pieces": pids,
+            "quantity_basis": {"mode": "room_type_count", "type": typ},
+            "sources": [{"source_id": "plans", "page": 2}]})
+        spec["pieces"].extend({"piece_id": pid, "assembly_id": typ,
+            "route": "geometry", "region_id": pid, "edge_runs": []} for pid in pids)
+    run_measure(spec, "v5_priced_complete")
+    priced_res = os.path.join(BUILD, "v5_priced_complete.results.json")
     est_p = os.path.join(BUILD, "v5_est_priced.json")
-    json.dump(est2, open(est_p, "w", encoding="utf-8"))
+    est2 = estimate_mod.build_estimate(priced_res, prof_path, out_json=est_p)
     payload = proposal_mod.build_proposal(
-        hotel_res, est_p, prof_path,
+        priced_res, est_p, prof_path,
         out_md=os.path.join(BUILD, "v5_proposal.md"),
         out_json=os.path.join(BUILD, "v5_proposal.json"),
         out_pdf=os.path.join(BUILD, "v5_proposal.pdf"))
@@ -994,7 +1001,7 @@ def proposal_tests():
     tp = os.path.join(BUILD, "v5_est_tampered.json")
     json.dump(tampered, open(tp, "w", encoding="utf-8"))
     try:
-        proposal_mod.build_proposal(hotel_res, tp, prof_path)
+        proposal_mod.build_proposal(priced_res, tp, prof_path)
         refused2 = False
     except SystemExit as exc:
         refused2 = "disagrees with its own lines" in str(exc)

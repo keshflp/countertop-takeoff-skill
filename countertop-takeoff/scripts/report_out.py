@@ -378,7 +378,6 @@ def build_report(spec, calibrations, types, total, audit, review_status,
     lines += schedule_table_lines(spec)
     lines += calibration_table_lines(calibrations)
     lines += takeoff_lines(spec, types, total, totals_meta=totals_meta)
-    lines += takeoff_lines(spec, types, total)
     lines += callout_lines(audit)
     if ledger is not None:
         lines += ledger_lines(ledger)

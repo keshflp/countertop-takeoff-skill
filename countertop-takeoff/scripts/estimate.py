@@ -48,8 +48,10 @@ import json
 import os
 import re
 import sys
+import textwrap
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+from spec_schema import RATE_MATCH_KEYS
 
 BLANK = "__blank__"
 _CURRENCY_SYMBOLS = "$€£¥"
@@ -68,6 +70,8 @@ def parse_money(v, what="unit_price"):
     if isinstance(v, bool) or v is None:
         raise SystemExit(f"ERROR: {what} must be a number, got {v!r}")
     if isinstance(v, Decimal):
+        if not v.is_finite():
+            raise SystemExit(f"ERROR: {what} must be finite, got {v!r}")
         return v
     if isinstance(v, int):
         return Decimal(v)
@@ -155,7 +159,7 @@ def money(d):
 # ---------------------------------------------------------------- loading
 def load_profile(path):
     with open(path, "r", encoding="utf-8") as f:
-        profile = json.load(f)
+        profile = json.load(f, parse_float=Decimal)
     rates = profile.get("rates")
     if not rates:
         raise SystemExit(f"ERROR: profile {path} carries no rates[] - the"
@@ -169,6 +173,7 @@ def load_profile(path):
                 raise SystemExit(f"ERROR: profile rates[{i}] missing {k!r}")
         if r["uom"] != "EA":
             raise SystemExit(f"ERROR: profile rates[{i}] uom must be 'EA'")
+        validate_match(r)
         rate_amount(r, "unit_price")
     currency = effective_currency(profile, rates, path)
     return profile, rates, currency
@@ -208,10 +213,21 @@ def effective_currency(profile, rates, path):
     return next(iter(resolved)) if resolved else profile_currency
 
 
+def validate_match(rate):
+    match = rate.get("match")
+    if not isinstance(match, dict) or not isinstance(match.get("assembly_kind"), str) \
+            or not match["assembly_kind"].strip():
+        raise SystemExit("ERROR: rate match requires assembly_kind")
+    unknown = match.keys() - RATE_MATCH_KEYS
+    if unknown:
+        raise SystemExit(f"ERROR: unknown matcher keys {sorted(unknown)} in rate {rate.get('item_code')!r}")
+
+
 def rate_matches(rate, assembly):
     """match.assembly_kind is the assembly TYPE; every other declared
     matcher must equal the assembly's value exactly."""
-    match = rate.get("match") or {}
+    validate_match(rate)
+    match = rate["match"]
     if str(match.get("assembly_kind")) != str(assembly.get("type")):
         return False
     for key, field in (("finish_tag", "finish_tag"),
@@ -352,6 +368,7 @@ def build_lines(results, rates):
                    else "")
                 + (f", {a.get('handing')}" if a.get("handing") else "")),
             "assembly_ids": [aid],
+            "room": a.get("room"),
             "package": a.get("package"),
             "qty_ea": qty,
             "unit_price": (float(unit_price) if unit_price is not None
@@ -390,7 +407,21 @@ def fmt_rate(d):
     to 55.56."""
     if d == d.quantize(Decimal("0.01")):
         return money(d)
-    return str(d.normalize())
+    return format(d, "f").rstrip("0").rstrip(".")
+
+
+def line_rate(line):
+    """The exact serialized decimal is authoritative, never the legacy float."""
+    value = line.get("unit_price_exact")
+    if value is None:
+        return None
+    try:
+        rate = D(value)
+    except (InvalidOperation, ValueError) as exc:
+        raise SystemExit("ERROR: unit_price_exact must be a decimal") from exc
+    if not rate.is_finite() or rate < 0:
+        raise SystemExit("ERROR: unit_price_exact must be finite and non-negative")
+    return rate
 
 
 def summarize(lines, unknown_scope=()):
@@ -421,16 +452,17 @@ def estimate_markdown(payload):
     lines.append("|-----------|-------------|-------:|-----------:|------:|")
     for l in payload["lines"]:
         qty_s = str(l["qty_ea"]) if l["qty_ea"] is not None else BLANK
-        unit_s = fmt_rate(D(l["unit_price"])) \
-            if l["unit_price"] is not None else BLANK
+        unit_s = fmt_rate(line_rate(l)) if line_rate(l) is not None else BLANK
         total_s = money(D(l["line_total"])) if l["line_total"] is not None \
             else BLANK
         code_s = l["item_code"] or BLANK
         # V5 (P1.2): wrap a long DESCRIPTION into continuation rows so the
         # numeric columns stay on the final row - a wrapped row must never
         # split an amount
-        chunks = [l["description"][i:i + 52]
-                  for i in range(0, len(l["description"]), 52)] or [""]
+        description = (l["description"] + " [assembly " + ", ".join(l["assembly_ids"])
+                       + (f"; room {l['room']}" if l.get("room") else "") + "]")
+        chunks = textwrap.wrap(description, 52, break_long_words=False,
+                               break_on_hyphens=False) or [""]
         for ci, chunk in enumerate(chunks):
             last = ci == len(chunks) - 1
             lines.append(
@@ -456,12 +488,12 @@ def estimate_markdown(payload):
     lines.append("")
     grand = payload["grand_total"]
     if grand is None:
-        lines.append(f"**GRAND TOTAL: {BLANK}** - in-scope amount(s) for"
+        grand_lines = [f"**GRAND TOTAL: {BLANK}** - in-scope amount(s) for"
                      " the assemblies named in CALLOUTS are unknown; the"
-                     " estimate completes for the priced portion only")
+                     " estimate completes for the priced portion only"]
     else:
-        lines.append(f"**GRAND TOTAL: {money(D(grand))}"
-                     f" {payload['currency']}**")
+        grand_lines = [f"**GRAND TOTAL: {money(D(grand))}"
+                       f" {payload['currency']}**"]
     lines.append("")
     lines.append("Arithmetic: every line total is `QTY EA x unit price`,"
                  " Decimal-exact, rounded HALF_UP to whole cents; the grand"
@@ -475,7 +507,7 @@ def estimate_markdown(payload):
         else:
             lines.append(f"- {l['item_code'] or BLANK}: no amount (blank -"
                          " see CALLOUTS)")
-    return "\n".join(lines) + "\n"
+    return "\n".join([*lines, "", *grand_lines]) + "\n"
 
 
 # ------------------------------------------------- PDF render (PyMuPDF)
@@ -484,6 +516,20 @@ PDF_TOP_PT = 64.0        # V5 (P1.2): the first line sits BELOW the page top
 PDF_LEADING = 12.0
 PDF_FONTSIZE = 8.0
 PDF_MAX_LINES = 46       # per page
+
+
+def plain_text(text):
+    """Convert our small document Markdown dialect to readable PDF text."""
+    text = text.replace(BLANK, "BLANK").replace("**", "").replace("`", "")
+    lines = []
+    for line in text.splitlines():
+        line = re.sub(r"^#{1,6}\s+", "", line)
+        if re.fullmatch(r"[|:\-\s]+", line) and "|" in line:
+            continue
+        if line.startswith("|"):
+            line = " | ".join(c.strip() for c in line.strip("|").split("|"))
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def render_pdf(text, out_path, title="Countertop Estimate",
@@ -516,8 +562,8 @@ def render_pdf(text, out_path, title="Countertop Estimate",
         nonlocal y, lines_on_page
         if lines_on_page >= PDF_MAX_LINES:
             new_page()
-        wrapped = [s[i:i + max_chars] for i in range(0, len(s), max_chars)] \
-            or [""]
+        wrapped = textwrap.wrap(s, max_chars, break_long_words=False,
+                                break_on_hyphens=False) or [""]
         for chunk in wrapped:
             if lines_on_page >= PDF_MAX_LINES:
                 new_page()
@@ -526,7 +572,7 @@ def render_pdf(text, out_path, title="Countertop Estimate",
             y += PDF_LEADING
             lines_on_page += 1
 
-    for ln in text.split("\n"):
+    for ln in plain_text(text).split("\n"):
         emit(ln)
     doc.save(out_path)
     doc.close()
@@ -535,7 +581,7 @@ def render_pdf(text, out_path, title="Countertop Estimate",
     extracted = "\n".join(pg.get_text() for pg in check_doc)
     n_pages = check_doc.page_count
     check_doc.close()
-    missing = [a for a in expect_amounts if a not in extracted]
+    missing = [a for a in expect_amounts if plain_text(a) not in extracted]
     if missing:
         raise SystemExit(
             f"ERROR: rendered PDF amounts disagree with estimate.json -"
@@ -639,7 +685,7 @@ def _build_estimate(results_path, profile_path, out_md, out_json, out_pdf):
         for l in lines:
             if l["line_total"] is not None:
                 expect.append(money(D(l["line_total"])))
-                expect.append(fmt_rate(D(l["unit_price"])))
+                expect.append(fmt_rate(line_rate(l)))
             else:
                 expect.append(BLANK)
         render_pdf(md, out_pdf, expect_amounts=expect)

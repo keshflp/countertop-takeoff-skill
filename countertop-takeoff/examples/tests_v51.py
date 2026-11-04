@@ -108,6 +108,8 @@ def measurement_tests(t):
 def run(t):
     measurement_tests(t)
     publishing_tests(t)
+    import tests_v51_documents
+    tests_v51_documents.run(t)
 
 
 def publishing_tests(t):

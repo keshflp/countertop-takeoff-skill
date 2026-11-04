@@ -19,7 +19,13 @@ cell-box preview. It is not a recognition benchmark.
   name `results.json.stale-*` and reads the sidecar. These replace inline
   receipt mutation and the incorrectly named synthetic stale sibling.
 
-No V3 or V4 checks are superseded.
+- V4 PDF and V5 PDF title/blank checks now expect rendered plain text:
+  `Countertop Estimate` and `BLANK`; Markdown still carries its formatting.
+- V5 priced-proposal checks now use a fully covered original fixture with
+  both kitchen and vanity pieces. Previously they erased hotel omissions
+  and fabricated a grand total. The same total/package assertions remain.
+
+No V3 checks are superseded. No check is skipped.
 
 ## Receipt/provenance decision
 

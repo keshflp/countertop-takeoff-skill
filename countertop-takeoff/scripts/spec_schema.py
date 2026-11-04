@@ -34,6 +34,8 @@ SCHEMA_TAG = "countertop-takeoff/v2"
 SCHEMA_TAG_V3 = "countertop-takeoff/v3"
 SCHEMA_TAGS = {SCHEMA_TAG, SCHEMA_TAG_V3}
 DEFAULT_SOURCE_ID = "plans"
+RATE_MATCH_KEYS = {"assembly_kind", "finish_tag", "width_in", "depth_in",
+                   "height_in", "handing", "package"}
 SOURCE_KINDS = {"pdf", "cad", "image"}
 MODES = {"repeated_types", "individual_rooms"}
 DISPOSITIONS = {"measured", "intentionally_skipped", "superseded",
@@ -218,6 +220,8 @@ def validate_rates(profile):
         match = r.get("match")
         require(isinstance(match, dict), f"rates[{i}] ({code}): match must be"
                 " an object describing WHICH assemblies the rate prices")
+        require(not (match.keys() - RATE_MATCH_KEYS),
+                f"rates[{i}] ({code}): unknown matcher keys {sorted(match.keys() - RATE_MATCH_KEYS)}")
         ak = match.get("assembly_kind")
         require(isinstance(ak, str) and ak.strip(),
                 f"rates[{i}] ({code}): match.assembly_kind is REQUIRED - a"

@@ -42,6 +42,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import textwrap
 import sys
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -85,17 +87,40 @@ def load_estimate(estimate_path, results_path):
             f" {est.get('source_run_status')!r} - stopped scope is never"
             " quoted; re-measure, re-estimate, then propose")
     bound = est.get("results_sha256")
+    for key in ("results_sha256", "profile_sha256"):
+        if not isinstance(est.get(key), str) or not re.fullmatch(r"[0-9a-fA-F]{64}", est[key]):
+            raise SystemExit(f"ERROR: estimate requires valid provenance hash {key}")
     actual = sha256_file(results_path)
-    if bound and bound != actual:
+    if bound != actual:
         raise SystemExit(
             f"ERROR: the estimate is bound to a DIFFERENT results file"
             f" (estimate sha256 {bound[:16]}..., results sha256"
             f" {actual[:16]}...) - proposals may only be built from the"
             " corrected estimate of the SAME run")
+    rate_profile = est.get("profile_path")
+    if not rate_profile or sha256_file(rate_profile) != est["profile_sha256"]:
+        raise SystemExit("ERROR: estimate rate profile provenance hash mismatch")
+    with open(results_path, encoding="utf-8") as f:
+        source = json.load(f)
+    estimate_mod.validate_results_payload(source, results_path)
     # internal agreement: the stored totals must equal the line arithmetic
     lines = est.get("lines")
     if not isinstance(lines, list) or not lines:
         raise SystemExit(f"ERROR: estimate {estimate_path} carries no lines")
+    for line in lines:
+        qty = line.get("qty_ea")
+        if qty is not None and (isinstance(qty, bool) or not isinstance(qty, (int, float))
+                                or not estimate_mod.D(qty).is_finite()
+                                or qty < 0 or qty != int(qty)):
+            raise SystemExit("ERROR: estimate line arithmetic requires whole non-negative EA")
+        rate = estimate_mod.line_rate(line)
+        if line.get("unit_price") is not None and rate is None:
+            raise SystemExit("ERROR: estimate line requires unit_price_exact")
+        expected = cents(estimate_mod.D(qty) * rate) if qty is not None and rate is not None else None
+        got = estimate_mod.D(line["line_total"]) if line.get("line_total") is not None else None
+        if got != expected:
+            raise SystemExit(f"ERROR: estimate line arithmetic mismatch for {line.get('assembly_ids')}: "
+                             f"{qty} EA x {rate} requires {expected}, got {got}")
     priced = [estimate_mod.D(l["line_total"]) for l in lines
               if l.get("line_total") is not None]
     subtotal = cents(sum(priced)) if priced else Decimal("0.00")
@@ -105,12 +130,15 @@ def load_estimate(estimate_path, results_path):
             " lines - not a consistent estimate; re-run estimate.py")
     grand = est.get("grand_total")
     unknown = [l for l in lines if l.get("line_total") is None]
-    expect_grand = None if (unknown or est.get("unknown_scope")) else subtotal
+    expect_grand = None if (unknown or est.get("unknown_scope")
+                            or estimate_mod.unknown_scope_from_ledger(source)) else subtotal
     got_grand = estimate_mod.D(grand) if grand is not None else None
     if got_grand != expect_grand:
         raise SystemExit(
             "ERROR: the estimate's grand_total disagrees with its lines and"
             " unknown-scope - not a consistent estimate; re-run estimate.py")
+    if bool(est.get("scope_complete")) != (expect_grand is not None):
+        raise SystemExit("ERROR: estimate scope_complete disagrees with unresolved scope")
     return est
 
 
@@ -264,6 +292,9 @@ def _build_proposal(results_path, estimate_path, profile_path, out_md, out_json,
         for l in lines:
             expect.append(money(estimate_mod.D(l["line_total"]))
                           if l.get("line_total") is not None else BLANK)
+            if estimate_mod.line_rate(l) is not None:
+                expect.append(estimate_mod.fmt_rate(estimate_mod.line_rate(l)))
+        expect.extend(money(estimate_mod.D(g["known_amount"])) for g in packages)
         estimate_mod.render_pdf(md, out_pdf, title=f"Proposal - {company}",
                                 expect_amounts=expect)
         print(f"wrote {out_pdf} (amount-checked against proposal.json)")
@@ -299,12 +330,13 @@ def proposal_markdown(payload):
                  " The scope is INCOMPLETE: the estimate total is blank"
                  " while the open items below are unresolved."), ""]
     lines += ["## Package summaries", "",
-              "| package | lines | EA total | amount | note |",
-              "|---------|------:|---------:|-------:|------|"]
+              "| package | lines | EA total | known subtotal | total | note |",
+              "|---------|------:|---------:|---------------:|------:|------|"]
     for g in payload["packages"]:
         amount_s = (money(estimate_mod.D(g["amount"]))
                     if g.get("amount") is not None else BLANK)
         lines.append(f"| {g['package']} | {g['lines']} | {g['ea_total']}"
+                     f" | {money(estimate_mod.D(g['known_amount']))}"
                      f" | {amount_s} | {g['note']} |")
     lines.append("")
     lines.append(f"Priced subtotal (known lines only):"
@@ -316,14 +348,15 @@ def proposal_markdown(payload):
               "|-----------|-------------|-------:|-----------:|------:|"]
     for l in payload["lines"]:
         qty_s = str(l["qty_ea"]) if l.get("qty_ea") is not None else BLANK
-        unit_s = estimate_mod.fmt_rate(estimate_mod.D(l["unit_price"])) \
-            if l.get("unit_price") is not None else BLANK
+        unit_s = estimate_mod.fmt_rate(estimate_mod.line_rate(l)) \
+            if estimate_mod.line_rate(l) is not None else BLANK
         total_s = money(estimate_mod.D(l["line_total"])) \
             if l.get("line_total") is not None else BLANK
         code_s = l.get("item_code") or BLANK
-        chunks = [l["description"][i:i + 52]
-                  for i in range(0, len(l.get("description") or ""), 52)] \
-            or [""]
+        description = (l["description"] + " [assembly " + ", ".join(l["assembly_ids"])
+                       + (f"; room {l['room']}" if l.get("room") else "") + "]")
+        chunks = textwrap.wrap(description, 52, break_long_words=False,
+                               break_on_hyphens=False) or [""]
         for ci, chunk in enumerate(chunks):
             last = ci == len(chunks) - 1
             lines.append(
