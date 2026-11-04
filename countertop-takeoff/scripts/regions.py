@@ -404,7 +404,7 @@ def _page_polygon(r):
 def check_duplicate_boundaries(results):
     """Identical segment sets or transformed image polygons on the SAME
     (source, page) = one region measured twice. Cross-source selections
-    are unrelated."""
+    are unrelated. Conflicts carry exact region_ids alongside their detail."""
     errors = []
     base = [r for r in results if r["kind"] == "base"
             and r.get("status") != "unresolved"]
@@ -417,10 +417,11 @@ def check_duplicate_boundaries(results):
                     if "image" in (a.get("route"), b.get("route")) else
                     set(a["boundary_seg_ids"]) == set(b["boundary_seg_ids"]))
             if same:
-                errors.append(
-                    f"regions {a['region_id']!r} and {b['region_id']!r} use"
-                    " the identical boundary - one counter cannot"
-                    " be two regions")
+                errors.append({
+                    "region_ids": [a["region_id"], b["region_id"]],
+                    "detail": (f"regions {a['region_id']!r} and {b['region_id']!r} use"
+                               " the identical boundary - one counter cannot"
+                               " be two regions")})
     return errors
 
 
@@ -430,6 +431,7 @@ def check_overlaps(results):
     Same (type, variant) overlap withholds both (the v1 duplicate-Type-B bug
     that passed at 208.75 SF); cross-type overlap = warning (possible
     mirrored plans or a mislabeled bbox) reported for human review.
+    Errors carry exact region_ids alongside their detail; warnings are text.
     """
     errors, warnings = [], []
     base = [r for r in results if r["kind"] == "base"
@@ -450,8 +452,10 @@ def check_overlaps(results):
             detail = (f"regions {a['region_id']!r} and {b['region_id']!r} on"
                       f" page {a['page']} overlap by {inter_sf:.2f} SF")
             if (a["type"], a["variant"]) == (b["type"], b["variant"]):
-                errors.append(detail + " within one counted scope - this is"
-                              " how v1 doubled Type B to 208.75 SF and passed")
+                errors.append({
+                    "region_ids": [a["region_id"], b["region_id"]],
+                    "detail": (detail + " within one counted scope - this is"
+                               " how v1 doubled Type B to 208.75 SF and passed")})
             else:
                 warnings.append(detail + " across different types/variants -"
                                 " check for mirrored plans or a selection"

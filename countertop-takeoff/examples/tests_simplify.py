@@ -10,7 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import calibrate
@@ -23,6 +23,66 @@ from audit import Audit, audit_region_checks
 
 
 class SimplifyRegressions(unittest.TestCase):
+    def test_conflict_ids_withhold_only_affected_regions(self):
+        id_pairs = [("left", "right"), ("men's vanity", "women's vanity"),
+                    ("kitchen and bath", "pantry and sink")]
+        for route in ("vector", "image"):
+            for conflict, offset in (("duplicate", 0), ("overlap", .5), ("separate", 1.5)):
+                for ids in id_pairs:
+                    with self.subTest(route=route, conflict=conflict, ids=ids), tempfile.TemporaryDirectory() as tmp:
+                        rows = []
+                        for i, (rid, x) in enumerate(zip((*ids, "healthy"), (0, offset, 3))):
+                            polygon = [(x, 0), (x + 1, 0), (x + 1, 1), (x, 1)]
+                            rows.append({"region_id": rid, "source_id": "plans", "page": 1,
+                                         "viewport": "main", "kind": "base", "type": "A", "variant": None,
+                                         "route": route, "area_sf": 1, "expected_sf_range": [.9, 1.1],
+                                         "expected_range_ok": True, "gross_area_policy": "gross",
+                                         "factor_pt_per_ft": 1, "polygon": polygon,
+                                         "boundary_seg_ids": list(range(4 * i, 4 * i + 4))})
+                            if route == "image":
+                                rows[-1].update(polygon=[(a * 2, b * 2) for a, b in polygon],
+                                                factor_px_per_ft=2, image_quality={"usable": True},
+                                                provenance={"crop_bbox": [0, 0, 10, 10], "render_zoom": 2})
+                        if conflict == "duplicate":
+                            rows[1]["boundary_seg_ids"] = rows[0]["boundary_seg_ids"][:]
+                        spec = {"_sources": [{"source_id": "plans", "path": "plans.pdf", "sha256": "0" * 64}],
+                                "geometry": {}, "mode": "individual_rooms", "policy": {"gross_area": "gross"},
+                                "scope": {"pages": [{"page": 1, "disposition": "measured",
+                                                     "expected_regions": [r["region_id"] for r in rows]}]},
+                                "_assemblies": [{"assembly_id": r["region_id"], "type": "A", "package": "base",
+                                                 "pieces": [r["region_id"]], "quantity_basis": {"mode": "enumerated"}}
+                                                for r in rows],
+                                "_pieces": [{"piece_id": r["region_id"], "assembly_id": r["region_id"],
+                                             "region_id": r["region_id"], "route": "geometry"} for r in rows]}
+                        audit = Audit()
+                        audit_region_checks(spec, rows, {("plans", 1, "main"): {"factor_pt_per_ft": 1}}, audit)
+                        output = Path(tmp) / "results.json"
+                        args = measure.parse_args(["unused.json", "--json", str(output)])
+                        with redirect_stdout(io.StringIO()):
+                            self.assertEqual(measure.finish(spec, {}, {}, audit, rows, 3, args, None), 0)
+                        result = json.loads(output.read_text(encoding="utf-8"))
+                        withheld = conflict != "separate"
+                        pieces = {p["piece_id"]: p for p in result["piece_boq"]}
+                        assemblies = {a["assembly_id"]: a for a in result["assembly_boq"]}
+                        for row in result["regions"]:
+                            piece, assembly = pieces[row["region_id"]], assemblies[row["region_id"]]
+                            affected = withheld and row["region_id"] in ids
+                            self.assertEqual(row["area_sf"], None if affected else 1)
+                            self.assertEqual(piece["sf"], None if affected else 1)
+                            self.assertEqual(piece["extension_sf"], None if affected else 1)
+                            self.assertEqual(assembly["extended_sf"], None if affected else 1)
+                            if affected:
+                                self.assertEqual(row["status"], "unresolved")
+                                self.assertEqual(row["measured_area_sf"], 1)
+                                self.assertTrue(row["blank_fields"])
+                        self.assertEqual(result["totals"]["project_sf"], 1 if withheld else 3)
+                        self.assertEqual(result["totals"]["known_subtotal_sf"], 1 if withheld else 3)
+                        self.assertEqual(result["totals"]["piece_view_sf"], 1 if withheld else 3)
+                        self.assertEqual(result["totals"]["assembly_view_sf"], 1 if withheld else 3)
+                        self.assertEqual(result["totals"]["project_sf_complete"], not withheld)
+                        self.assertEqual(result["run_status"], "complete_with_callouts" if withheld else "complete")
+                        self.assertFalse(audit.failed)
+
     def test_image_route_recovery_and_qa(self):
         with tempfile.TemporaryDirectory() as tmp:
             crop = Path(tmp) / "crop.png"

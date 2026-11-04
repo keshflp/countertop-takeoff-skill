@@ -1557,11 +1557,10 @@ def audit_region_checks(spec, results, calibrations, audit,
                   f" {r['factor_pt_per_ft']:.4f} pt/ft, policy"
                   f" {r['gross_area_policy']})")
     dup = check_duplicate_boundaries(results)
-    for e in dup:
+    for conflict in dup:
         # V4: duplicate boundaries withhold the AFFECTED pair (callout),
         # never stop the job
-        between = e.split("regions ")[1].split(" use")[0]
-        ids = [part.strip().strip("'") for part in between.split(" and ")]
+        ids = conflict["region_ids"]
         for r in results:
             if r["region_id"] in ids and r.get("status") != "unresolved":
                 r["identity_conflict"] = True
@@ -1569,18 +1568,19 @@ def audit_region_checks(spec, results, calibrations, audit,
                          " is already used by another region; one"
                          " counter cannot be two regions (both records"
                          " withheld)")
-        audit.add("duplicate boundaries", "warn", e + " - both records"
+        audit.add("duplicate boundaries", "warn",
+                  conflict["detail"] + " - both records"
                   " withheld (degrades locally; V3 stopped the job)")
     ov_err, ov_warn = check_overlaps(results)
-    for e in ov_err:
-        between = e.split("regions ")[1].split(" on page")[0]
-        ids = [part.strip().strip("'") for part in between.split(" and ")]
+    for conflict in ov_err:
+        ids = conflict["region_ids"]
         for r in results:
             if r["region_id"] in ids and r.get("status") != "unresolved":
                 withhold(r, "counted-instance overlap within one counted"
                          " scope - the instances cannot both be counted"
                          " (both records withheld until resolved)")
-        audit.add("instance overlap", "warn", e + " - both records withheld"
+        audit.add("instance overlap", "warn",
+                  conflict["detail"] + " - both records withheld"
                   " (degrades locally; V3 stopped the job)")
     for w in ov_warn:
         audit.add("instance overlap", "warn", w)
