@@ -116,6 +116,7 @@ uv run examples/tests_v3.py     # 34 checks
 uv run examples/tests_v4.py     # 40 checks
 uv run examples/tests_v5.py     # 125 checks, including 5.1 regressions
 uv run examples/tests_simplify.py
+uv run --python 3.13 examples/tests_evidence_views.py  # 13 evidence/rate contracts
 uv run examples/tests_output_contract.py
 ```
 
@@ -123,6 +124,23 @@ The [example walkthrough](countertop-takeoff/examples/run_example.md) describes
 synthetic fixtures. They verify known geometry and failure handling; they do
 not prove recognition on an unseen job. Use the [first-run checklist](countertop-takeoff/references/first-run-checklist.md)
 for supervised validation and a drawings-only blind exercise.
+
+Optional [scan-detail assistance](countertop-takeoff/references/method.md#selected-scan-detail-assistance)
+uses pinned free OpenCV/NumPy to clean a selected crop and suggest outlines
+for agent inspection and explicit adoption. It preserves the original pixels
+and requires the existing dimension anchors and measurement proof. Generated
+evaluation and contract checks run separately via
+`uv run --python 3.13 examples/evaluate_scan_detail.py --prepare --baseline --tag baseline`,
+then `uv run --python 3.13 examples/evaluate_scan_detail.py --tag final`, and
+`uv run --python 3.13 examples/tests_scan_detail.py` from the skill folder.
+Use `--prepare` only once per workload. See the
+[experiment evidence](countertop-takeoff/references/scan-detail-experiment.md)
+for false proposals and limits; real checked plans have not been tested.
+
+The audit pack now links recorded assembly applications, earned counts,
+schedule/room evidence and source proofs in one index. Estimates/proposals show
+optional shop-supplied rate sources, dates and quote references. See the bounded
+[research adaptations and evidence](countertop-takeoff/references/research-adaptations.md).
 
 ## Limits and legal notes
 

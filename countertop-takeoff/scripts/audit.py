@@ -1247,6 +1247,7 @@ def build_assembly_boq(spec, audit, resolved=None):
             "height_in": a.get("height_in"), "handing": a.get("handing"),
             "ea": count, "ea_state": rrow.get("ea_state"),
             "basis": basis, "state": state,
+            "quantity_basis": dict(a["quantity_basis"]),
             "sf_per_instance": rrow.get("sf_per_instance"),
             "extended_sf": rrow.get("extended_sf"),
             "sf_state": rrow.get("sf_state"),

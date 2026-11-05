@@ -89,6 +89,13 @@ evidence is withheld (blank + callout) — the invented-count guard.
    full-plan tracing. Stated dimensions beat scaling: DO NOT SCALE DRAWINGS
    sheets get stated values from sections/elevations joined to plan lengths.
 
+   For a selected scan detail, optional `scripts/scan_detail.py` cleans a
+   separate copy and suggests closed linework. Inspect the ORIGINAL and
+   suggestion overlay; explicitly adopt/edit an outline before supplying
+   points to `image_measure.py`. Suggestions are not countertop recognition,
+   calibration, measurement proof or completeness. See the
+   [scan assistance procedure](references/method.md#selected-scan-detail-assistance).
+
 ### Step 4. Build the job spec
 `references/job-spec-v3.md` is the schema; `examples/fixture.jobs.json` and
 the output of `examples/make_hotel_jobs.py` are working examples. You write
@@ -116,8 +123,11 @@ completeness flags and omission reasons with both; never claim equal scopes.
 `uv run scripts/audit_pack.py build/results.json --pack build/audit_pack`
 renders overlays. Give a FRESH agent (or an independent human, recorded as
 such) the pack + raw sources + JSONs to re-verify counts, shells, spans and
-omissions; record the receipt with `--record-receipt`. If no independent
-auditor is available, disclose `independent_audit_unavailable` and continue.
+omissions. The pack's `index.md` links assembly/type/variant applications,
+earned EA, schedule/tag evidence and original-pixel proofs; unassigned rooms
+and unresolved scope stay visible. Record the receipt with `--record-receipt`.
+If no independent auditor is available, disclose `independent_audit_unavailable`
+and continue.
 Use `references/first-run-checklist.md` for supervision/blind exercise; no gate.
 
 ### Step 7. Estimate (when the shop asks for pricing)
@@ -132,6 +142,9 @@ from evidence and other outputs. Each assembly prices EA × exact rate.
 Unmatched/ambiguous rates, withheld quantities, or omitted in-scope scope
 leave unknown amounts BLANK with callouts; priced lines survive, grand total
 stays BLANK. Stopped runs or results without `assembly_boq` refuse pricing.
+When supplied, per-rate `rate_basis` source/date/quote reference and inclusions
+appear on estimates and proposals. Missing metadata stays BLANK; dates do not
+imply rate expiry. See `references/company-profile.md`.
 
 ### Step 7b. Proposal-lite (when the shop asks for a customer-facing quote)
 `uv run scripts/proposal.py build/results.json --estimate
