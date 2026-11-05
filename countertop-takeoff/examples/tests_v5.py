@@ -507,7 +507,9 @@ def uncertainty_tests():
           rc == 0 and pk["edge_lf_by_profile"].get("eased") is None
           and any("edge_lf" in b for b in pk.get("blank_fields") or [])
           and "edge_lf" in co
-          and "blank: edge_lf" in ledger_txt,
+          and pk["edge_lf_ext"].get("eased") is None
+          and any(e["kind"] == "piece" and "edge_lf:eased:front" in e["detail"]
+                  for e in res["coverage_ledger"]),
           f"rc={rc} piece={ {k: pk.get(k) for k in ('edge_lf_by_profile',
                                                     'blank_fields')} }")
 

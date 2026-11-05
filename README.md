@@ -116,6 +116,7 @@ uv run examples/tests_v3.py     # 34 checks
 uv run examples/tests_v4.py     # 40 checks
 uv run examples/tests_v5.py     # 125 checks, including 5.1 regressions
 uv run examples/tests_simplify.py
+uv run examples/tests_output_contract.py
 ```
 
 The [example walkthrough](countertop-takeoff/examples/run_example.md) describes

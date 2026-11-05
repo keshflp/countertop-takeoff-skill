@@ -154,11 +154,14 @@ def audit_scope(spec, geometry_map, audit):
     for sid, geo in geometry_map.items():
         for p in geo["pages"]:
             pages_by_no[(sid, p["page"])] = p
+    spec["_inventoried_pages"] = [
+        {"source_id": sid, "page": pno,
+         "sheet": pages_by_no.get((sid, pno), {}).get("sheet")}
+        for sid, geo in sorted(geometry_map.items())
+        for pno in range(1, geo["source"]["page_count"] + 1)]
     disp = {(e.get("source_id") or spec["_sources"][0]["source_id"],
              e["page"]): e for e in spec["scope"]["pages"]}
-    declared_pages = {(s["source_id"], p["page"]) for s in spec["_sources"]
-                      for p in geometry_map.get(s["source_id"],
-                                                {"pages": []})["pages"]}
+    declared_pages = {(e["source_id"], e["page"]) for e in spec["_inventoried_pages"]}
     missing = sorted(k for k in declared_pages if k not in disp)
     if missing:
         audit.add_callout(
@@ -191,20 +194,46 @@ def audit_scope(spec, geometry_map, audit):
         elif e["disposition"] == "superseded":
             audit.add("superseded page", "pass",
                       f"page {pno} superseded: {e.get('reason', '')[:110]}")
+        elif e["disposition"] == "unresolved":
+            audit.add_callout(
+                f"page {key[0]}:{pno}",
+                f"page {pno} unresolved: {e.get('reason', '')}",
+                blank_fields=["unresolved quantities on this page"],
+                pages=[pno], source_id=key[0])
         else:
             audit.add("skipped page", "pass",
                       f"page {pno} intentionally_skipped:"
                       f" {e.get('reason', '')[:110]}")
     # tolerant sheet identity per source (callouts, never silent drops)
-    index_sheets = (spec.get("sheet_index") or {}).get("lists") or []
+    index = spec.get("sheet_index") or {}
+    spec["_missing_sheets"] = []
     for sid, geo in geometry_map.items():
+        index_sheets = ((index.get("lists") or [])
+                        if sid == (index.get("source_id") or
+                                   spec["_sources"][0]["source_id"]) else [])
         scope_by_page = {e["page"]: e for e in spec["scope"]["pages"]
                          if (e.get("source_id")
                              or spec["_sources"][0]["source_id"]) == sid}
         sheet_identity.audit_identity(
             geo["pages"], scope_by_page, index_sheets,
             lambda scope, detail, _sid=sid: audit.add_callout(
-                scope, detail, source_id=_sid))
+                scope, detail, source_id=_sid,
+                blank_fields=["all quantities from missing sheet"]
+                if scope.endswith("/index_gap)") else [],
+                pages=[index["page"]] if index.get("page")
+                and scope.endswith("/index_gap)") else None))
+        labels = {sheet_identity.normalize(p["sheet"])
+                  for p in geo["pages"] if p.get("sheet")}
+        for label in dict.fromkeys(index_sheets):
+            if not labels & sheet_identity.alias_candidates(label):
+                spec["_missing_sheets"].append({
+                    "item": f"missing sheet {label}", "kind": "sheet",
+                    "state": "unresolved", "sheet": label,
+                    "source": {"source_id": sid,
+                               "pages": [index["page"]] if index.get("page") else [],
+                               "sheet": label},
+                    "blank_fields": ["all quantities from missing sheet"],
+                    "detail": "listed in drawing index but absent from supplied set"})
     return pages_by_no
 
 
@@ -497,7 +526,7 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
                         or any(p is None or p.get("orphan")
                                or p.get("extension_sf") is None for p in own)):
                     return "unresolved", "assembly/piece construction incomplete - SF blank"
-            return "measured", f"{len(active)} assembly record(s) with resolved construction"
+            return "measured", f"{len(active)} assembly record(s) with resolved area; other properties may remain blank"
         if key[0] in excluded_types:
             return "package_excluded", "type excluded by policy; reported separately"
         if key[1] and not record["included_in_parent_total"]:
@@ -577,20 +606,33 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
                            if r.get("status") == "unresolved"
                            else f"{r['area_sf']:.2f} SF"),
             })
-    # superseded pages appear in the ledger, not only in callouts (P0.3:
-    # the COMPLETE inventory)
-    for e in spec.get("scope", {}).get("pages", []):
-        if e.get("disposition") == "superseded":
-            ledger.append({
-                "item": (f"page {e.get('source_id') + ':' if e.get('source_id')
-                          else ''}{e['page']}"
-                         + (f" ({e.get('sheet')})" if e.get("sheet") else "")),
-                "kind": "page",
-                "source": {"source_id": e.get("source_id"),
-                           "pages": [e["page"]]},
-                "state": "superseded",
-                "detail": (e.get("reason") or "")[:110],
-            })
+    default_sid = spec["_sources"][0]["source_id"]
+    dispositions = {(e.get("source_id") or default_sid, e["page"]): e
+                    for e in spec.get("scope", {}).get("pages", [])}
+    inventory = {(e["source_id"], e["page"]): e
+                 for e in spec.get("_inventoried_pages", [])}
+    measured = {r["region_id"]: r for r in results}
+    for key in sorted(inventory.keys() | dispositions.keys()):
+        e = dispositions.get(key) or {}
+        disposition = e.get("disposition")
+        state = {"measured": "measured", "intentionally_skipped": "included_scope",
+                 "superseded": "superseded"}.get(disposition, "unresolved")
+        expected = e.get("expected_regions") or []
+        if disposition == "measured" and any(
+                rid not in measured or region_state(measured[rid]) == "unresolved"
+                for rid in expected):
+            state = "unresolved"
+        sheet = e.get("sheet") or inventory.get(key, {}).get("sheet")
+        ledger.append({
+            "item": f"page {key[0]}:{key[1]}" + (f" ({sheet})" if sheet else ""),
+            "kind": "page", "source": {"source_id": key[0], "pages": [key[1]]},
+            "disposition": disposition, "state": state,
+            "blank_fields": ["all unresolved quantities on this page"]
+            if state == "unresolved" else [],
+            "detail": e.get("reason") or (
+                "area selections accounted for; property completeness is separate"
+                if state == "measured" else "missing disposition or unresolved selections")})
+    ledger.extend(dict(e) for e in spec.get("_missing_sheets", []))
     # every inventoried ROOM reconciles to the assembly that covers it
     inv = ((spec.get("schedule") or {}).get("room_inventory") or {})
     asm_rooms = {}
@@ -599,6 +641,31 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
             asm_rooms[arow["room"]] = arow
     for room in inv.get("rooms") or []:
         arow = asm_rooms.get(room["room"])
+        if arow is None and not spec.get("_assemblies"):
+            record = next((t for t in (sched or {}).get("types", [])
+                           if t["type"] == room["type"]), {})
+            state, detail = construction_state((room["type"], room.get("variant")), record)
+            ledger.append({
+                "item": f"room {room['room']} ({room['type']})", "kind": "room",
+                "source": {"source_id": room.get("source_id") or default_sid,
+                           "pages": [room["page"]]},
+                "state": state, "detail": "type-prototype coverage: " + detail})
+            continue
+        if arow is None:
+            prototypes = [a for a in resolved.get("assemblies", {}).values()
+                          if quantity_bases[a["assembly_id"]].get("mode") == "room_type_count"
+                          and (a["type"], a.get("variant")) == (room["type"], room.get("variant"))]
+            if prototypes:
+                state = ("package_excluded" if all(a["state"] == "package_excluded" for a in prototypes)
+                         else "unresolved" if any(a["state"] == "unresolved" for a in prototypes)
+                         else "measured")
+                ledger.append({
+                    "item": f"room {room['room']} ({room['type']})", "kind": "room",
+                    "source": {"source_id": room.get("source_id") or default_sid,
+                               "pages": [room["page"]]}, "state": state,
+                    "detail": "covered by schedule-bound prototype assemblies: "
+                              + ", ".join(a["assembly_id"] for a in prototypes)})
+                continue
         if arow is None:
             ledger.append({
                 "item": f"room {room['room']} ({room['type']})",
@@ -618,7 +685,7 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
                 "source": {"pages": [room["page"]]},
                 "state": ("package_excluded"
                           if arow["state"] == "package_excluded"
-                          else ("measured" if has_ea else "unresolved")),
+                          else arow["state"]),
                 "detail": ("covered by assembly " + arow["assembly_id"]
                            + ("; package-excluded, reported separately"
                               if arow["state"] == "package_excluded"
@@ -640,7 +707,8 @@ def build_coverage_ledger(spec, results, audit, results_by_id=None,
             state = "unresolved"
             detail = arow.get("basis") or "EA withheld"
         else:
-            detail = f"{arow.get('basis')} (resolved)"
+            detail = (f"{arow.get('basis')} (EA resolved; area {arow.get('sf_state')};"
+                      f" quantity fields complete: {arow.get('quantity_complete', False)})")
         ledger.append({"item": f"assembly {arow['assembly_id']}",
                        "kind": "assembly",
                        "source": {"pages": sorted(
@@ -948,20 +1016,29 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
         factor = None
         policy = None
         region_meta = None
+        piece_links = dict(p.get("source_links") or {})
+        for field in ("edge_runs", "splash_runs", "cutouts"):
+            for index, run in enumerate(p.get(field) or []):
+                if run.get("source"):
+                    piece_links[f"{field}[{index}]"] = dict(run["source"])
         if p["route"] == "geometry":
             r = (results_by_id or {}).get(p.get("region_id"))
+            if r is not None:
+                region_meta = {"region_id": r["region_id"],
+                               "sheet": r.get("sheet") or "?",
+                               "page": r.get("page"), "source_id": r.get("source_id"),
+                               "viewport": r.get("viewport") or "main",
+                               "factor": r.get("factor_pt_per_ft") or r.get("factor_px_per_ft"),
+                               "policy": r.get("gross_area_policy")}
+                piece_links["area"] = {"source_id": r.get("source_id"),
+                                       "page": r.get("page"), "seg_ids": r.get("boundary_seg_ids") or [],
+                                       "region_id": r["region_id"]}
             if r is None or r.get("status") == "unresolved":
                 blank.append("sf")
             else:
                 sf = r["area_sf"]
                 factor = r.get("factor_pt_per_ft") or r.get("factor_px_per_ft")
                 policy = r.get("gross_area_policy")
-                region_meta = {"region_id": r["region_id"],
-                               "sheet": r.get("sheet") or "?",
-                               "page": r.get("page"),
-                               "viewport": r.get("viewport") or "main",
-                               "source_id": r.get("source_id"),
-                               "factor": factor, "policy": policy}
         else:
             d = p.get("dims_in") or {}
             dims = {k: d.get(k) for k in ("width", "depth", "thickness",
@@ -971,10 +1048,25 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
             else:
                 sf = round(d["width"] * d["depth"] / 144.0, 4)
                 policy = "stated dims"
-                region_meta = {"region_id": None, "sheet": "?", "page": "",
-                               "viewport": "stated", "source_id": None,
-                               "factor": None, "policy": policy}
-        edges = {}
+        if region_meta is not None or p["route"] == "stated":
+            links = piece_links
+            page_meta = {(e["source_id"], e["page"]): e
+                         for e in spec.get("_inventoried_pages", [])}
+            sources = []
+            for prop, link in links.items():
+                sid = link.get("source_id") or spec["_sources"][0]["source_id"]
+                source = dict(link, source_id=sid, property=prop)
+                source["sheet"] = page_meta.get((sid, link.get("page")), {}).get("sheet")
+                sources.append(source)
+            primary = next((s for s in sources if s["property"] in {"length", "width"}),
+                           sources[0] if sources else {})
+            if p["route"] == "stated":
+                region_meta = {"region_id": None, "sheet": primary.get("sheet") or "?",
+                               "page": primary.get("page"), "viewport": "stated",
+                               "source_id": primary.get("source_id"),
+                               "factor": None, "policy": "stated dims"}
+            region_meta["sources"] = sources
+        edges = {} if p.get("edge_runs") is not None else None
         edge_blank = []
         edge_runs_by_profile = {}
         for run in p.get("edge_runs") or []:
@@ -994,20 +1086,20 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
         # itself in the piece's blank fields (callout) instead of silently
         # shipping a `measured` record with a hidden null
         blank.extend(edge_blank)
+        if edges is None:
+            blank.extend(["edge_lf_by_profile", "edge_lf_ext"])
         for prof, entry in edge_runs_by_profile.items():
             edges[prof] = (round(entry["lf"], 3) if entry["complete"]
                            else None)
         splash_lf = 0.0
         splash_sf = 0.0
-        splash_lf_ok = True
-        splash_sf_ok = True
-        splash_detail = []
+        splash_lf_ok = p.get("splash_runs") is not None
+        splash_sf_ok = p.get("splash_runs") is not None
+        splash_detail = [] if p.get("splash_runs") is not None else None
         for run in p.get("splash_runs") or []:
             ln = run.get("length_in")
             ht = run.get("height_in")
-            splash_detail.append({"handing": run.get("handing"),
-                                  "returns_in": run.get("returns_in"),
-                                  "length_in": ln, "height_in": ht})
+            splash_detail.append(dict(run))
             if ln is None:
                 splash_lf_ok = False
             else:
@@ -1017,12 +1109,16 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
             else:
                 splash_sf += ln * ht / 144.0
         if not splash_lf_ok:
-            blank.append("splash_lf")
+            blank.extend(["splash_lf", "splash_lf_ext"])
         if not splash_sf_ok:
-            blank.append("splash_sf")
-        cutouts = {}
+            blank.extend(["splash_sf", "splash_sf_ext"])
+        cutouts = {} if p.get("cutouts") is not None else None
         for c in p.get("cutouts") or []:
-            cutouts[c["kind"]] = cutouts.get(c["kind"], 0) + c["ea"]
+            previous = cutouts.get(c["kind"], 0)
+            cutouts[c["kind"]] = (previous + c["ea"]
+                                  if previous is not None and c["ea"] is not None else None)
+        if cutouts is None or any(v is None for v in cutouts.values()):
+            blank.extend(["cutouts_ea", "cutouts_ea_ext"])
         ext = (round(sf * ea, 4)
                if sf is not None and isinstance(ea, (int, float)) else None)
         extension_withheld = pid in geometry_withheld or pid in identity_pieces
@@ -1034,29 +1130,33 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
                           "splash_lf_ext", "splash_sf_ext"])
         if ext is None:
             blank.append("extension_sf")
-        edge_ext = ({k: round(v * ea, 3) for k, v in edges.items()
-                     if v is not None and ea is not None}
-                    if ea is not None else None)
+        edge_ext = ({k: round(v * ea, 3) if v is not None else None
+                     for k, v in edges.items()}
+                    if edges is not None and ea is not None else None)
+        blank.extend(f"edge_lf_ext:{k}" for k, v in (edge_ext or {}).items()
+                     if v is None)
         splash_lf_ext = (round(splash_lf * ea, 3)
                          if splash_lf_ok and ea is not None else None)
         splash_sf_ext = (round(splash_sf * ea, 3)
                          if splash_sf_ok and ea is not None else None)
-        cutouts_ext = ({k: v * ea for k, v in cutouts.items()}
-                       if ea is not None else None)
+        cutouts_ext = ({k: v * ea if v is not None else None for k, v in cutouts.items()}
+                       if cutouts is not None and ea is not None else None)
         if extension_withheld:
             edge_ext = cutouts_ext = splash_lf_ext = splash_sf_ext = None
         if blank:
+            refs = list(piece_links.values())
+            if region_meta:
+                refs.append(region_meta)
+            sid = ((region_meta or {}).get("source_id") or
+                   next((ref.get("source_id") for ref in refs if ref.get("source_id")), None))
             audit.add_callout(
                 f"piece {pid}",
                 "unresolved construction properties - fields stay blank"
                 f" ({sorted(set(blank))})",
                 blank_fields=sorted(set(blank)),
-                pages=sorted({l.get("page")
-                              for l in (p.get("source_links") or {}).values()
-                              if l.get("page")}),
-                source_id=next(iter((p.get("source_links") or {}).values()),
-                               {}).get("source_id") if (
-                                   p.get("source_links") or {}) else None)
+                pages=sorted({ref["page"] for ref in refs if ref.get("page")
+                              and ref.get("source_id") == sid}),
+                source_id=sid)
         resolved["pieces"][pid] = {
             "piece_id": pid, "assembly_id": aid,
             "room": None if orphan else arow.get("room"),
@@ -1067,18 +1167,23 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
             "route": p["route"], "region_id": p.get("region_id"),
             "dims_in": dims, "sf": sf, "region_meta": region_meta,
             "edge_lf_by_profile": edges,
+            "edge_runs": p.get("edge_runs"),
             "edge_blank_profiles": sorted({b.split(":")[1]
                                            for b in edge_blank}),
             "splash_lf": round(splash_lf, 3) if splash_lf_ok else None,
             "splash_sf": round(splash_sf, 3) if splash_sf_ok else None,
             "splash_detail": splash_detail,
-            "cutouts_ea": None if extension_withheld else (cutouts or {}),
+            "cutouts_ea": None if extension_withheld else cutouts,
+            "cutout_detail": p.get("cutouts"),
             "ea": ea, "extension_sf": ext,
             "extension_withheld": extension_withheld,
             "edge_lf_ext": edge_ext, "splash_lf_ext": splash_lf_ext,
             "splash_sf_ext": splash_sf_ext, "cutouts_ea_ext": cutouts_ext,
-            "state": state, "blank_fields": sorted(set(blank)),
-            "source_links": p.get("source_links") or {},
+            "state": ("unresolved" if state != "package_excluded" and ext is None else state),
+            "sf_state": "resolved" if ext is not None else "unresolved",
+            "quantity_complete": not blank,
+            "blank_fields": sorted(set(blank)),
+            "source_links": piece_links,
             "orphan": orphan,
         }
 
@@ -1101,6 +1206,11 @@ def resolve_quantities(spec, results, audit, results_by_id=None):
                 "piece SF incomplete - the assembly's SF/extension stays"
                 " blank while its other quantities survive",
                 blank_fields=["sf", "extension_sf"])
+        arow["sf_state"] = "resolved" if arow["extended_sf"] is not None else "unresolved"
+        arow["quantity_complete"] = bool(own) and all(
+            pp["quantity_complete"] for pp in own)
+        if arow["state"] != "package_excluded" and arow["extended_sf"] is None:
+            arow["state"] = "unresolved"
 
     # ---- totals from the SAME resolved records -----------------------
     for prow in resolved["pieces"].values():
@@ -1139,6 +1249,8 @@ def build_assembly_boq(spec, audit, resolved=None):
             "basis": basis, "state": state,
             "sf_per_instance": rrow.get("sf_per_instance"),
             "extended_sf": rrow.get("extended_sf"),
+            "sf_state": rrow.get("sf_state"),
+            "quantity_complete": rrow.get("quantity_complete", False),
             "pieces": list(a.get("pieces") or []),
             "sources": a.get("sources") or [],
         })
@@ -1481,7 +1593,7 @@ def audit_dual_boq(assembly_rows, piece_rows, audit, project_total=None):
             blank_fields=["extension_sf"])
     detail = (
         "strict pair over the SAME known contributions"
-        f" ({len(strict_asms)} fully-resolved assembly(ies)): assembly view"
+        f" ({len(strict_asms)} area-resolved assembly(ies); other properties may remain blank): assembly view"
         f" {round(asm_total, 2):.2f} SF == piece view"
         f" {round(piece_subset, 2):.2f} SF"
         + ("" if pair_ok else "  << MISMATCH")
@@ -1828,7 +1940,7 @@ def aggregate_types_resolved(spec, resolved, audit, base):
         name = arow["type"]
         if name not in groups:
             groups[name] = {"extended": 0.0, "excluded": 0.0,
-                            "rows": [], "ea": 0, "sf_pi": 0.0,
+                            "rows": [], "ea": 0, "instances": [],
                             "known": False, "unknown": False}
             order.append(name)
         own = pieces_by_asm.get(arow["assembly_id"], [])
@@ -1855,6 +1967,9 @@ def aggregate_types_resolved(spec, resolved, audit, base):
             "region_id": None, "sheet": "?", "page": "",
             "viewport": "stated", "source_id": None, "factor": None,
             "policy": "stated dims"}
+        display["sources"] = [dict(source, piece_id=piece["piece_id"])
+                              for piece in own
+                              for source in (piece.get("region_meta") or {}).get("sources", [])]
         row = {
             "room_type": name, "variant": arow.get("variant"),
             "region_id": display.get("region_id") or first_pid,
@@ -1870,6 +1985,7 @@ def aggregate_types_resolved(spec, resolved, audit, base):
                 "page": display.get("page"),
                 "viewport": display.get("viewport") or "main",
                 "source_id": display.get("source_id"),
+                "sources": display.get("sources") or [],
                 "factor_pt_per_ft": display.get("factor"),
                 "gross_area_policy": display.get("policy") or "stated dims",
             }],
@@ -1884,9 +2000,7 @@ def aggregate_types_resolved(spec, resolved, audit, base):
         groups[name]["ea"] = (groups[name]["ea"] + ea
                                if groups[name]["ea"] is not None and ea is not None
                                else None)
-        groups[name]["sf_pi"] = (groups[name]["sf_pi"] + sf_pi
-                                  if groups[name]["sf_pi"] is not None and sf_pi is not None
-                                  else None)
+        groups[name]["instances"].append((ea, sf_pi))
         groups[name]["rows"].append(row)
     types = []
     total = 0.0
@@ -1900,11 +2014,19 @@ def aggregate_types_resolved(spec, resolved, audit, base):
         # (never 0.00); a partially-known type shows its known subtotal with
         # completeness False
         type_total = (round(g["extended"], 2) if g["known"] else None)
+        instances = g["instances"]
+        # A single prototype's area survives an unknown multiplier. Multiple
+        # assemblies require an EA-weighted average, never a sum of unit areas.
+        per_unit = instances[0][1] if len(instances) == 1 else (
+            sum(ea * sf for ea, sf in instances) / g["ea"]
+            if g["ea"] is not None and g["ea"] > 0
+            and all(sf is not None for _, sf in instances) else None)
         types.append({
             "room_type": name,
             "schedule_count": sched_count,
             "std_units": g["ea"],
-            "sf_per_unit": round(g["sf_pi"], 4) if g["sf_pi"] is not None else None,
+            "sf_per_unit": round(per_unit, 4) if per_unit is not None else None,
+            "sf_per_unit_basis": "assembly prototype" if len(instances) == 1 else "active assembly EA weighted mean",
             "extended_sf": type_total,
             "complete": (not g["unknown"]),
             "excluded_extended_sf": round(g["excluded"], 2),
