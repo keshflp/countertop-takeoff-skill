@@ -280,7 +280,9 @@ class SimplifyRegressions(unittest.TestCase):
                                                  "pieces": [r["region_id"]], "quantity_basis": {"mode": "enumerated"}}
                                                 for r in rows],
                                 "_pieces": [{"piece_id": r["region_id"], "assembly_id": r["region_id"],
-                                             "region_id": r["region_id"], "route": "geometry"} for r in rows]}
+                                             "region_id": r["region_id"], "route": "geometry",
+                                             "edge_runs": [], "splash_runs": [], "cutouts": []}
+                                            for r in rows]}
                         audit = Audit()
                         audit_region_checks(spec, rows, {("plans", 1, "main"): {"factor_pt_per_ft": 1}}, audit)
                         output = Path(tmp) / "results.json"

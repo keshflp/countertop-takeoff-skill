@@ -15,8 +15,11 @@ uv run scripts/audit_pack.py build/results.json --pack build/audit_pack
 ```
 
 The deterministic fixture matches the pinned hash: page 1 schedule, pages 2-3
-countertops, three spans each at 18.0000 pt/ft. The spec records evidence,
-planned regions, rechecks and the plan/spec depth conflict.
+countertops, three spans each at 18.0000 pt/ft. The spec records schedule and
+plan-tag evidence and planned regions. Synthetic notes agree with the drawn
+depth and limit this phase to one vanity per unit. The example does not claim
+an independent recheck from the same selections; independent review is still
+required by the first-run checklist.
 
 | Quantity | Known and measured |
 |---|---:|

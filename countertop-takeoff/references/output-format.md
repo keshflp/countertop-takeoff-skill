@@ -100,6 +100,42 @@ Schema: `countertop-takeoff/v3 results`. Input-derived selections follow the
 | `unavailable_inputs[]` | `item`, `detail`, optional `source` |
 | `review_status`, `geometry_page_classes` | Initially `independent_audit_pending`; page-to-class mapping |
 
+Unknown quantity collections are JSON `null` and blank CSV cells. Known
+profiles/kinds with unknown amounts remain present as `{"eased": null}` in
+both per-instance and extended fields. Explicitly declared empty collections
+remain `{}`; verified zero counts remain zero. Markdown labels unknowns
+`BLANK` and empty declared collections `none declared`.
+
+`sf_state` distinguishes area/extension resolution from `quantity_complete`
+(all modeled SF/edge/splash/cutout fields resolved). `property_gaps[]` records
+piece-level named blank fields and source links. `totals.quantity_complete`
+also requires complete scope. An area-resolved piece may retain unknown
+cutouts without losing its gross SF; EA pricing still uses the independent
+validated assembly count.
+Legacy area-only jobs without an assembly/piece property model report
+`totals.quantity_complete: null` (not assessed). Their area completeness
+remains independently recorded by `project_sf_complete`.
+
+For assembly jobs, `types[].sf_per_unit` is a single prototype's known area,
+or the active assembly-EA-weighted mean across multiple assemblies of that
+type. Unknown areas/weights prevent computing that mean. The explicit
+`sf_per_unit_basis` identifies the denominator; assembly EA is not necessarily
+guestroom count. Unit areas are never summed across enumerated rooms.
+Edge/splash/cutout run sources, including word/segment selections, are retained
+in piece `source_links` under scoped keys such as `splash_runs[0]`, and on the
+run details themselves.
+
+The coverage ledger includes exactly one `page` entry per inventoried
+`(source_id, page)`, including pages absent from extracted geometry or from
+the job's dispositions. Intentionally skipped pages are `included_scope`
+with the original disposition/reason, superseded pages stay `superseded`,
+and unresolved/missing pages stay `unresolved`. Missing indexed sheets have
+separate named `sheet` entries with index provenance and blank fields; these
+propagate into `scope_incomplete[]` and downstream pricing completeness.
+
+Stated-dimension pieces retain a primary source/page/sheet and every property
+source link, including selection IDs, across JSON, CSV and report views.
+
 Active aggregate counts and SF per unit stay `null` if any contribution is
 unknown; reports and CSVs show blank markers. Genuine zero stays zero, and
 excluded assemblies do not affect active aggregates. `unit_count` uses counts
