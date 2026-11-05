@@ -22,8 +22,8 @@ It can also RECORD the independent audit receipt into the results JSON:
 
 Rules: receipts are only recorded on runs whose required checks passed;
 `--verdict rejected` is recorded verbatim (a rejection is an outcome, not an
-error). If no fresh agent is available, an independent HUMAN must review and
-be recorded as `human: <name>` - SKILL.md documents this substitution.
+error). An independent human may review as `human: <name>`; if no independent
+auditor is available, disclose that and continue as described in SKILL.md.
 """
 
 import argparse
@@ -32,6 +32,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pymupdf  # noqa: E402
@@ -148,7 +149,128 @@ def clamped(bbox, w, h):
                         min(w, bbox[2] + PAD_PT), min(h, bbox[3] + PAD_PT))
 
 
-def build_index_md(results, pack_dir, files_by_region, geo_problems=None):
+def cell(value):
+    """Keep recorded evidence in one Markdown table cell; null is not zero."""
+    if value is None:
+        return "BLANK"
+    if isinstance(value, (dict, list)):
+        value = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value).replace("\r", " ").replace("\n", " ").replace("|", r"\|")
+
+
+def evidence_ref(ref, default_sid):
+    page = ref.get("page")
+    text = f"{ref.get('source_id') or default_sid} p.{page if page is not None else 'BLANK'}"
+    for field in ("word_ids", "seg_ids", "quoted_text"):
+        if ref.get(field) is not None:
+            value = ref[field]
+            text += f" {field}=" + (json.dumps(value) if isinstance(value, list) else str(value))
+    return cell(text)
+
+
+def application_lines(results, pack_dir, files_by_region, base_dir=None):
+    """Navigation over recorded evidence, with no new allocation or count math."""
+    sources = results.get("sources") or []
+    default_sid = sources[0]["source_id"] if sources else "?"
+    base_dir = base_dir or os.path.dirname(results.get("_results_path") or os.path.abspath("results.json"))
+
+    def link(path, label):
+        resolved = os.path.abspath(resolve_from(path, base_dir))
+        if not os.path.isfile(resolved):
+            return f"{label} unavailable: {cell(path)}"
+        try:
+            target = os.path.relpath(resolved, pack_dir)
+        except ValueError:  # evidence on another Windows drive
+            target = resolved
+        return f"[{label}]({quote(target.replace(os.sep, '/'), safe='/.:')})"
+
+    lines = ["## Detail application and count evidence", "",
+             "EA comes from the resolved BoQ; quoted schedule counts are shown separately."
+             " Follow source and proof links to inspect recorded selections. Unassigned"
+             " rooms and unresolved coverage remain visible below.", ""]
+    if results.get("_results_path"):
+        lines += [link(results["_results_path"], "Full results and selection provenance"), ""]
+    lines += ["| Source | Original | Recorded SHA256 |",
+              "|---|---|---|"]
+    for src in sources:
+        original = link(src["path"], "source") if src.get("path") else "BLANK"
+        lines.append(f"| {cell(src['source_id'])} | {original} | {cell(src.get('sha256'))} |")
+
+    schedule = results.get("schedule") or {}
+    if schedule:
+        lines += ["", "| Schedule type / variant | Quoted count | Relationship | Evidence |",
+                  "|---|---:|---|---|"]
+        for row in [*(schedule.get("types") or []), *(schedule.get("variants") or [])]:
+            variant = row.get("name")
+            relation = ("included in parent" if row.get("included_in_parent_total")
+                        else "additional") if variant else "parent total"
+            evidence = evidence_ref(schedule, default_sid) + "; " + cell(row.get("row_text"))
+            if row.get("word_boxes"):
+                evidence += f"; {len(row['word_boxes'])} selected word boxes in results"
+            if row.get("count_cells"):
+                evidence += "; count_cells=" + cell(row["count_cells"])
+            lines.append(f"| {cell(row['type'])} / {cell(variant) if variant else 'parent'}"
+                         f" | {cell(row.get('count'))} | {relation} | {evidence} |")
+        image = schedule.get("evidence") or {}
+        if image.get("kind") == "image":
+            crop = link(image["crop_image"], "recorded schedule crop") if image.get("crop_image") else "BLANK"
+            lines += ["", f"- {crop}; SHA256 {cell(image.get('crop_sha256'))};"
+                      f" crop bbox {cell(image.get('crop_bbox'))}; zoom {cell(image.get('render_zoom'))};"
+                      f" rotation {cell(image.get('render_rotation'))} (as recorded)."]
+
+    regions = {r["region_id"]: r for r in results.get("regions") or []}
+    pieces = {p["piece_id"]: p for p in results.get("piece_boq") or []}
+    assemblies = results.get("assembly_boq") or []
+    lines += ["", "| Assembly / type / variant / handing | Recorded room / quantity basis | Pieces and detail evidence | Earned EA | State / reason |",
+              "|---|---|---|---:|---|"]
+    for assembly in assemblies:
+        details = []
+        for pid in assembly.get("pieces") or []:
+            piece = pieces.get(pid) or {}
+            rid = piece.get("region_id")
+            region = regions.get(rid) or {}
+            detail = cell(pid) + ": " + cell(piece.get("route"))
+            if rid:
+                detail += f" {cell(rid)} ({evidence_ref(region, default_sid)}, viewport {cell(region.get('viewport'))})"
+            for field, ref in (piece.get("source_links") or {}).items():
+                detail += f"; {cell(field)}: {evidence_ref(ref, default_sid)}"
+            # Image-route overlays contain the adopted boundary and anchors on
+            # original pixels; a page marker must not stand in for that proof.
+            proof = [link(region["overlay"], "original-pixel overlay")] if region.get("overlay") else []
+            proof += [link(os.path.abspath(path), f"overlay {i + 1}")
+                      for i, path in enumerate(files_by_region.get(rid) or [])]
+            details.append(detail + ("; " + ", ".join(proof) if proof else ""))
+        identity = " / ".join(cell(assembly.get(k)) for k in ("assembly_id", "type", "variant", "handing"))
+        application = f"room {cell(assembly.get('room'))}; {cell(assembly.get('quantity_basis'))}"
+        reason = (f"{cell(assembly.get('state'))}; EA {cell(assembly.get('ea_state'))}; "
+                  f"{cell(assembly.get('basis'))}; property quantities complete: {cell(assembly.get('quantity_complete'))}")
+        lines.append(f"| {identity} | {application} | {'; '.join(details) or 'BLANK'}"
+                     f" | {cell(assembly.get('ea'))} | {reason} |")
+    if not assemblies:
+        lines += ["", "No assembly application records in this result; use the regions below."]
+
+    inventory = schedule.get("room_inventory") or {}
+    if inventory.get("rooms"):
+        lines += ["", "### Recorded room tags", "",
+                  "Room variants show the recorded label or BLANK. Type matching alone"
+                  " leaves detail allocation unknown. Tag rows are references; earned EA"
+                  " is in the assembly table.", "",
+                  "| Room | Type | Variant as recorded | Tag source |",
+                  "|---|---|---|---|"]
+        for room in inventory["rooms"]:
+            lines.append(f"| {cell(room['room'])} | {cell(room['type'])} | {cell(room.get('variant'))}"
+                         f" | {evidence_ref(room, default_sid)} |")
+        lines.append("")
+        for note in inventory.get("dedupe_notes") or []:
+            lines.append(f"- Inventory note: {cell(note)}")
+    unresolved = [e for e in results.get("coverage_ledger") or [] if e.get("state") == "unresolved"]
+    if unresolved:
+        lines += ["", "### Unresolved coverage (as recorded)", ""]
+        lines += [f"- {cell(e['item'])}: {cell(e.get('detail'))}" for e in unresolved]
+    return lines + [""]
+
+
+def build_index_md(results, pack_dir, files_by_region, geo_problems=None, base_dir=None):
     src = results.get("source") or {}
     status = results.get("run_status") or results.get("status")
     totals = results.get("totals") or {}
@@ -159,11 +281,10 @@ def build_index_md(results, pack_dir, files_by_region, geo_problems=None):
              f" {results.get('review_status')}",
              f"- mode: {results.get('mode')}; gross-area policy:"
              f" {results.get('policy', {}).get('gross_area')}",
-             f"- totals: {totals.get('project_sf', 0):.2f}" if isinstance(
-                 totals.get("project_sf"), (int, float)) else
-             f"- totals: {totals.get('project_sf', 0)}"
-             f" SF over {unit_count if unit_count is not None else '?'}"
-             " unit(s)", ""]
+             f"- known SF subtotal: {cell(totals.get('known_subtotal_sf', totals.get('project_sf')))};"
+             f" SF scope complete: {cell(totals.get('project_sf_complete'))};"
+             f" quantity fields complete: {cell(totals.get('quantity_complete'))};"
+             f" unit count: {cell(unit_count)}", ""]
     for gp in geo_problems or []:
         lines += [f"- GEOMETRY NOTE: {gp}"]
     if geo_problems:
@@ -174,6 +295,7 @@ def build_index_md(results, pack_dir, files_by_region, geo_problems=None):
         for c in callouts:
             lines.append(f"- {c['scope']}: {c['reason']}")
         lines.append("")
+    lines += application_lines(results, pack_dir, files_by_region, base_dir=base_dir)
     lines += ["## What the independent reviewer must check", "",
              "1. RAW SHEETS: do the highlighted shells sit on countertop",
              "   linework? anything cut off or swallowed by a neighbor?",
@@ -247,7 +369,8 @@ def render_pack(results, pack_dir, zoom, base_dir=None):
         for sid, gp in geo_path.items():
             gp = resolve_from(gp, base_dir)
             try:
-                geo = json.load(open(gp, encoding="utf-8"))
+                with open(gp, encoding="utf-8") as stream:
+                    geo = json.load(stream)
                 if not isinstance(geo, dict):
                     raise ValueError("geometry payload is not an object")
             except Exception as exc:  # noqa: BLE001 - degrade per source
@@ -259,7 +382,8 @@ def render_pack(results, pack_dir, zoom, base_dir=None):
     elif geo_path:
         gp = resolve_from(geo_path, base_dir)
         try:
-            geo = json.load(open(gp, encoding="utf-8"))
+            with open(gp, encoding="utf-8") as stream:
+                geo = json.load(stream)
             if not isinstance(geo, dict):
                 raise ValueError("geometry payload is not an object")
             geo_by_source[default_sid] = geo
@@ -307,7 +431,7 @@ def render_pack(results, pack_dir, zoom, base_dir=None):
     index = os.path.join(pack_dir, "index.md")
     with open(index, "w", encoding="utf-8") as f:
         f.write(build_index_md(results, pack_dir, files_by_region,
-                               geo_problems=geo_problems))
+                               geo_problems=geo_problems, base_dir=base_dir))
     print(f"wrote {index} ({len(files_by_region)} region(s))")
 
 

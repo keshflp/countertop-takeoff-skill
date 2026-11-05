@@ -50,7 +50,7 @@ import sys
 import textwrap
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
-from spec_schema import RATE_MATCH_KEYS
+from spec_schema import RATE_MATCH_KEYS, SpecError, validate_rate_basis
 from preflight_lib import file_sha256 as sha256_file
 
 BLANK = "__blank__"
@@ -170,6 +170,14 @@ def load_profile(path):
         if code in codes:
             raise SystemExit(f"ERROR: profile rates[{i}]: duplicate item_code {code!r}")
         codes.add(code)
+        try:
+            validate_rate_basis(r.get("rate_basis"), f"rates[{i}] ({code})")
+        except SpecError as exc:
+            raise SystemExit(f"ERROR: {exc}") from exc
+        includes = r.get("includes")
+        if includes is not None and not (isinstance(includes, list) and all(
+                isinstance(entry, str) and entry.strip() for entry in includes)):
+            raise SystemExit(f"ERROR: rates[{i}] ({code}): includes must be a list of non-empty strings")
         if r["uom"] != "EA":
             raise SystemExit(f"ERROR: profile rates[{i}] uom must be 'EA'")
         validate_match(r)
@@ -386,6 +394,7 @@ def build_lines(results, rates):
                 "item_code": rate["item_code"] if rate is not None else None,
                 "includes": (rate.get("includes") or []) if rate else [],
                 "uom": "EA",
+                "rate_basis": rate.get("rate_basis") if rate is not None else None,
             },
             "quantity_evidence": a.get("basis"),
             "callout_references": ([f"estimate {aid}"] if line_callouts
@@ -441,6 +450,31 @@ def summarize(lines, unknown_scope=()):
     return subtotal, grand, [l["assembly_ids"][0] for l in unknown]
 
 
+def rate_basis_lines(lines):
+    """The same supplied provenance travels with estimate and proposal lines."""
+    out = ["", "## Rate basis (as supplied)", ""]
+    shown = set()
+    for line in lines:
+        ref = line.get("rate_reference") or {}
+        basis = ref.get("rate_basis") or {}
+        code = line.get("item_code")
+        if code is not None:
+            key = (code, json.dumps(ref, sort_keys=True))
+            if key in shown:
+                continue  # repeated rooms cite the same code in the line table
+            shown.add(key)
+        identity = "" if code else " [assembly " + ", ".join(line["assembly_ids"]) + "]"
+        out.append(f"- {code or BLANK}{identity}")
+        for field in ("source", "date", "quote_reference"):
+            value = basis.get(field)
+            # Metadata stays on one line, separate from the pricing table.
+            value = " ".join(value.splitlines()) if value else BLANK
+            out.append(f"  - {field.replace('_', ' ')}: {value}")
+        out.append("  - includes: " + "; ".join(ref.get("includes") or [])
+                   if ref.get("includes") else "  - includes: none listed")
+    return out
+
+
 def estimate_markdown(payload):
     lines = ["# Countertop Estimate", ""]
     lines.append(f"- company: {payload['company']}")
@@ -481,6 +515,7 @@ def estimate_markdown(payload):
                  " (sum of lines with known amounts only"
                  + ("" if payload.get("scope_complete")
                     else "; the scope is INCOMPLETE - see CALLOUTS") + ")")
+    lines += rate_basis_lines(payload["lines"])
     if payload["exclusions"]:
         lines += ["", "## Exclusions (not priced in this estimate)", ""]
         for e in payload["exclusions"]:
@@ -565,10 +600,12 @@ def render_pdf(text, out_path, title="Countertop Estimate",
 
     def emit(s):
         nonlocal y, lines_on_page
-        if lines_on_page >= PDF_MAX_LINES:
-            new_page()
         wrapped = textwrap.wrap(s, max_chars, break_long_words=False,
                                 break_on_hyphens=False) or [""]
+        # Keep a wrapped paragraph together when it fits one page, including
+        # the final total and its scope qualification.
+        if len(wrapped) <= PDF_MAX_LINES and lines_on_page + len(wrapped) > PDF_MAX_LINES:
+            new_page()
         for chunk in wrapped:
             if lines_on_page >= PDF_MAX_LINES:
                 new_page()
@@ -577,7 +614,7 @@ def render_pdf(text, out_path, title="Countertop Estimate",
             y += PDF_LEADING
             lines_on_page += 1
 
-    for ln in plain_text(text).split("\n"):
+    for ln in plain_text(text).splitlines():
         emit(ln)
     doc.save(out_path)
     doc.close()
@@ -629,7 +666,8 @@ def build_estimate(results_path, profile_path, out_md=None, out_json=None,
 
 
 def _build_estimate(results_path, profile_path, out_md, out_json, out_pdf):
-    results = json.load(open(results_path, encoding="utf-8"))
+    with open(results_path, encoding="utf-8") as stream:
+        results = json.load(stream)
     validate_results_payload(results, results_path)
     profile, rates, currency = load_profile(profile_path)
     lines, callouts, exclusions, unknown_scope = build_lines(results, rates)

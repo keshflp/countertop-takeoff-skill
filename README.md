@@ -116,6 +116,7 @@ uv run examples/tests_v3.py     # 34 checks
 uv run examples/tests_v4.py     # 40 checks
 uv run examples/tests_v5.py     # 125 checks, including 5.1 regressions
 uv run examples/tests_simplify.py
+uv run --python 3.13 examples/tests_evidence_views.py  # 13 evidence/rate contracts
 uv run examples/tests_output_contract.py
 ```
 
@@ -135,6 +136,11 @@ then `uv run --python 3.13 examples/evaluate_scan_detail.py --tag final`, and
 Use `--prepare` only once per workload. See the
 [experiment evidence](countertop-takeoff/references/scan-detail-experiment.md)
 for false proposals and limits; real checked plans have not been tested.
+
+The audit pack now links recorded assembly applications, earned counts,
+schedule/room evidence and source proofs in one index. Estimates/proposals show
+optional shop-supplied rate sources, dates and quote references. See the bounded
+[research adaptations and evidence](countertop-takeoff/references/research-adaptations.md).
 
 ## Limits and legal notes
 

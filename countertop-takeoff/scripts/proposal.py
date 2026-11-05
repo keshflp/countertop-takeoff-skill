@@ -349,6 +349,7 @@ def proposal_markdown(payload):
                 f" | {qty_s if last else ''}"
                 f" | {unit_s if last else ''}"
                 f" | {total_s if last else ''} |")
+    lines += estimate_mod.rate_basis_lines(payload["lines"])
     if payload["exclusions"]:
         lines += ["", "## Exclusions (not priced)", ""]
         for e in payload["exclusions"]:

@@ -193,6 +193,26 @@ PACKAGES = {"millwork", "FFE", "public_BOH"}
 HANDINGS = {"LH", "RH"}
 
 
+def validate_rate_basis(value, context):
+    """Optional shop-supplied provenance; never a rate or expiry rule."""
+    if value is None:
+        return
+    require(isinstance(value, dict), f"{context}: rate_basis must be an object or null")
+    require(not (value.keys() - {"source", "date", "quote_reference"}),
+            f"{context}: unknown rate_basis fields")
+    for field, entry in value.items():
+        require(entry is None or (isinstance(entry, str) and entry.strip()),
+                f"{context}: rate_basis.{field} must be non-empty text or null")
+    if value.get("date") is not None:
+        from datetime import date
+        try:
+            require(bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", value["date"])),
+                    f"{context}: rate_basis.date must be YYYY-MM-DD")
+            date.fromisoformat(value["date"])
+        except ValueError as exc:
+            raise SpecError(f"{context}: rate_basis.date must be a valid YYYY-MM-DD") from exc
+
+
 def validate_rates(profile):
     """Profile v2 pricing schema (P1.1): rates[] price ASSEMBLY EA x an
     exact company-profile rate. Matching requires a stable item code plus
@@ -217,6 +237,7 @@ def validate_rates(profile):
                 " code every line cites)")
         require(code not in codes, f"rates[{i}]: duplicate item_code {code!r}")
         codes.add(code)
+        validate_rate_basis(r.get("rate_basis"), f"rates[{i}] ({code})")
         match = r.get("match")
         require(isinstance(match, dict), f"rates[{i}] ({code}): match must be"
                 " an object describing WHICH assemblies the rate prices")

@@ -135,6 +135,8 @@ propagate into `scope_incomplete[]` and downstream pricing completeness.
 
 Stated-dimension pieces retain a primary source/page/sheet and every property
 source link, including selection IDs, across JSON, CSV and report views.
+Assembly rows also retain structured `quantity_basis` alongside resolved `ea`
+and the explanation in `basis`; older results without it remain readable.
 
 Active aggregate counts and SF per unit stay `null` if any contribution is
 unknown; reports and CSVs show blank markers. Genuine zero stays zero, and
@@ -167,6 +169,13 @@ is disclosed without a gate, and the receipt can safely be recorded later.
   the reviewer must confirm, plus what to check: raw sheets, schedule
   evidence, omissions, overlays. Unresolved regions render a marker page
   naming the blank; image-route regions point at the route's own overlay
+- `index.md` also provides a detail-application table over recorded assembly
+  room/type/variant/handing, quantity basis, pieces, selection references and
+  earned EA. Original sources/hashes, schedule counts/cells, room-tag inventory
+  and unresolved coverage appear beside links to proofs. Quoted counts remain
+  distinct from earned EA; missing room variants remain BLANK. The view never
+  infers allocation, adopts suggestions, changes quantities or records approval.
+  Its header distinguishes the known SF subtotal from scope/property completeness.
 
 ## 5. Exit codes
 
@@ -189,6 +198,10 @@ One computation over the assembly BoQ + rate profile produces:
   never priced), `callouts`, and the arithmetic block (Decimal exact,
   ROUND_HALF_UP to whole cents per line, single-currency rule)
   (`unit_price` is legacy approximate; documents/math use the exact decimal string)
+- Each line's `rate_reference.rate_basis` is the uniquely matched rate's supplied
+  source/date/quote reference, or null. Both estimates and proposals display
+  these fields and `includes`; missing metadata is BLANK. Old profiles remain
+  valid. No date-to-expiry inference, market lookup or pricing decision is added.
 - `estimate.md` — company, timestamp, currency, scope-completeness, provenance;
   table `Item code | Description | QTY EA | Unit price | Total` (descriptions
   wrap, amounts never split); priced subtotal; exclusions; CALLOUTS including

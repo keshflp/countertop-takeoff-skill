@@ -46,6 +46,12 @@ document; the legacy numeric `unit_price` is for compatibility only.
 | `unit_price` | yes | finite ≥ 0. Accepts plain numbers or unambiguous currency-formatted strings (`"$1,234.56"`, `"1.234,56"`) — parsed Decimal-exact; negatives and ambiguous strings refuse with a diagnostic. An explicit `0` prices a REAL 0.00 line — distinguishable from a missing rate |
 | `currency` | see `currency` rule | must equal the profile currency when both are present; when the profile currency is absent, EVERY rate must declare the SAME currency explicitly — one effective currency is enforced, USD+EUR mixing refuses |
 | `includes` | no | components the rate already covers (top/edge/splash/cutout labor) so they are not charged again |
+| `rate_basis` | no | object or null; optional `source`, `date` (valid `YYYY-MM-DD`) and `quote_reference`, each non-empty text or null. Only the uniquely matched rate supplies this metadata; estimates/proposals preserve it and show missing fields as BLANK |
+
+For example, a shop may supply a rate with
+`"rate_basis": {"source": "Shop rate sheet", "date": "2026-11-04", "quote_reference": "QUOTE-42"}`.
+These are supplied facts, not a price lookup or an expiry policy. Metadata
+never selects a rate, fills a missing price, or changes scope completeness.
 
 Exactly one matching rate prices EA × exact rate (Decimal, ROUND_HALF_UP to
 cents); no/ambiguous matches or withheld EA leave blanks + callouts. Valid EA

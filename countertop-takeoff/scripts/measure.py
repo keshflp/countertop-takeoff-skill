@@ -310,6 +310,12 @@ def run_pipeline(args):
         if isinstance(s.get("path"), str):
             s["path"] = resolve_path(s["path"], base_dir)
     parsed = spec_schema.validate_spec(spec)
+    schedule_image = (spec.get("schedule") or {}).get("evidence") or {}
+    if schedule_image.get("kind") == "image":
+        # Results can be written outside the job folder. Keep the recorded
+        # crop link tied to the same input path instead of the output folder.
+        schedule_image["crop_image"] = os.path.abspath(
+            resolve_path(schedule_image["crop_image"], base_dir))
     for s in spec["_sources"]:
         if s["kind"] == "pdf":
             s["path"] = resolve_path(s["path"], base_dir)
