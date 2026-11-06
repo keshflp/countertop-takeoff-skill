@@ -21,13 +21,20 @@ from itertools import combinations, islice, product
 from math import ceil, isqrt
 from typing import NamedTuple, TypedDict
 
+from layout_geometry import (
+    FabricationPolygon,
+    InvalidPolygon,
+    Point,
+    Rect,
+    distance2,
+    edges,
+)
 from ortools.sat.python import cp_model
 
 GRID = 16
 MAX_PIECES = 12
 MAX_PARTITIONS = 128
 WORK_BUDGET = 1.0
-Point = tuple[int, int]
 
 
 class LayoutError(ValueError):
@@ -82,24 +89,6 @@ def ticks(value: object, name: str) -> int:
     return int(scaled)
 
 
-@dataclass(frozen=True, order=True)
-class Rect:
-    x: int
-    y: int
-    w: int
-    h: int
-
-    @property
-    def area(self) -> int:
-        return self.w * self.h
-
-    @property
-    def points(self) -> list[list[float]]:
-        return [[x / GRID, y / GRID] for x, y in (
-            (self.x, self.y), (self.x + self.w, self.y),
-            (self.x + self.w, self.y + self.h), (self.x, self.y + self.h))]
-
-
 @dataclass(frozen=True)
 class CenterJoin:
     cutout_index: int
@@ -110,7 +99,7 @@ class CenterJoin:
 @dataclass(frozen=True)
 class Installation:
     id: str
-    outline: tuple[Point, ...]
+    polygon: FabricationPolygon
     cutouts: tuple[Rect, ...]
     required_pieces: int | None = None
     join: CenterJoin | None = None
@@ -135,17 +124,6 @@ class Job:
 def inside(x: float, y: float, outline: tuple[Point, ...]) -> bool:
     return sum(a[0] > x and min(a[1], b[1]) < y < max(a[1], b[1])
                for a, b in zip(outline, outline[1:] + outline[:1]) if a[0] == b[0]) % 2 == 1
-
-
-def distance2(a: Rect, b: Rect) -> int:
-    dx = max(a.x - b.x - b.w, b.x - a.x - a.w, 0)
-    dy = max(a.y - b.y - b.h, b.y - a.y - a.h, 0)
-    return dx * dx + dy * dy
-
-
-def edges(outline: tuple[Point, ...]) -> list[Rect]:
-    return [Rect(min(a[0], b[0]), min(a[1], b[1]), abs(a[0] - b[0]), abs(a[1] - b[1]))
-            for a, b in zip(outline, outline[1:] + outline[:1])]
 
 
 def read_join(raw: object, identity: str, outline: tuple[Point, ...],
@@ -194,16 +172,12 @@ def read_job(data: dict) -> Job:
             if required is not None and required > MAX_PIECES:
                 raise LayoutError("too_many_pieces", f"{identity}: this layout tool supports up to 12 pieces per job.")
             outline = tuple((ticks(p[0], "Outline x"), ticks(p[1], "Outline y")) for p in item["outline"])
-            if outline and outline[0] == outline[-1]:
-                outline = outline[:-1]
-            if len(outline) < 4 or any((a[0] == b[0]) == (a[1] == b[1])
-                                       for a, b in zip(outline, outline[1:] + outline[:1])):
-                raise LayoutError("invalid_outline", f"{identity}: draw a closed outline with horizontal and vertical edges.")
+            try:
+                polygon = FabricationPolygon(outline)
+            except InvalidPolygon as exc:
+                raise LayoutError("invalid_outline", f"{identity}: {exc}") from exc
+            outline = polygon.outline
             boundary = edges(outline)
-            for i, a in enumerate(boundary):
-                for j in range(i + 1, len(boundary)):
-                    if j not in (i + 1, len(boundary) - 1 if i == 0 else -1) and distance2(a, boundary[j]) == 0:
-                        raise LayoutError("invalid_outline", f"{identity}: the outline crosses or touches itself.")
             cutouts = tuple(Rect(*(ticks(c[k], f"Cutout {k}") for k in ("x", "y", "w", "h")))
                             for c in item["cutouts"])
             for c in cutouts:
@@ -216,7 +190,7 @@ def read_job(data: dict) -> Job:
             if any(distance2(a, b) == 0 for a, b in combinations(cutouts, 2)):
                 raise LayoutError("invalid_cutout", f"{identity}: two cutouts touch or overlap. Check their positions.")
             join = read_join(item["seam"], identity, outline, cutouts, required) if "seam" in item else None
-            installations.append(Installation(identity, outline, cutouts, 2 if join else required, join))
+            installations.append(Installation(identity, polygon, cutouts, 2 if join else required, join))
         if not installations:
             raise LayoutError("invalid_input", "Add at least one countertop installation.")
         return Job(width, height, ticks(settings["kerfIn"], "Saw gap"),
@@ -254,9 +228,9 @@ def partitions(inst: Installation, clearance: int) -> tuple[list[tuple[Rect, ...
                for c in inst.protected_cutouts(inst.join.edge)):
             raise LayoutError("no_legal_seam", f"{inst.id}: the requested middle join crosses or is too close to another opening. Check the join and opening positions.")
         return [inst.join.halves], True
-    xs, ys = sorted({p[0] for p in inst.outline}), sorted({p[1] for p in inst.outline})
+    xs, ys = sorted({p[0] for p in inst.polygon.outline}), sorted({p[1] for p in inst.polygon.outline})
     cells = {(x, y) for x in range(len(xs) - 1) for y in range(len(ys) - 1)
-             if inside((xs[x] + xs[x + 1]) / 2, (ys[y] + ys[y + 1]) / 2, inst.outline)}
+             if inside((xs[x] + xs[x + 1]) / 2, (ys[y] + ys[y + 1]) / 2, inst.polygon.outline)}
     if len(cells) > 64:
         raise LayoutError("outline_too_complex", f"{inst.id}: simplify this outline into a few separate countertop runs.")
     covers: list[tuple[Rect, ...]] = []
@@ -369,7 +343,7 @@ def build_model(job: Job, runs: list[Run], fixed: list[tuple[str, Rect]], lower:
     count = model.new_int_var(lower, max_bins, "slabs")
     if incumbent is not None:
         model.add(count <= incumbent)
-    far = max(max(p) for inst in job.installations for p in inst.outline) + max(job.width, job.height)
+    far = max(max(p) for inst in job.installations for p in inst.polygon.outline) + max(job.width, job.height)
     clearance2 = model.new_int_var(0, far * far, "clearance_squared")
     for identity, seam in fixed:
         inst = next(i for i in job.installations if i.id == identity)
@@ -524,7 +498,8 @@ def make_layout(packed: list[PackedPiece], fixed: list[tuple[str, Rect]], lower:
         r, start, length = s.run.rect, s.start, s.length
         rect = Rect(start, r.y, length, r.h) if s.run.horizontal else Rect(r.x, start, r.w, length)
         identity = f"P{len(pieces) + 1}"
-        pieces.append({"id": identity, "installationId": s.run.installation.id, "outline": rect.points})
+        pieces.append({"id": identity, "installationId": s.run.installation.id,
+                       "outline": [[x / GRID, y / GRID] for x, y in rect.points]})
         bins.setdefault(s.bin, []).append({"pieceId": identity, "x": s.x / GRID,
                                           "y": s.y / GRID, "rotated": s.rotated})
         if start != s.run.start:
@@ -588,7 +563,7 @@ def solve(data: dict, *, work_budget: float = WORK_BUDGET) -> Layout:
     complete = True
     for inst in job.installations:
         for n, cutout in enumerate(inst.cutouts, 1):
-            if any(distance2(e, cutout) < job.material * job.material for e in edges(inst.outline)):
+            if any(distance2(e, cutout) < job.material * job.material for e in edges(inst.polygon.outline)):
                 warnings.append(f"{inst.id}: cutout {n} leaves less than {job.material / GRID:g} inches of material at an original countertop edge. Confirm this with the fabricator.")
         covers, exhausted = partitions(inst, max(job.clearance, job.material))
         choices.append(covers)
@@ -597,7 +572,7 @@ def solve(data: dict, *, work_budget: float = WORK_BUDGET) -> Layout:
             if not exhausted:
                 raise LayoutError("search_limit", f"{inst.id}: this outline has too many corners to check in one search. Separate it into simpler installations.")
             raise LayoutError("no_legal_seam", f"{inst.id}: no corner seam can stay far enough from the cutouts. Move a cutout or change the countertop shape.")
-    area = sum(r.area for group in choices for r in group[0])
+    area = sum(inst.polygon.area for inst in job.installations)
     lower = ceil(area / (job.width * job.height))
     combinations_count = 1
     for choice in choices:
