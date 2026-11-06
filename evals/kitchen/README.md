@@ -99,6 +99,9 @@ that result is unscored, not an improvement over baseline 11. Failed runs emit
 CLI `5e310a0` with layout `73b4f72` passes this interaction case with two pieces
 and one slab. The original workload and the constrained workload are reported
 separately.
+CLI `2daac6f` with the same layout kernel also passes all 17 public/contract
+quote cases and the unrelated synthetic null-slab original-edge-warning check.
+The latter verifies that geometry warnings survive when there is no layout.
 
 Leg-relative `centerFromStartIn: "center"` resolves halfway along the named full
 outer leg. Numeric rectangles must still land on the sixteenth grid. Centering
