@@ -94,7 +94,21 @@ def hand_quote(number: int) -> dict:
             "blanks": [{"field": field, "question": f"What is the {field} for this job?"} for field in expected["blanks"]],
             "assumptions": [{"setting": key, "value": str(value).lower(), "note": "assumed, confirm with Dad"}
                             for key, value in oracle.DEFAULTS.items() if key not in job["settings"]],
-            "warnings": [] if layout is None else layout["warnings"]}
+            "warnings": [] if layout is None else layout["warnings"], "geometryEstimates": []}
+
+
+def contract_case_and_quote() -> tuple[dict, dict]:
+    source = json.loads((Path(__file__).parent / "contract-cases/01-centered-estimates-count.json").read_text())
+    layout = hand_layout([("counter", 0, 0, 36, 28), ("counter", 36, 0, 72, 28)],
+                         [(1, 0, 0, False), (1, 0, 28.25, False)], [("counter", 36, 0, 36, 28)])
+    note = source["job"]["installations"][0]["cutouts"][0]["estimate"]["note"]
+    quote = hand_quote(1)
+    quote.update(installations=[{"id": "counter", "label": "Counter", "areaSqIn": "3024", "sf": "21.00", "requiredPieceCount": 2}],
+                 totalSf="21.00", layout=layout, pricing={"materialCost": "771.75", "materialRatePerSf": "36.75", "laborPerSf": "9.10", "ratePerSf": "45.85"},
+                 invoice=[{"installation": "Counter", "material": "Synthetic quartz", "sf": "21.00", "ratePerSf": "45.85", "amount": "962.85"}],
+                 geometryEstimates=[{"installationId": "counter", "cutoutIndex": 0, "fields": ["wIn", "hIn", "at"], "note": note,
+                                     "xIn": 42, "yIn": 6, "wIn": 24, "hIn": 16}])
+    return source, quote
 
 
 class GateTests(unittest.TestCase):
@@ -113,6 +127,86 @@ class GateTests(unittest.TestCase):
             with self.subTest(number=number):
                 result = oracle.evaluate(case(number), hand_quote(number), False)
                 self.assertTrue(all(g["pass"] for g in result["gates"].values()), result)
+
+    def test_centered_estimated_exact_count_witness(self):
+        source, quote = contract_case_and_quote()
+        result = oracle.evaluate(source, quote, False)
+        self.assertTrue(all(g["pass"] for g in result["gates"].values()), result)
+
+    def test_piece_count_is_exact_not_minimum_or_preference(self):
+        source, quote = contract_case_and_quote()
+        data = oracle.expand_job(source["job"])
+        oracle.check_piece_counts(data, quote["layout"])
+        for rects in ([('counter', 0, 0, 108, 28)],
+                      [('counter', x, 0, 36, 28) for x in (0, 36, 72)]):
+            corrupted = hand_layout(rects, [(i, 0, 0, False) for i in range(1, len(rects) + 1)])
+            with self.subTest(count=len(rects)), self.assertRaises(ValueError):
+                oracle.check_piece_counts(data, corrupted)
+
+    def test_requested_count_survives_quantity_output_without_slab(self):
+        source, quote = contract_case_and_quote()
+        data = oracle.expand_job(source["job"])
+        oracle.check_quantities(source["job"], data, quote, source["expected"])
+        quote["installations"][0].pop("requiredPieceCount")
+        with self.assertRaises(ValueError):
+            oracle.check_quantities(source["job"], data, quote, source["expected"])
+
+    def test_estimates_preserve_fields_note_identity_and_resolved_rectangle(self):
+        source, quote = contract_case_and_quote()
+        data = oracle.expand_job(source["job"])
+        oracle.check_estimates(source["job"], data, quote)
+        for key, wrong in {"fields": ["wIn"], "note": "No authorization.", "installationId": "other", "cutoutIndex": 1,
+                           "xIn": 43, "yIn": 7, "wIn": 25, "hIn": 17}.items():
+            bad = deepcopy(quote)
+            bad["geometryEstimates"][0][key] = wrong
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                oracle.check_estimates(source["job"], data, bad)
+        quote["geometryEstimates"] = []
+        with self.assertRaises(ValueError):
+            oracle.check_estimates(source["job"], data, quote)
+
+    def test_center_does_not_invent_an_estimate(self):
+        source, quote = contract_case_and_quote()
+        source["job"]["installations"][0]["cutouts"][0].pop("estimate")
+        quote["geometryEstimates"] = []
+        oracle.check_estimates(source["job"], oracle.expand_job(source["job"]), quote)
+        quote.pop("geometryEstimates")
+        with self.assertRaises(KeyError):
+            oracle.check_estimates(source["job"], oracle.expand_job(source["job"]), quote)
+
+    def test_numeric_and_center_geometry_agree_on_every_supported_leg(self):
+        for number, legs in ((1, {"main": 48}), (2, {"back": 48, "left": 36}),
+                             (7, {"back": 48, "right": 36}), (3, {"back": 48, "left": 36, "right": 36})):
+            for leg, center in legs.items():
+                source = case(number)["job"]
+                source["installations"][0]["cutouts"] = [{"kind": "other", "wIn": 12, "hIn": 12,
+                                                           "at": {"leg": leg, "centerFromStartIn": "center"}}]
+                centered = oracle.expand_job(source)
+                source["installations"][0]["cutouts"][0]["at"]["centerFromStartIn"] = center
+                with self.subTest(shape=number, leg=leg):
+                    self.assertEqual(centered, oracle.expand_job(source))
+
+    def test_invalid_center_leg_and_off_grid_resolution_are_errors(self):
+        source, _ = contract_case_and_quote()
+        job = source["job"]
+        job["installations"][0]["cutouts"][0]["at"]["leg"] = "left"
+        with self.assertRaises(ValueError):
+            oracle.expand_job(job)
+        job["installations"][0]["cutouts"][0]["at"]["leg"] = "main"
+        job["installations"][0]["shape"]["lengthIn"] = 108.0625
+        with self.assertRaises(ValueError):
+            oracle.expand_job(job)
+
+    def test_contract_workload_does_not_turn_naive_count_failure_into_a_gain(self):
+        completed = subprocess.run([sys.executable, str(Path(oracle.__file__)), "--layout-only", "--json",
+                                    "--cases", str(Path(__file__).parent / "contract-cases"), "--layout-cmd",
+                                    f'"{sys.executable}" "{Path(__file__).parent / "naive_layout.py"}"'],
+                                   text=True, capture_output=True, timeout=10)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertFalse(report["scoreAvailable"])
+        self.assertIsNone(report["score"])
+        self.assertFalse(report["cases"][0]["gates"]["pieceCounts"]["pass"])
 
     def test_response(self):
         self.assert_gate(1, "response", lambda c, q: q["layout"].update(ok=False))

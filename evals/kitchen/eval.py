@@ -147,16 +147,30 @@ def expand_job(job: dict) -> dict:
         for cutout in installation["cutouts"]:
             w, h, at = cutout["wIn"], cutout["hIn"], cutout["at"]
             if "xIn" in at:
+                require("yIn" in at, "explicit cutout needs xIn and yIn")
                 x, y = at["xIn"], at["yIn"]
             else:
                 d, center, leg = shape["depthIn"], at["centerFromStartIn"], at["leg"]
+                allowed = {"rect": {"main"}, "L": {"back", shape.get("side")}, "U": {"back", "left", "right"}}
+                require(leg in allowed.get(shape["kind"], set()), "invalid cutout leg for this shape")
+                if center == "center":
+                    length_key = "lengthIn" if leg == "main" else "backIn" if leg == "back" else (
+                        "sideIn" if shape["kind"] == "L" else f"{leg}In")
+                    center = shape[length_key] / 2
                 if leg in ("main", "back"):
                     x, y = center - w / 2, (d - h) / 2
                 else:
                     x = (d - w) / 2 if leg == "left" else shape["backIn"] - (d + w) / 2
                     y = center - h / 2
+            for value in (x, y, w, h):
+                ticks(value)
             cutouts.append({"kind": cutout["kind"], "x": x, "y": y, "w": w, "h": h})
-        installations.append({"id": installation["id"], "outline": shape_outline(shape), "cutouts": cutouts})
+        expanded = {"id": installation["id"], "outline": shape_outline(shape), "cutouts": cutouts}
+        if "requiredPieceCount" in installation:
+            count = installation["requiredPieceCount"]
+            require(type(count) is int and count > 0, "requiredPieceCount must be a positive integer")
+            expanded["requiredPieceCount"] = count
+        installations.append(expanded)
     return {"slab": job["material"]["slab"], "settings": DEFAULTS | job.get("settings", {}),
             "installations": installations}
 
@@ -252,6 +266,14 @@ def check_piece_fit(data: dict, layout: dict) -> None:
         fits = r.w <= w and r.h <= h
         turned = data["settings"]["allowRotate"] and r.h <= w and r.w <= h
         require(fits or turned, f"piece {piece_id} exceeds usable slab")
+
+
+def check_piece_counts(data: dict, layout: dict) -> None:
+    counts = Counter(installation for installation, _ in pieces(layout).values())
+    for installation in data["installations"]:
+        if "requiredPieceCount" in installation:
+            require(counts[installation["id"]] == installation["requiredPieceCount"],
+                    f"{installation['id']} requires exactly {installation['requiredPieceCount']} fabrication pieces")
 
 
 def check_placements(data: dict, layout: dict) -> None:
@@ -356,9 +378,13 @@ def check_quantities(job: dict, data: dict, quote: dict, expected: dict) -> None
     entries = quote["installations"]
     require(len(entries) == len(areas) and {i["id"] for i in entries} == set(areas), "quantity installation ids differ")
     labels = {i["id"]: i["label"] for i in job["installations"]}
+    required_counts = {i["id"]: i.get("requiredPieceCount") for i in job["installations"]}
     for installation in entries:
         identifier = installation["id"]
         require(installation["label"] == labels[identifier], "wrong installation label")
+        require(installation.get("requiredPieceCount") == required_counts[identifier], "quote lost or invented requiredPieceCount")
+        if required_counts[identifier] is not None:
+            require(type(installation["requiredPieceCount"]) is int, "requiredPieceCount must remain an integer")
         require(isinstance(installation["areaSqIn"], str) and D(installation["areaSqIn"]) == areas[identifier], "wrong exact area")
         sf = money(areas[identifier] / 144)
         require(installation["sf"] == sf, f"wrong sf for {identifier}")
@@ -452,6 +478,33 @@ def check_assumptions(job: dict, quote: dict) -> None:
         require(all(word in note for word in ("assum", "confirm", "dad")), "default must ask Dad to confirm")
 
 
+def geometry_estimates(job: dict, data: dict) -> list[dict]:
+    result = []
+    for source, installation in zip(job["installations"], data["installations"]):
+        for index, (cutout, resolved) in enumerate(zip(source["cutouts"], installation["cutouts"])):
+            if "estimate" not in cutout:
+                continue
+            estimate = cutout["estimate"]
+            fields, note = estimate["fields"], estimate["note"]
+            require(isinstance(fields, list) and bool(fields) and len(fields) == len(set(fields)) and
+                    set(fields) <= {"wIn", "hIn", "at"}, "estimate fields must be nonempty, unique, and named")
+            require(isinstance(note, str) and bool(note.strip()), "estimate needs its authorization note")
+            result.append({"installationId": source["id"], "cutoutIndex": index, "fields": fields, "note": note,
+                           "xIn": resolved["x"], "yIn": resolved["y"], "wIn": resolved["w"], "hIn": resolved["h"]})
+    return result
+
+
+def check_estimates(job: dict, data: dict, quote: dict) -> None:
+    require(isinstance(quote["geometryEstimates"], list), "geometryEstimates must be an array, including when empty")
+    for estimate in quote["geometryEstimates"]:
+        require(type(estimate["cutoutIndex"]) is int, "cutoutIndex must remain an integer")
+        for key in ("xIn", "yIn", "wIn", "hIn"):
+            require(type(estimate[key]) in (int, float), "estimate rectangle must contain numeric inches")
+            ticks(estimate[key])
+    require(quote["geometryEstimates"] == geometry_estimates(job, data),
+            "geometryEstimates must preserve authorized fields/notes and actual resolved cutout rectangles")
+
+
 def run_gate(check: Callable[[], None]) -> dict:
     try:
         check()
@@ -472,7 +525,7 @@ def evaluate(case: dict, output: dict, layout_only: bool) -> dict:
     gates = {}
     if data["slab"] is not None:
         gates["response"] = run_gate(lambda: check_response(layout))
-        checks = {"tiling": check_tiling, "pieceFit": check_piece_fit, "placements": check_placements,
+        checks = {"tiling": check_tiling, "pieceFit": check_piece_fit, "pieceCounts": check_piece_counts, "placements": check_placements,
                   "seams": check_seams, "seamMaterial": check_seam_material}
         for name, check in checks.items():
             gates[name] = run_gate(lambda check=check: check(data, layout))
@@ -483,6 +536,7 @@ def evaluate(case: dict, output: dict, layout_only: bool) -> dict:
         gates["pricing"] = run_gate(lambda: check_pricing(job, data, output, expected))
         gates["blanks"] = run_gate(lambda: check_blanks(job, output, expected))
         gates["assumptions"] = run_gate(lambda: check_assumptions(job, output))
+        gates["estimates"] = run_gate(lambda: check_estimates(job, data, output))
     count = layout.get("slabCount") if isinstance(layout, dict) else None
     lower = None
     if data["slab"] is not None:
@@ -566,14 +620,14 @@ def main() -> int:
                 output = json.loads(completed.stdout)
                 require(isinstance(output, dict), "command must return a JSON object")
                 result.update(evaluate(case, output, args.layout_only))
-        except (OSError, ValueError, KeyError, TypeError, ArithmeticError, subprocess.TimeoutExpired) as error:
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError, ArithmeticError, subprocess.TimeoutExpired) as error:
             result["gates"] = {"execution": {"pass": False, "errors": [str(error)]}}
         results.append(result)
     evaluated = sum(bool(r["gates"]) for r in results)
     passed = evaluated > 0 and all(g["pass"] for r in results for g in r["gates"].values())
     scored = [r for r in results if r.get("excessSlabs") is not None]
     summary = {"mode": "layout" if args.layout_only else "quote", "pass": passed, "cases": results,
-               "score": sum(r["excessSlabs"] for r in scored) if scored else None,
+               "score": sum(r["excessSlabs"] for r in scored) if scored and passed else None,
                "scoreAvailable": passed and bool(scored) and all(
                    "pending" in r or "skipped" in r or r.get("layoutApplicable") is False or
                    r.get("excessSlabs") is not None for r in results),
