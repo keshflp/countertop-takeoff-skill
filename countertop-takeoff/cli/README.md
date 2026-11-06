@@ -71,8 +71,8 @@ the shipped CLI always resolves kernels relative to its own bundle.
   pricing always uses the exact rational, never that display string.
 - Gross SF, nominal slab pricing and the stated shape conventions appear as
   assumptions alongside every omitted named setting.
-- The brief does not specify draw stdout. Integration pins the actual Python
-  drawing reply schema; it is not accepted as untyped text.
+- The brief does not specify draw stdout. T2's concrete reply is decoded as
+  `{ok: true, path: <requested PNG>}`; the returned path must match the request.
 
 ## Evaluation record
 

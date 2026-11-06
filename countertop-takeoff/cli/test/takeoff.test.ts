@@ -30,7 +30,7 @@ const fake = kernelLayer((name, args) => {
   if (name === "inspect_input") return Effect.succeed(JSON.stringify({ files: args.map(path => ({ path, ok: true, kind: "image", pages: 1, previews: [path], problem: null })) }))
   const out = args[args.indexOf("--out") + 1]
   return Effect.tryPromise({
-    try: async () => { if (!out) throw new Error("missing test output path"); await writeFile(out, "fake PNG"); return '{"ok":true}' },
+    try: async () => { if (!out) throw new Error("missing test output path"); await writeFile(out, "fake PNG"); return JSON.stringify({ ok: true, path: out }) },
     catch: () => new KernelError({ message: "Test drawing failed" }),
   })
 })
@@ -66,7 +66,7 @@ test("cutouts use outer-start centers on main, back, left, and right legs", asyn
   }
 })
 
-test("outline accepts explicit cutout rectangles and rejects crossings and missing legs", async () => {
+test("outline cutouts use explicit top-left coordinates and must stay inside", async () => {
   const shape = { kind: "outline", points: [[0, 0], [60, 0], [60, 24], [0, 24]] } satisfies Job["installations"][number]["shape"]
   const result = await Effect.runPromise(prepare(withShape(shape, [{ kind: "sink", wIn: 20, hIn: 16, at: { xIn: 10, yIn: 4 } }])))
   expect(result.installations[0]?.cutouts[0]?.x).toBe(10)

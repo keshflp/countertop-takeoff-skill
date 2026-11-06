@@ -1,8 +1,8 @@
 import { Context, Effect, Layer, Schema, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { decodeJson, KernelError } from "./errors"
-import { DrawInput, InspectInput, InspectReply, LayoutInput, LayoutReply, SelfcheckReply } from "./schema"
+import { DrawInput, DrawReply, InspectInput, InspectReply, LayoutInput, LayoutReply, SelfcheckReply } from "./schema"
 
 const names = ["layout", "draw_layout", "inspect_input"] as const
 type KernelName = typeof names[number]
@@ -16,7 +16,7 @@ function implementation(run: Runner, tools: Effect.Effect<void, KernelError>) {
     Effect.mapError(() => new KernelError({ message: "The takeoff tool received invalid measurements. Ask Rishi to check job.json." })),
   )
   return {
-    checkTools: () => tools,
+    checkTools: Effect.fn("Kernels.checkTools")(() => tools),
     selfcheck: Effect.fn("Kernels.selfcheck")(function* () {
       for (const name of names) yield* reply(SelfcheckReply, yield* run(name, ["--selfcheck"], ""), name)
     }),
@@ -30,9 +30,10 @@ function implementation(run: Runner, tools: Effect.Effect<void, KernelError>) {
       return result
     }),
     draw: Effect.fn("Kernels.draw")(function* (request: DrawInput, out: string, preview: boolean) {
-      // The brief specifies no draw stdout. Its concrete reply schema is fixed at integration.
       const stdout = yield* run("draw_layout", ["--out", out, ...(preview ? ["--preview"] : [])], yield* input(DrawInput, request))
-      yield* reply(SelfcheckReply, stdout, "drawing")
+      const result = yield* reply(DrawReply, stdout, "drawing")
+      if (!result.ok) return yield* Effect.fail(new KernelError({ message: result.error.message }))
+      if (resolve(result.path) !== resolve(out)) return yield* Effect.fail(new KernelError({ message: "The drawing tool saved the picture in the wrong place. Ask Rishi to repair it." }))
     }),
   }
 }

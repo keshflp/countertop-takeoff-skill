@@ -19,11 +19,11 @@ const cli = Command.make("takeoff").pipe(
   Command.withSubcommands([preflight, ...commands]),
 )
 const program = Effect.catchTags(Command.run(cli, { version: "1.0.0" }), {
-    JobError: error => Console.error(error.message).pipe(Effect.tap(() => Effect.sync(() => { process.exitCode = 1 }))),
-    FileError: error => Console.error(error.message).pipe(Effect.tap(() => Effect.sync(() => { process.exitCode = 1 }))),
-    KernelError: error => Console.error(error.message).pipe(Effect.tap(() => Effect.sync(() => { process.exitCode = 1 }))),
-    WorkflowError: error => Console.error(error.message).pipe(Effect.tap(() => Effect.sync(() => { process.exitCode = 1 }))),
-  }).pipe(
+  JobError: error => Console.error(error.message).pipe(Effect.tap(() => Effect.sync(() => { process.exitCode = 1 }))),
+  FileError: error => Console.error(error.message).pipe(Effect.tap(() => Effect.sync(() => { process.exitCode = 1 }))),
+  KernelError: error => Console.error(error.message).pipe(Effect.tap(() => Effect.sync(() => { process.exitCode = 1 }))),
+  WorkflowError: error => Console.error(error.message).pipe(Effect.tap(() => Effect.sync(() => { process.exitCode = 1 }))),
+}).pipe(
   Effect.provide(liveKernels(skillDir)),
   Effect.provide(BunServices.layer),
 )

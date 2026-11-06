@@ -94,6 +94,8 @@ export const LayoutReply = Schema.Union([Layout, KernelFailure])
 export const DrawInput = Schema.Struct({ slab: Schema.NullOr(Slab), settings: Settings, installations: Schema.Array(Installation), layout: Schema.optionalKey(Layout) })
 /** Preview or finished-layout drawing request. */
 export interface DrawInput extends Schema.Schema.Type<typeof DrawInput> {}
+/** T2's concrete drawing protocol returns the saved PNG path on success. */
+export const DrawReply = Schema.Union([Schema.Struct({ ok: Schema.Literal(true), path: Text }), KernelFailure])
 /** A kernel selfcheck must affirm that its imports worked. */
 export const SelfcheckReply = Schema.Struct({ ok: Schema.Literal(true) })
 /** File paths are the input kernel's positional arguments. */
