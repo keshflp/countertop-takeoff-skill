@@ -13,12 +13,12 @@ make capped searches reproducible. No drawings or private job files are read.
 from __future__ import annotations
 
 import argparse
+import json
+import sys
 from dataclasses import dataclass
 from fractions import Fraction
 from itertools import combinations, product
-import json
 from math import ceil, isqrt
-import sys
 from typing import NamedTuple, TypedDict
 
 from ortools.sat.python import cp_model
@@ -104,6 +104,7 @@ class Installation:
     id: str
     outline: tuple[Point, ...]
     cutouts: tuple[Rect, ...]
+    required_pieces: int | None = None
 
 
 @dataclass(frozen=True)
@@ -151,6 +152,11 @@ def read_job(data: dict) -> Job:
             if not isinstance(identity, str) or not identity or identity in ids:
                 raise LayoutError("invalid_input", "Give each installation a different, nonempty name.")
             ids.add(identity)
+            required = item.get("requiredPieceCount")
+            if "requiredPieceCount" in item and (type(required) is not int or required <= 0):
+                raise LayoutError("invalid_input", f"{identity}: the requested piece count must be a positive whole number.")
+            if required is not None and required > MAX_PIECES:
+                raise LayoutError("too_many_pieces", f"{identity}: this layout tool supports up to 12 pieces per job.")
             outline = tuple((ticks(p[0], "Outline x"), ticks(p[1], "Outline y")) for p in item["outline"])
             if outline and outline[0] == outline[-1]:
                 outline = outline[:-1]
@@ -173,7 +179,7 @@ def read_job(data: dict) -> Job:
                     raise LayoutError("invalid_cutout", f"{identity}: a cutout extends outside the countertop or has no size.")
             if any(distance2(a, b) == 0 for a, b in combinations(cutouts, 2)):
                 raise LayoutError("invalid_cutout", f"{identity}: two cutouts touch or overlap. Check their positions.")
-            installations.append(Installation(identity, outline, cutouts))
+            installations.append(Installation(identity, outline, cutouts, required))
         if not installations:
             raise LayoutError("invalid_input", "Add at least one countertop installation.")
         return Job(width, height, ticks(settings["kerfIn"], "Saw gap"),
@@ -307,7 +313,7 @@ def run_direction(rect: Rect, partition: tuple[Rect, ...]) -> bool:
 
 
 def build_model(job: Job, runs: list[Run], fixed: list[tuple[str, Rect]], lower: int,
-                piece_limit: int, incumbent: int | None = None) -> tuple[cp_model.CpModel, list[Slot], cp_model.IntVar]:
+                piece_limit: int, incumbent: int | None = None) -> tuple[cp_model.CpModel, list[Slot]]:
     model = cp_model.CpModel()
     max_bins = piece_limit
     count = model.new_int_var(lower, max_bins, "slabs")
@@ -384,10 +390,13 @@ def build_model(job: Job, runs: list[Run], fixed: list[tuple[str, Rect]], lower:
         maximum = next_maximum
     piece_count = sum(s.active for s in slots)
     model.add(piece_count <= piece_limit)
+    for inst in job.installations:
+        if inst.required_pieces is not None:
+            model.add(sum(s.active for s in slots if s.run.installation == inst) == inst.required_pieces)
     # These weights preserve the three priorities exactly, including corners.
     unit = far * far + 1
     model.minimize(count * (piece_limit + 1) * unit + piece_count * unit - clearance2)
-    return model, slots, clearance2
+    return model, slots
 
 
 def split_run(run: Run, capacity: int, clearance: int) -> list[int]:
@@ -417,6 +426,40 @@ def run_lengths(job: Job, run: Run) -> list[int]:
     return split_run(run, max(capacities), max(job.clearance, job.material))
 
 
+def requested_splits(job: Job, runs: list[Run]) -> list[list[int]]:
+    """Refine safe shortest splits to exact owner counts before any search.
+
+    Inserting a legal cut preserves fit. If every legal grid point is already
+    used, no alternative split can supply another piece in this partition.
+    """
+    lengths = [run_lengths(job, run) for run in runs]
+    for inst in job.installations:
+        if inst.required_pieces is None:
+            continue
+        indices = [i for i, run in enumerate(runs) if run.installation == inst]
+        count = sum(len(lengths[i]) for i in indices)
+        if count > inst.required_pieces:
+            raise LayoutError("piece_count_conflict", f"{inst.id}: this shape needs at least {count} pieces to fit safely, but you requested exactly {inst.required_pieces}. Choose a larger slab or change the requested count.")
+        while count < inst.required_pieces:
+            options = []
+            for i in indices:
+                intervals = runs[i].legal_cuts(max(job.clearance, job.material)).flattened_intervals()
+                start = runs[i].start
+                for j, length in enumerate(lengths[i]):
+                    for a, b in zip(intervals[::2], intervals[1::2]):
+                        lo, hi = max(a, start + 1), min(b, start + length - 1)
+                        if lo <= hi:
+                            cut = max(lo, min(hi, start + length // 2))
+                            options.append((-length, abs(2 * (cut - start) - length), i, j, cut - start))
+                    start += length
+            if not options:
+                raise LayoutError("piece_count_conflict", f"{inst.id}: exactly {inst.required_pieces} pieces would need a seam too close to a cutout. Change the requested count or the cutout position.")
+            _, _, i, j, first = min(options)
+            lengths[i][j:j + 1] = [first, lengths[i][j] - first]
+            count += 1
+    return lengths
+
+
 def make_layout(packed: list[PackedPiece], fixed: list[tuple[str, Rect]], lower: int, warnings: list[str]) -> Layout:
     pieces: list[Piece] = []
     seams: list[Seam] = []
@@ -439,13 +482,13 @@ def make_layout(packed: list[PackedPiece], fixed: list[tuple[str, Rect]], lower:
             "lowerBound": lower, "provenOptimal": False, "warnings": list(warnings)}
 
 
-def greedy_pack(job: Job, runs: list[Run]) -> list[PackedPiece]:
+def greedy_pack(job: Job, runs: list[Run], lengths: list[list[int]]) -> list[PackedPiece]:
     """Seed every search with a legal layout, even with a zero search budget."""
     packed: list[PackedPiece] = []
     bins: list[list[Rect]] = []
-    for run in runs:
+    for run, segments in zip(runs, lengths):
         start = run.start
-        for length in run_lengths(job, run):
+        for length in segments:
             w, h = (length, run.depth) if run.horizontal else (run.depth, length)
             options = [(False, w, h)] + ([(True, h, w)] if job.rotate else [])
             placed = False
@@ -507,22 +550,23 @@ def solve(data: dict, *, work_budget: float = WORK_BUDGET) -> Layout:
                 for inst, partition in zip(job.installations, selected) for r in partition]
         fixed = [(inst.id, s) for inst, partition in zip(job.installations, selected) for s in corner_seams(partition)]
         try:
-            minimum = sum(len(run_lengths(job, run)) for run in runs)
+            lengths = requested_splits(job, runs)
+            minimum = sum(map(len, lengths))
             if minimum > MAX_PIECES:
                 raise LayoutError("too_many_pieces", "This job needs more than 12 pieces. Split it into smaller jobs or choose a larger slab.")
         except LayoutError as exc:
             last_error = exc
             continue
-        seed = greedy_pack(job, runs)
+        seed = greedy_pack(job, runs, lengths)
         candidate = make_layout(seed, fixed, lower, warnings)
         score = layout_score(candidate, job)
         if best_score is None or score < best_score:
             best, best_score = candidate, score
         # First solve the smallest possible piece count. It is both much easier
         # and a proof for all piece counts when it attains the area lower bound.
-        for limit in dict.fromkeys((minimum, MAX_PIECES)):
-            model, slots, distance = build_model(job, runs, fixed, lower, limit,
-                                                 best["slabCount"] if best else None)
+        maximum = minimum if all(i.required_pieces is not None for i in job.installations) else MAX_PIECES
+        for limit in dict.fromkeys((minimum, maximum)):
+            model, slots = build_model(job, runs, fixed, lower, limit, best["slabCount"] if best else None)
             for run in runs:
                 parts = [p for p in seed if p.run == run]
                 for index, slot in enumerate(s for s in slots if s.run == run):
@@ -573,7 +617,7 @@ def main() -> None:
         result = solve(json.load(sys.stdin))
     except LayoutError as exc:
         result = {"ok": False, "error": {"tag": exc.tag, "message": str(exc)}}
-    except (ValueError, OverflowError) as exc:
+    except (ValueError, OverflowError):
         result = {"ok": False, "error": {"tag": "invalid_input", "message": "Check the layout measurements and send valid JSON numbers."}}
     print(json.dumps(result, separators=(",", ":")))
 

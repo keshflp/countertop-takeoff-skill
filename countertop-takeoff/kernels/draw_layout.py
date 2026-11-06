@@ -7,11 +7,11 @@
 from __future__ import annotations
 
 import argparse
+import json
+import sys
 from fractions import Fraction
 from functools import lru_cache
-import json
 from pathlib import Path
-import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -180,10 +180,37 @@ def render(data: dict, out: Path, *, preview: bool = False) -> None:
     panels = [installation_panel(inst, layout, colors) for inst in data["installations"]]
     if layout:
         panels.extend(slab_panel(slab, data, colors) for slab in layout["slabs"])
-    heading = "Confirm these measurements" if preview else f"{layout['slabCount']} slabs | {len(layout['pieces'])} pieces"
-    image = Image.new("RGB", (WIDTH, 140 + sum(p.height for p in panels)), "black")
-    ImageDraw.Draw(image).text((44, 32), heading, font=font(46, True), fill=WHITE)
-    y = 140
+    heading = "Confirm these measurements" if preview else (
+        f"{layout['slabCount']} slab{'s' if layout['slabCount'] != 1 else ''} | "
+        f"{len(layout['pieces'])} piece{'s' if len(layout['pieces']) != 1 else ''}")
+    estimates = data.get("geometryEstimates", [])
+    notices = []
+    measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    for estimate in estimates:
+        inst = next(i for i in data["installations"] if i["id"] == estimate["installationId"])
+        index = estimate["cutoutIndex"]
+        fields = ", ".join({"wIn": "width", "hIn": "height", "at": "position"}[f] for f in estimate["fields"])
+        description = f"{inst.get('label', inst['id'])}, cutout {index + 1} ({inst['cutouts'][index]['kind']}): {fields} estimated."
+        for paragraph in (description, estimate["note"]):
+            line = ""
+            for word in paragraph.split():
+                joined = f"{line} {word}".strip()
+                if line and measure.textlength(joined, font=font(34)) > WIDTH - 88:
+                    notices.append(line)
+                    line = word
+                else:
+                    line = joined
+            if line:
+                notices.append(line)
+    header = 140 + (74 + 46 * len(notices) if estimates else 0)
+    image = Image.new("RGB", (WIDTH, header + sum(p.height for p in panels)), "black")
+    draw = ImageDraw.Draw(image)
+    draw.text((44, 32), heading, font=font(46, True), fill=WHITE)
+    if estimates:
+        draw.text((44, 104), "Preliminary: estimated geometry", font=font(44, True), fill="#ffd36e")
+        for n, line in enumerate(notices):
+            draw.text((44, 168 + n * 46), line, font=font(34), fill=WHITE)
+    y = header
     for panel in panels:
         image.paste(panel, (0, y))
         y += panel.height

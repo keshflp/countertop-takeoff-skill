@@ -5,10 +5,10 @@
 """Contract checks independent of the optimizer's geometry helpers."""
 
 import copy
-from itertools import combinations
-from pathlib import Path
 import sys
 import unittest
+from itertools import combinations, pairwise
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from layout import LayoutError, solve
@@ -39,10 +39,12 @@ class LayoutTests(unittest.TestCase):
         settings = data["settings"]
         for inst in data["installations"]:
             pieces = [p for p in result["pieces"] if p["installationId"] == inst["id"]]
+            if "requiredPieceCount" in inst:
+                self.assertEqual(len(pieces), inst["requiredPieceCount"])
             xs = sorted({p[0] for r in [inst["outline"]] + [p["outline"] for p in pieces] for p in r})
             ys = sorted({p[1] for r in [inst["outline"]] + [p["outline"] for p in pieces] for p in r})
-            for a, b in zip(xs, xs[1:]):
-                for c, d in zip(ys, ys[1:]):
+            for a, b in pairwise(xs):
+                for c, d in pairwise(ys):
                     x, y = (a + b) / 2, (c + d) / 2
                     self.assertEqual(sum(point_inside(x, y, p["outline"]) for p in pieces),
                                      int(point_inside(x, y, inst["outline"])))
@@ -148,6 +150,39 @@ class LayoutTests(unittest.TestCase):
         result = solve(data)
         self.check_layout(data, result)
         self.assertTrue(any(s["x0"] == s["x1"] == 25 for s in result["seams"]))
+
+    def test_requested_pieces_when_unsplit_runs_fit(self):
+        data = job(96, 30, cutouts=[{"kind": "cooktop", "x": 36, "y": 7, "w": 24, "h": 16}])
+        data["installations"][0]["requiredPieceCount"] = 2
+        second = copy.deepcopy(data["installations"][0])
+        second["id"] = "second"
+        second["cutouts"][0]["kind"] = "sink"
+        data["installations"].append(second)
+        for budget in (0, 1):
+            with self.subTest(budget=budget):
+                result = solve(data, work_budget=budget)
+                self.check_layout(data, result)
+                self.assertEqual(len(result["seams"]), 2)
+                self.assertEqual(result["slabCount"], 1)
+
+    def test_impossible_requested_counts_fail_without_relaxing_rules(self):
+        too_few = job()
+        too_few["installations"][0]["requiredPieceCount"] = 1
+        no_cut = job(96, 25, cutouts=[{"kind": "other", "x": 4, "y": 4, "w": 88, "h": 17}])
+        no_cut["installations"][0]["requiredPieceCount"] = 2
+        for data in (too_few, no_cut):
+            for budget in (0, 1):
+                with self.subTest(data=data, budget=budget):
+                    with self.assertRaises(LayoutError) as error:
+                        solve(data, work_budget=budget)
+                    self.assertEqual(error.exception.tag, "piece_count_conflict")
+        for count in (None, 0, -1, 1.5, True, 13):
+            with self.subTest(count=count):
+                data = job(96, 25)
+                data["installations"][0]["requiredPieceCount"] = count
+                with self.assertRaises(LayoutError) as error:
+                    solve(data)
+                self.assertEqual(error.exception.tag, "too_many_pieces" if count == 13 else "invalid_input")
 
     def test_errors(self):
         cases = [(job(200, 70, rotate=False), "piece_too_wide"),
