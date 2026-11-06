@@ -77,7 +77,14 @@ export const Layout = Schema.Struct({
   seams: Schema.Array(Schema.Struct({ installationId: Text, x0: Inches, y0: Inches, x1: Inches, y1: Inches })),
   slabs: Schema.Array(Schema.Struct({ index: Count.check(Schema.isGreaterThan(0)), placements: Schema.Array(Schema.Struct({ pieceId: Text, x: Inches, y: Inches, rotated: Schema.Boolean })) })),
   slabCount: Count, lowerBound: Count, provenOptimal: Schema.Boolean, warnings: Schema.Array(Schema.String),
-})
+}).check(Schema.makeFilter(layout => {
+  const ids = new Set(layout.pieces.map(piece => piece.id))
+  const placed = layout.slabs.flatMap(slab => slab.placements.map(p => p.pieceId))
+  return layout.pieces.length > 0 && ids.size === layout.pieces.length &&
+    layout.slabCount === layout.slabs.length && layout.lowerBound > 0 && layout.lowerBound <= layout.slabCount &&
+    layout.slabs.every((slab, i) => slab.index === i + 1 && slab.placements.length > 0) &&
+    placed.length === ids.size && new Set(placed).size === ids.size && placed.every(id => ids.has(id))
+}))
 /** Successful layout kernel result. */
 export interface Layout extends Schema.Schema.Type<typeof Layout> {}
 /** Layout success and domain failure share a zero process exit status. */

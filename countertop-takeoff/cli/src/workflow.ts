@@ -28,7 +28,8 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
   const exists = (file: string) => io(fs.exists(file), `I couldn't open the job folder. Please check its location.`)
   const write = Effect.fn("Workflow.write")(function* (file: string, value: unknown) {
     // Atomic replacement prevents an interrupted write from leaving valid-looking partial state.
-    yield* io(fs.writeFileString(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`), `I couldn't save ${path.basename(file)}. Check that the job folder can be written to.`)
+    yield* io(fs.remove(`${file}.tmp`, { force: true }), `I couldn't prepare ${path.basename(file)} for saving.`)
+    yield* io(fs.writeFileString(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" }), `I couldn't save ${path.basename(file)}. Check that the job folder can be written to.`)
     yield* io(fs.rename(`${file}.tmp`, file), `I couldn't finish saving ${path.basename(file)}. Close that file and try again.`)
   })
   const saved = <A>(schema: Schema.Codec<A, unknown>, file: string, message: string) => read(file).pipe(
@@ -112,9 +113,11 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
       yield* kernels.checkTools()
       yield* kernels.selfcheck()
       const inputDir = path.join(dir, "inputs")
+      if ((yield* canonical(inputDir)) !== inputDir) return yield* Effect.fail(new WorkflowError({ message: "The input folder points somewhere else. Use a fresh private job folder." }))
       yield* io(fs.makeDirectory(inputDir, { recursive: true }), "I couldn't create the private input folder.")
       const copied = yield* Effect.forEach(inputs, (source, i) => Effect.gen(function* () {
         const destination = path.join(inputDir, `${i + 1}-${path.basename(source)}`)
+        if ((yield* canonical(destination)) !== destination) return yield* Effect.fail(new WorkflowError({ message: "An input file points somewhere else. Use a fresh private job folder." }))
         yield* io(fs.copyFile(path.resolve(source), destination), `I couldn't copy ${path.basename(source)}. Please check that the picture is readable.`)
         return { path: destination, sha256: yield* fingerprint(destination) }
       }))

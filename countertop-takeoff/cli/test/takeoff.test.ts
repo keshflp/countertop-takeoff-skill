@@ -5,11 +5,12 @@ import { mkdtemp, readFile, rm, writeFile, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { createHash } from "node:crypto"
 import { calculate, prepare, resolveSettings } from "../src/core"
 import { decimal, rounded } from "../src/exact"
 import { KernelError } from "../src/errors"
 import { kernelLayer, Kernels } from "../src/kernels"
-import { Job, Layout } from "../src/schema"
+import { Job, Layout, Quote } from "../src/schema"
 import { takeoff } from "../src/takeoff"
 import { workflow } from "../src/workflow"
 
@@ -71,6 +72,8 @@ test("outline accepts explicit cutout rectangles and rejects crossings and missi
   expect(result.installations[0]?.cutouts[0]?.x).toBe(10)
   await expect(Effect.runPromise(prepare(withShape(shape, [{ kind: "sink", wIn: 20, hIn: 16, at: { leg: "main", centerFromStartIn: 30 } }])))).rejects.toThrow("xIn and yIn")
   await expect(Effect.runPromise(prepare(withShape({ kind: "rect", lengthIn: 60, depthIn: 24 }, [{ kind: "sink", wIn: 20, hIn: 16, at: { xIn: 50, yIn: 4 } }])))).rejects.toThrow("outside")
+  const exact = await Effect.runPromise(prepare(withShape({ kind: "rect", lengthIn: 1.0625, depthIn: 1.0625 })))
+  expect(calculate(job, exact, null).installations[0]?.areaSqIn).toBe("1.12890625")
 })
 
 test("pricing follows nominal slabs and exact gross SF, with half-up line rounding", async () => {
@@ -118,6 +121,15 @@ test("malformed kernel stdout fails at the kernel boundary", async () => {
     const result = await Effect.runPromise(takeoff(job).pipe(Effect.provide(broken), Effect.flip))
     expect(result._tag).toBe("KernelError")
     expect(result.message).toContain("unreadable reply")
+  }
+  const broken = kernelLayer(() => Effect.succeed("{}"))
+  for (const operation of [
+    Kernels.use(k => k.selfcheck()),
+    Kernels.use(k => k.inspect(["sketch.png"])),
+    Kernels.use(k => k.draw({ slab: null, settings: resolveSettings(job).settings, installations: [] }, "preview.png", true)),
+  ]) {
+    const failure = await Effect.runPromise(operation.pipe(Effect.provide(broken), Effect.flip))
+    expect(failure._tag).toBe("KernelError")
   }
 })
 
@@ -171,6 +183,17 @@ test("private job folders cannot be in the skill repository, including through a
   await expect(execute(w.preflight(join(link, "private-job-must-not-be-created"), [input]))).rejects.toThrow("Keep plans outside")
 })
 
+test("null slabs still save a quote with blanks and a shapes-only picture", async () => {
+  const { dir, input, w } = await fixture()
+  await execute(w.preflight(dir, [input]))
+  await writeFile(join(dir, "job.json"), JSON.stringify({ ...job, material: { ...job.material, slab: null } }))
+  await execute(w.check(dir)); await execute(w.confirm(dir)); await execute(w.quote(dir))
+  const result = Schema.decodeUnknownSync(Quote)(JSON.parse(await readFile(join(dir, "quote.json"), "utf8")))
+  expect(result.layout).toBeNull()
+  expect(result.pricing.materialCost).toBeNull()
+  expect(result.blanks).toHaveLength(1)
+})
+
 test("the committed standalone bundle matches its source", async () => {
   const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "..")
   const built = await Bun.build({ entrypoints: [join(cliDir, "src", "main.ts")], target: "bun", minify: true })
@@ -178,5 +201,6 @@ test("the committed standalone bundle matches its source", async () => {
   const output = built.outputs[0]
   expect(output).toBeDefined()
   if (!output) return
-  expect((await Bun.file(join(cliDir, "takeoff.js")).text()).replaceAll("\r\n", "\n")).toBe((await output.text()).replaceAll("\r\n", "\n"))
+  const digest = (text: string) => createHash("sha256").update(text.replaceAll("\r\n", "\n")).digest("hex")
+  expect(digest(await Bun.file(join(cliDir, "takeoff.js")).text())).toBe(digest(await output.text()))
 })
