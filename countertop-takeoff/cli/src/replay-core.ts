@@ -10,7 +10,9 @@ const ReplayQuote = Schema.Struct({ ...Quote.fields, developmentOnly: Schema.Lit
 
 /** Historical geometry evidence only. This module is never imported by the shipped CLI. */
 export const replay = Effect.fn("Development.replay")(function* (old: Schema.Schema.Type<typeof LegacyJob>) {
-  const { minSeamToCutoutIn = 3, minMaterialBesideCutoutIn = 2, ...settings } = old.settings
+  const { minSeamToCutoutIn = 6, minMaterialBesideCutoutIn = 3, ...settings } = old.settings
+  const legacySettings = { minSeamToCutoutIn, minMaterialBesideCutoutIn }
+  const developmentOnly = "geometry-replay-unassessed" as const
   const job: Job = { ...old, version: 2, settings,
     material: { ...old.material, profileId: null, profileProvenance: null, nominalThicknessMm: null },
     installations: old.installations.map(i => ({ ...i, insideCornerRadiusMm: null, sourceArrangement: null, conditions: [],
@@ -20,12 +22,15 @@ export const replay = Effect.fn("Development.replay")(function* (old: Schema.Sch
   const kernels = yield* Kernels
   const request: LayoutInput = { version: 2, mode: "geometry-replay", phase: "plan",
     material: { profileId: null, profileProvenance: null, nominalThicknessMm: null }, slab: job.material.slab,
-    installations: prepared.kernelInstallations, settings: prepared.settings, legacySettings: { minSeamToCutoutIn, minMaterialBesideCutoutIn } }
+    installations: prepared.kernelInstallations, settings: prepared.settings, legacySettings }
   const result = yield* kernels.layout(request)
-  const issue = replyIssue(request, result)
+  const issue = replyIssue(request, result, developmentOnly)
   if (issue !== null) return yield* Effect.fail(new KernelError({ message: `The development replay reply could not be accepted: ${issue}.` }))
   const quote = calculate(job, prepared, result)
-  return yield* Schema.decodeUnknownEffect(ReplayQuote)({ ...quote, developmentOnly: "geometry-replay-unassessed",
+  const legacyKeys = ["minSeamToCutoutIn", "minMaterialBesideCutoutIn"] as const
+  return yield* Schema.decodeUnknownEffect(ReplayQuote)({ ...quote, developmentOnly,
+    assumptions: [...quote.assumptions, ...legacyKeys.filter(setting => old.settings[setting] === undefined)
+      .map(setting => ({ setting, value: String(legacySettings[setting]), note: "assumed, confirm with Dad" }))],
     warnings: [...quote.warnings, ...originalEdgeWarnings(prepared.kernelInstallations, { minMaterialBesideCutoutIn })],
   }).pipe(Effect.mapError(() => new JobError({ message: "The development replay quote could not be checked." })))
 })

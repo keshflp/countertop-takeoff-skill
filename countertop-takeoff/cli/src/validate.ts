@@ -57,8 +57,10 @@ function transformed(cells: readonly Cell[], outline: Polygon, placement: Layout
 }
 
 /** Structural evidence validation only: no manufacturer distance/radius rules live here. */
-export function replyIssue(request: LayoutInput, reply: PlanReply): string | null {
+export function replyIssue(request: LayoutInput, reply: PlanReply, developmentOnly?: "geometry-replay-unassessed"): string | null {
   const a = reply.assessment, layout = reply.layout
+  const replay = request.mode === "geometry-replay" && developmentOnly === "geometry-replay-unassessed"
+  if ((request.mode === "geometry-replay") !== (developmentOnly !== undefined)) return "development replay requires its explicit unassessed output marker"
   if (a.profile.id !== request.material.profileId || a.profile.provenance !== request.material.profileProvenance || a.profile.nominalThicknessMm !== request.material.nominalThicknessMm) return "the assessment changed the supplied material profile facts"
   const installations = new Map(request.installations.map(i => [i.id, i]))
   if (!unique(a.installations.map(i => i.id)) || a.installations.length !== installations.size || a.installations.some(i => !installations.has(i.id))) return "the assessment omitted or duplicated an installation"
@@ -98,7 +100,10 @@ export function replyIssue(request: LayoutInput, reply: PlanReply): string | nul
   if (a.status === "search-incomplete" && (a.search.status !== "capped" || a.search.qualifyingCount !== 0)) return "the incomplete search outcome disagrees with its candidate evidence"
   if (a.search.optimality === "global-slab-bound" && (layout === null || !layout.provenOptimal)) return "global slab proof has no matching layout evidence"
   if (layout === null) return null
-  if (a.search.status === "not-run" || a.search.qualifyingCount === 0 || (a.search.status === "capped" && layout.provenOptimal)) return "layout proof disagrees with the search limits"
+  // Historical geometry does not claim that the source-rule search ran. Its
+  // separate developer entry emits the explicit marker; normal v2 cannot opt in.
+  const unassessedReplay = replay && a.search.status === "not-run"
+  if (!unassessedReplay && (a.search.status === "not-run" || a.search.qualifyingCount === 0 || (a.search.status === "capped" && layout.provenOptimal))) return "layout proof disagrees with the search limits"
   if (layout.provenOptimal && layout.lowerBound !== layout.slabCount) return "slab optimality was claimed without reaching the exact area bound"
   if (layout.footprintMode === "bounding-box" && a.search.packing !== "bounding-box") return "the conservative packing fallback was not disclosed"
   return layoutIssue(request, layout)

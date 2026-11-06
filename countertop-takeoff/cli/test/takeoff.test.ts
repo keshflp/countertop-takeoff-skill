@@ -189,19 +189,43 @@ test("concave pieces use rigid quarter turns; disconnected stone is rejected", a
   expect(replyIssue(broken,response(broken,disconnected))).toContain("disconnected")
 })
 
-test("development replay stays explicitly unassessed",async()=>{
+test("replay restores historical defaults and assumptions, including without a slab",async()=>{
   const {profileId:_id,profileProvenance:_provenance,nominalThicknessMm:_thickness,...material}=job.material
-  const old=Schema.decodeUnknownSync(LegacyJob)({version:1,material,laborPerSf:job.laborPerSf,settings:{},installations:[{id:"island",label:"Island",shape:{kind:"rect",lengthIn:60,depthIn:24},cutouts:[]}]})
-  const layer=kernelLayer((name,args,stdin)=>{
-    if(name!=="layout")return transport(name,args,stdin)
-    const input=Schema.decodeUnknownSync(LayoutInput)(JSON.parse(stdin))
-    expect(input.mode).toBe("geometry-replay");expect(input.material.profileId).toBeNull()
-    expect(input.legacySettings).toEqual({minSeamToCutoutIn:3,minMaterialBesideCutoutIn:2})
-    const a=assessment(input)
-    return Effect.succeed(JSON.stringify({ok:true,version:2,assessment:{...a,limitations:["geometry-replay"],search:{...a.search,status:"complete",candidateCount:1,qualifyingCount:1,packing:"polygon-cells"}},layout}))
-  })
-  const q=await Effect.runPromise(replay(old).pipe(Effect.provide(layer)))
-  expect(q.developmentOnly).toBe("geometry-replay-unassessed");expect(q.assessment.status).toBe("unresolved");expect(q.pricing.materialCost).toBe("500.00")
+  for (const slab of [material.slab, null]) {
+    const old=Schema.decodeUnknownSync(LegacyJob)({version:1,material:{...material,slab},laborPerSf:job.laborPerSf,settings:{},installations:[{id:"island",label:"Island",shape:{kind:"rect",lengthIn:60,depthIn:24},cutouts:[]}]})
+    const layer=kernelLayer((name,args,stdin)=>{
+      if(name!=="layout")return transport(name,args,stdin)
+      const input=Schema.decodeUnknownSync(LayoutInput)(JSON.parse(stdin))
+      expect(input.mode).toBe("geometry-replay");expect(input.material.profileId).toBeNull()
+      expect(input.legacySettings).toEqual({minSeamToCutoutIn:6,minMaterialBesideCutoutIn:3})
+      const a=assessment(input)
+      return Effect.succeed(JSON.stringify({ok:true,version:2,assessment:{...a,checks:[],limitations:["geometry-replay"]},layout:slab === null ? null : layout}))
+    })
+    const q=await Effect.runPromise(replay(old).pipe(Effect.provide(layer)))
+    expect(q.developmentOnly).toBe("geometry-replay-unassessed");expect(q.assessment.status).toBe("unresolved")
+    expect(q.assessment.search.status).toBe("not-run")
+    expect(q.pricing.materialCost).toBe(slab === null ? null : "500.00")
+    expect(q.assumptions.filter(a=>a.setting.startsWith("min"))).toEqual([
+      {setting:"minSeamToCutoutIn",value:"6",note:"assumed, confirm with Dad"},
+      {setting:"minMaterialBesideCutoutIn",value:"3",note:"assumed, confirm with Dad"},
+    ])
+    const explicit=await Effect.runPromise(replay({...old,settings:{minSeamToCutoutIn:6,minMaterialBesideCutoutIn:3}}).pipe(Effect.provide(layer)))
+    expect(explicit.assumptions.some(a=>a.setting.startsWith("min"))).toBe(false)
+  }
+})
+
+test("only explicitly marked replay can retain an unassessed legacy layout; geometry checks still run", async () => {
+  const r: LayoutInput = {...await request(),mode:"geometry-replay",material:{profileId:null,profileProvenance:null,nominalThicknessMm:null},legacySettings:{minSeamToCutoutIn:6,minMaterialBesideCutoutIn:3}}
+  const a=assessment(r)
+  const historical: PlanReply={ok:true,version:2,assessment:{...a,checks:[],limitations:["geometry-replay-unassessed"]},layout}
+  expect(replyIssue(r,historical)).toContain("marker")
+  expect(replyIssue(r,historical,"geometry-replay-unassessed")).toBeNull()
+  expect(replyIssue(r,{...historical,assessment:{...historical.assessment,limitations:[]}},"geometry-replay-unassessed")).toContain("unassessed")
+  expect(replyIssue(r,{...historical,layout:{...layout,slabs:[]}},"geometry-replay-unassessed")).not.toBeNull()
+  const normal=await request()
+  const unrun=assessment({...normal,phase:"assess"})
+  expect(replyIssue(normal,{ok:true,version:2,assessment:unrun,layout})).toContain("search limits")
+  expect(replyIssue(normal,{ok:true,version:2,assessment:unrun,layout},"geometry-replay-unassessed")).toContain("marker")
 })
 
 test("committed standalone bundle matches source",async()=>{
