@@ -60,6 +60,19 @@ class AssessmentTests(unittest.TestCase):
         self.assertEqual({q["field"] for q in result["assessment"]["unresolved"]},
                          {"material.profileId", "material.profileProvenance", "material.nominalThicknessMm", "material.slab"})
 
+    def test_missing_datum_is_a_plain_question_and_null_slab_assess_keeps_rules(self):
+        data = job(openings=[opening()])
+        data["phase"] = "assess"
+        data["slab"] = None
+        data["installations"][0]["sourceArrangement"] = None
+        result = solve_assessment(data)
+        questions = {q["field"]: q["question"] for q in result["assessment"]["unresolved"]}
+        self.assertIn("material.slab", questions)
+        self.assertIn("installations[0].sourceArrangement", questions)
+        self.assertTrue(all(q.endswith("?") for q in questions.values()))
+        self.assertTrue(checks(result, "opening-radius"))
+        self.assertIsNone(result["layout"])
+
     def test_exact_original_metric_boundaries_and_zero_radius(self):
         for thickness, boundary in (("12", 5.9375), ("20", 3.9375), ("30", 3.9375)):
             for delta, expected in ((0, "pass"), (-.0625, "fail")):

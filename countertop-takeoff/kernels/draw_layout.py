@@ -183,6 +183,10 @@ def slab_panel(slab: dict, data: dict, colors: dict[str, str]) -> Image.Image:
 
 
 def render(data: dict, out: Path, *, preview: bool = False) -> None:
+    if data.get("version") == 2:
+        from draw_assessment import render_assessment
+        render_assessment(data, out, preview=preview)
+        return
     layout = None if preview else data["layout"]
     if layout is not None and not layout.get("ok"):
         raise ValueError("A safe slab layout is needed before drawing the slabs.")
@@ -240,7 +244,10 @@ def main() -> None:
     if args.out is None:
         parser.error("--out is required")
     try:
-        render(json.load(sys.stdin), args.out, preview=args.preview)
+        data = json.load(sys.stdin)
+        if not isinstance(data, dict) or data.get("version") != 2:
+            raise ValueError("Use a version 2 drawing request.")
+        render(data, args.out, preview=args.preview)
         print(json.dumps({"ok": True, "path": str(args.out)}))
     except (KeyError, TypeError, ValueError, OSError, ZeroDivisionError):
         print(json.dumps({"ok": False, "error": {"tag": "drawing_failed", "message": "The picture could not be saved. Check the outlines, layout and output folder."}}))

@@ -435,7 +435,7 @@ def original_evidence(request: Request, inst: Facts) -> Evidence:
                   cut=j, src=source(profile, "rails", opening.kind), fields=[f"{inst.path}.sourceArrangement"], operator="applicable")
         if not supported:
             if inst.arrangement is None and inst.polygon.area == inst.polygon.bounds.area:
-                out.ask(f"{inst.path}.sourceArrangement", f"{inst.id}: confirm the rectangular run axis, rear edge and source-arrangement evidence.")
+                out.ask(f"{inst.path}.sourceArrangement", f"{inst.id}: what are the confirmed run axis, rear edge and source-arrangement evidence?")
             out.obligation("unsupported-detail", inst, "Opening strip/end rules are not established for this profile or arrangement; no limits from another profile are substituted.",
                            cut=j, status="unsupported", src=source(profile, "rails", opening.kind), fields=[f"{inst.path}.sourceArrangement"])
             continue
