@@ -28,21 +28,30 @@ estimate-output gates.
 | tiling | Rectangular pieces cover exactly the installation outline, once. Coordinate compression and integer sixteenths find holes, overlaps and protrusions. |
 | pieceFit | Each rectangle fits trimmed slab dimensions, with rotation only when allowed. |
 | pieceCounts | Any `requiredPieceCount` is the exact number of fabrication rectangles for that installation, even when the unsplit run would fit. |
+| fixedJoins | An explicit `center-through-cutout` request produces exactly two equal gross blanks with a declared full-depth seam at the exact midpoint. Correct count alone is insufficient. |
 | placements | Every piece appears once, slab indices are contiguous, and placements stay inside usable area with the full kerf gap. Coordinates use the usable origin, so trim is not added again. |
 | seams | Declared seams equal actual shared piece edges; no hidden seam crosses or approaches a cutout within the required distance. |
 | seamMaterial | Every seam-made edge leaves the configured material beside each cutout, independently of seam clearance. |
 | warnings | Insufficient material at original outline edges is reported as a cutout/material or edge warning, including quotes with unknown slabs. An unrelated search warning does not count. The violation does not make an otherwise valid layout fail. |
 | bounds | Count matches slabs; lower bound is recomputed from exact area; a known optimum rejects false optimality claims. |
 | quantity | Gross installation and total SF use exact area and half-up rounding. Total SF rounds once, independently of invoice line rounding. |
-| pricing | Nominal slab area, purchased material cost, effective rate, labor and each installation invoice line match Decimal arithmetic. Expected prices assume the hand optimum; a wasteful valid layout must price its actual slab count. |
+| pricing | Nominal slab area, supplier purchase cost, markup on unrounded full purchased cost, material charge, effective rate, separate labor and invoice lines match Decimal arithmetic. Expected prices assume the hand optimum; a wasteful valid layout must price its actual slab count. |
 | blanks | Exactly one plain question per null input; dependent prices and amounts remain null. |
 | assumptions | Every omitted setting appears once with its actual default and an instruction to confirm with Dad. |
 | estimates | `geometryEstimates` faithfully copies each authorized estimate's installation/index, fields and note, and matches the independently resolved rectangle. Empty means `[]`, never a missing field. |
 
 Seam distance is shortest Euclidean distance from the finite seam segment to the
 cutout rectangle, compared using squared integers. Equality at the minimum is
-allowed; intersection is always forbidden. Kerf requires separation along at
+allowed; ordinary seams cannot intersect cutouts. Kerf requires separation along at
 least one axis. Cutouts do not subtract gross SF.
+
+The sole crossing exception is an explicit `seam: {kind: "center-through-cutout",
+cutoutIndex: 0}` on a rectangular run with the selected opening centered along
+its length. Only the exact full midpoint seam and selected opening are exempt
+from crossing, seam-gap and seam-made-edge clearance. Other openings, original
+edges, gross tiling, slab fit and kerf retain their checks. The request implies
+exactly two pieces; a conflicting count or off-grid midpoint is an input error.
+Omitting the request retains the ordinary crossing prohibition.
 
 `provenOptimal` is a claim, not a score bonus. Known hand optima can refute it;
 private cases without an optimum cannot independently establish a stronger
@@ -85,6 +94,11 @@ are never copied into the evaluator branch.
 
 `cases/` is the frozen 16-case baseline. New addendum coverage lives separately
 in `contract-cases/`; it does not change the historical slab score or workload.
+Addendum 02 requires nullable `material.markupPercent`. Existing jobs now state
+`"0"`, with matching zero-markup output fields. This is a schema-only migration:
+their geometry, slab sizes, optima, original expected prices and `naive_layout.py`
+are unchanged. Repeating the frozen layout run still yields 27 slabs versus 16,
+excess 11. New explicit-join constraints do not change that comparison.
 
 ```powershell
 uv run evals/kitchen/eval.py --cases evals/kitchen/contract-cases
@@ -109,6 +123,22 @@ does not itself mark a cutout as estimated. Estimate metadata reports exactly
 the authorized fields and resolved rectangle in a standalone quote; default
 assumptions retain their existing meaning. The evaluator checks this output,
 while the drawing kernel's own tests cover the visible preliminary annotations.
+
+The second contract case fixes a midpoint join and uses unrelated synthetic
+12.5% markup. Its exact purchase cost rounds to 476.75, marked charge to 536.35,
+and material rate to 27.50. Marking rounded supplier cost gives the wrong charge
+536.34; dividing rounded charge gives the wrong rate 27.51. Labor remains 9.35,
+and the line amount exercises a half-cent tie. The third case leaves markup
+null: supplier cost and labor remain known, with one markup question and null
+charge/rates/amount. Zero is explicit, never a financial default.
+
+With layout `1839f38`, all 18 layout-applicable public/contract cases pass
+(one unknown-slab skip), including the equal-blank join. Focused hand-layout
+tests reject displaced or missing seams, crossings without a request, and
+crossing/nearby additional openings. They also retain original-edge warnings.
+CLI `f487e16` with that layout passes all 19 quote cases. The focused evaluator
+suite has 55 passing tests. These checks validate the stated model, not actual
+fabrication templates or engineering approval.
 
 ## Cases and private plans
 

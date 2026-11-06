@@ -5,7 +5,8 @@
       "name": "Synthetic quartz",
       "vendor": "Synthetic supplier",
       "pricePerSf": "15.00",
-      "slab": null
+      "slab": null,
+      "markupPercent": "0"
     },
     "laborPerSf": "12.25",
     "installations": [
@@ -33,7 +34,9 @@
       "materialCost": null,
       "materialRatePerSf": null,
       "laborPerSf": "12.25",
-      "ratePerSf": null
+      "ratePerSf": null,
+      "markupPercent": "0",
+      "materialCharge": null
     },
     "blanks": [
       "material.slab"

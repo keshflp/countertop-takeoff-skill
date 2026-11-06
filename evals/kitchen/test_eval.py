@@ -104,10 +104,35 @@ def contract_case_and_quote() -> tuple[dict, dict]:
     note = source["job"]["installations"][0]["cutouts"][0]["estimate"]["note"]
     quote = hand_quote(1)
     quote.update(installations=[{"id": "counter", "label": "Counter", "areaSqIn": "3024", "sf": "21.00", "requiredPieceCount": 2}],
-                 totalSf="21.00", layout=layout, pricing={"materialCost": "771.75", "materialRatePerSf": "36.75", "laborPerSf": "9.10", "ratePerSf": "45.85"},
+                 totalSf="21.00", layout=layout, pricing={"materialCost": "771.75", "markupPercent": "0", "materialCharge": "771.75", "materialRatePerSf": "36.75", "laborPerSf": "9.10", "ratePerSf": "45.85"},
                  invoice=[{"installation": "Counter", "material": "Synthetic quartz", "sf": "21.00", "ratePerSf": "45.85", "amount": "962.85"}],
                  geometryEstimates=[{"installationId": "counter", "cutoutIndex": 0, "fields": ["wIn", "hIn", "at"], "note": note,
                                      "xIn": 42, "yIn": 6, "wIn": 24, "hIn": 16}])
+    return source, quote
+
+
+def addendum_two_witness(number: int) -> tuple[dict, dict]:
+    name = {2: "02-fixed-join-markup-rounding", 3: "03-markup-null"}[number]
+    source = json.loads((Path(__file__).parent / f"contract-cases/{name}.json").read_text())
+    expected = source["expected"]
+    if number == 2:
+        layout = hand_layout([("counter", 0, 0, 52, 27), ("counter", 52, 0, 52, 27)],
+                             [(1, 0, 0, False), (1, 52.25, 0, False)], [("counter", 52, 0, 52, 27)])
+        area, slab_sf = "2808", str(Decimal(275) / 6)
+    else:
+        layout = hand_layout([("counter", 0, 0, 84, 25.5)], [(1, 0, 0, False)])
+        area, slab_sf = "2142", "55.125"
+    installation = {"id": "counter", "label": "Counter", "areaSqIn": area, "sf": expected["totalSf"]}
+    if number == 2:
+        installation["seam"] = {"kind": "center-through-cutout", "cutoutIndex": 0}
+    quote = hand_quote(1)
+    quote.update(installations=[installation], totalSf=expected["totalSf"], slabSf=slab_sf, layout=layout,
+                 pricing=deepcopy(expected["pricing"]),
+                 invoice=[{"installation": "Counter", "material": source["job"]["material"]["name"],
+                           "sf": expected["totalSf"], "ratePerSf": expected["pricing"]["ratePerSf"],
+                           "amount": expected["invoiceAmounts"][0]}],
+                 blanks=[{"field": field, "question": "What material markup should be used?"}
+                         for field in expected["blanks"]])
     return source, quote
 
 
@@ -132,6 +157,152 @@ class GateTests(unittest.TestCase):
         source, quote = contract_case_and_quote()
         result = oracle.evaluate(source, quote, False)
         self.assertTrue(all(g["pass"] for g in result["gates"].values()), result)
+
+    def test_addendum_two_hand_witnesses(self):
+        for number in (2, 3):
+            source, quote = addendum_two_witness(number)
+            result = oracle.evaluate(source, quote, False)
+            with self.subTest(number=number):
+                self.assertTrue(all(g["pass"] for g in result["gates"].values()), result)
+
+    def test_fixed_join_requires_midpoint_equal_blanks_and_declared_seam(self):
+        source, quote = addendum_two_witness(2)
+        data = oracle.expand_job(source["job"])
+        oracle.check_fixed_joins(data, quote["layout"])
+        wrong_split = hand_layout([("counter", 0, 0, 51, 27), ("counter", 51, 0, 53, 27)],
+                                  [(1, 0, 0, False), (1, 51.25, 0, False)], [("counter", 51, 0, 51, 27)])
+        # Count, gross tiling and packing still pass; the fixed-join gate must fail.
+        for check in (oracle.check_piece_counts, oracle.check_tiling, oracle.check_placements):
+            check(data, wrong_split)
+        missing = deepcopy(quote["layout"])
+        missing["seams"] = []
+        wrong_declared = deepcopy(quote["layout"])
+        wrong_declared["seams"][0].update(x0=51, x1=51)
+        short = deepcopy(quote["layout"])
+        short["seams"][0]["y1"] = 26.9375
+        for bad in (wrong_split, missing, wrong_declared, short):
+            with self.subTest(layout=bad), self.assertRaises(ValueError):
+                oracle.check_fixed_joins(data, bad)
+
+    def test_fixed_join_implies_exactly_two_without_explicit_count(self):
+        source, quote = addendum_two_witness(2)
+        data = oracle.expand_job(source["job"])
+        self.assertNotIn("requiredPieceCount", data["installations"][0])
+        oracle.check_piece_counts(data, quote["layout"])
+        unsplit = hand_layout([("counter", 0, 0, 104, 27)], [(1, 0, 0, False)])
+        with self.assertRaises(ValueError):
+            oracle.check_piece_counts(data, unsplit)
+
+    def test_crossing_without_explicit_request_is_still_rejected(self):
+        source, quote = addendum_two_witness(2)
+        for check in (oracle.check_seams, oracle.check_seam_material):
+            check(oracle.expand_job(source["job"]), quote["layout"])
+        source["job"]["installations"][0].pop("seam")
+        for check in (oracle.check_seams, oracle.check_seam_material):
+            with self.subTest(gate=check.__name__), self.assertRaises(ValueError):
+                check(oracle.expand_job(source["job"]), quote["layout"])
+
+    def test_join_exemption_applies_only_to_selected_opening(self):
+        source, quote = addendum_two_witness(2)
+        for x, passes in ((60, True), (51, False), (53, False)):
+            # Other opening has an 8-inch safe gap, crosses, or leaves a 1-inch gap.
+            source["job"]["installations"][0]["cutouts"] = [source["job"]["installations"][0]["cutouts"][0],
+                {"kind": "other", "wIn": 2, "hIn": 4, "at": {"xIn": x, "yIn": 6}}]
+            data = oracle.expand_job(source["job"])
+            for check in (oracle.check_seams, oracle.check_seam_material):
+                result = oracle.run_gate(lambda: check(data, quote["layout"]))
+                with self.subTest(x=x, gate=check.__name__):
+                    self.assertEqual(result["pass"], passes, result)
+
+    def test_join_exemption_does_not_follow_wrong_seam(self):
+        source, _ = addendum_two_witness(2)
+        wrong = hand_layout([("counter", 0, 0, 51, 27), ("counter", 51, 0, 53, 27)],
+                            [(1, 0, 0, False), (1, 51.25, 0, False)], [("counter", 51, 0, 51, 27)])
+        for check in (oracle.check_seams, oracle.check_seam_material):
+            with self.subTest(gate=check.__name__), self.assertRaises(ValueError):
+                check(oracle.expand_job(source["job"]), wrong)
+
+    def test_selected_cutout_original_edges_still_need_warnings(self):
+        source, quote = addendum_two_witness(2)
+        source["job"]["installations"][0]["cutouts"][0]["hIn"] = 23
+        data = oracle.expand_job(source["job"])
+        warning = ["Counter: cooktop leaves too little material at an original edge."]
+        quote["warnings"] = quote["layout"]["warnings"] = warning
+        oracle.check_warnings(data, quote["layout"], quote)
+        for report in (quote, quote["layout"]):
+            report["warnings"] = []
+            with self.assertRaises(ValueError):
+                oracle.check_warnings(data, quote["layout"], quote)
+            report["warnings"] = warning
+
+    def test_invalid_explicit_join_inputs_are_rejected(self):
+        for fault in ("index", "boolean-index", "shape", "offset", "grid", "count", "kind"):
+            source, _ = addendum_two_witness(2)
+            installation = source["job"]["installations"][0]
+            if fault == "index":
+                installation["seam"]["cutoutIndex"] = 1
+            elif fault == "boolean-index":
+                installation["seam"]["cutoutIndex"] = False
+            elif fault == "shape":
+                installation["shape"] = {"kind": "L", "backIn": 104, "sideIn": 60, "depthIn": 27, "side": "left"}
+                installation["cutouts"][0]["at"] = {"xIn": 39, "yIn": 5}
+            elif fault == "offset":
+                installation["cutouts"][0]["at"] = {"xIn": 38, "yIn": 5}
+            elif fault == "grid":
+                installation["shape"]["lengthIn"] = 104.0625
+                installation["cutouts"][0].update(wIn=26.0625)
+            elif fault == "count":
+                installation["requiredPieceCount"] = 3
+            else:
+                installation["seam"]["kind"] = "any-crossing"
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                oracle.expand_job(source["job"])
+
+    def test_quote_preserves_explicit_join_request(self):
+        source, quote = addendum_two_witness(2)
+        data = oracle.expand_job(source["job"])
+        oracle.check_quantities(source["job"], data, quote, source["expected"])
+        for request in (None, {"kind": "center-through-cutout", "cutoutIndex": 1}):
+            quote["installations"][0]["seam"] = request
+            with self.assertRaises(ValueError):
+                oracle.check_quantities(source["job"], data, quote, source["expected"])
+
+    def test_markup_uses_unrounded_cost_includes_waste_and_keeps_labor_separate(self):
+        source, quote = addendum_two_witness(2)
+        data = oracle.expand_job(source["job"])
+        oracle.check_pricing(source["job"], data, quote, source["expected"])
+        for field, wrong in (("materialCost", "536.35"), ("materialCharge", "536.34"),
+                             ("materialRatePerSf", "27.51"), ("laborPerSf", "10.52"),
+                             ("markupPercent", "0"), ("ratePerSf", "38.02")):
+            bad = deepcopy(quote)
+            bad["pricing"][field] = wrong
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                oracle.check_pricing(source["job"], data, bad, source["expected"])
+
+    def test_null_markup_keeps_cost_and_labor_but_has_exactly_one_question(self):
+        source, quote = addendum_two_witness(3)
+        oracle.check_blanks(source["job"], quote, source["expected"])
+        self.assertEqual(quote["pricing"]["materialCost"], "622.91")
+        self.assertEqual(quote["pricing"]["laborPerSf"], "8.25")
+        for fault in ("zero", "charge", "duplicate", "amount"):
+            bad = deepcopy(quote)
+            if fault == "zero":
+                bad["pricing"]["markupPercent"] = "0"
+            elif fault == "charge":
+                bad["pricing"]["materialCharge"] = "622.91"
+            elif fault == "duplicate":
+                bad["blanks"].append(deepcopy(bad["blanks"][0]))
+            else:
+                bad["invoice"][0]["amount"] = "0.00"
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                oracle.check_blanks(source["job"], bad, source["expected"])
+
+    def test_missing_markup_cannot_silently_default_to_zero(self):
+        source, quote = addendum_two_witness(3)
+        source["job"]["material"].pop("markupPercent")
+        result = oracle.evaluate(source, quote, False)
+        self.assertFalse(result["gates"]["pricing"]["pass"])
+        self.assertFalse(result["gates"]["blanks"]["pass"])
 
     def test_piece_count_is_exact_not_minimum_or_preference(self):
         source, quote = contract_case_and_quote()
@@ -287,7 +458,7 @@ class GateTests(unittest.TestCase):
         source.pop("expected")
         source["job"]["material"]["pricePerSf"] = "0.21"
         # 120*55*0.21/144 = 9.625 exactly; dividing slab SF first can produce 9.624999...
-        quote["pricing"].update(materialCost="9.63", materialRatePerSf="0.54", ratePerSf="7.79")
+        quote["pricing"].update(materialCost="9.63", materialCharge="9.63", materialRatePerSf="0.54", ratePerSf="7.79")
         quote["invoice"][0].update(ratePerSf="7.79", amount="139.99")
         result = oracle.evaluate(source, quote, False)
         self.assertTrue(result["gates"]["pricing"]["pass"], result)

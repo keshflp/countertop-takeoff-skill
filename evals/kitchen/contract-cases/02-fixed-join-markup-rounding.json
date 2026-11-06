@@ -1,0 +1,42 @@
+{
+  "job": {
+    "version": 1,
+    "material": {
+      "name": "Synthetic stone",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "10.40185",
+      "markupPercent": "12.5",
+      "slab": {"lengthIn": 120, "widthIn": 55}
+    },
+    "laborPerSf": "9.35",
+    "installations": [{
+      "id": "counter",
+      "label": "Counter",
+      "shape": {"kind": "rect", "lengthIn": 104, "depthIn": 27},
+      "seam": {"kind": "center-through-cutout", "cutoutIndex": 0},
+      "cutouts": [{
+        "kind": "cooktop",
+        "wIn": 26,
+        "hIn": 17,
+        "at": {"leg": "main", "centerFromStartIn": "center"}
+      }]
+    }],
+    "settings": {}
+  },
+  "expected": {
+    "installations": {"counter": {"sf": "19.50"}},
+    "totalSf": "19.50",
+    "optimumSlabs": 1,
+    "pricing": {
+      "materialCost": "476.75",
+      "markupPercent": "12.5",
+      "materialCharge": "536.35",
+      "materialRatePerSf": "27.50",
+      "laborPerSf": "9.35",
+      "ratePerSf": "36.85"
+    },
+    "invoiceAmounts": ["718.58"],
+    "blanks": []
+  },
+  "why": "104*27=2808 sq in=19.50 gross SF. Opening is (39,5,26,17). The explicit selected-opening join fixes x=52 and two equal 52x27 gross blanks, even without requiredPieceCount. Place blanks at (0,0) and (52.25,0) on usable 118x53; one slab is feasible and the positive-area bound is one. Only that seam/opening pair is exempt from seam clearance; original margins are 5 inches. Nominal slab SF=120*55/144=275/6. Purchase cost=(275/6)*10.40185=476.751458333... ->476.75. Markup 12.5 percent is factor 9/8 on cost: exact charge=(825/16)*10.40185=536.345390625 ->536.35. Exact material rate=10.40185*275/104=27.5048918269... ->27.50; dividing rounded charge 536.35 by 19.5 would incorrectly give 27.51. Rounding supplier cost before markup would incorrectly charge 536.34. Labor is separate: 27.50+9.35=36.85. Line=19.50*36.85=718.575 ->718.58 half-up."
+}

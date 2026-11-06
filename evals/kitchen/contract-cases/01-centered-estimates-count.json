@@ -5,38 +5,65 @@
       "name": "Synthetic quartz",
       "vendor": "Synthetic supplier",
       "pricePerSf": "14.00",
-      "slab": {"lengthIn": 126, "widthIn": 63}
+      "slab": {
+        "lengthIn": 126,
+        "widthIn": 63
+      },
+      "markupPercent": "0"
     },
     "laborPerSf": "9.10",
-    "installations": [{
-      "id": "counter",
-      "label": "Counter",
-      "requiredPieceCount": 2,
-      "shape": {"kind": "rect", "lengthIn": 108, "depthIn": 28},
-      "cutouts": [{
-        "kind": "sink",
-        "wIn": 24,
-        "hIn": 16,
-        "at": {"leg": "main", "centerFromStartIn": "center"},
-        "estimate": {
-          "fields": ["wIn", "hIn", "at"],
-          "note": "Synthetic owner authorized a preliminary centered 24 by 16 opening; verify the actual template before cutting."
-        }
-      }]
-    }],
+    "installations": [
+      {
+        "id": "counter",
+        "label": "Counter",
+        "requiredPieceCount": 2,
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 108,
+          "depthIn": 28
+        },
+        "cutouts": [
+          {
+            "kind": "sink",
+            "wIn": 24,
+            "hIn": 16,
+            "at": {
+              "leg": "main",
+              "centerFromStartIn": "center"
+            },
+            "estimate": {
+              "fields": [
+                "wIn",
+                "hIn",
+                "at"
+              ],
+              "note": "Synthetic owner authorized a preliminary centered 24 by 16 opening; verify the actual template before cutting."
+            }
+          }
+        ]
+      }
+    ],
     "settings": {}
   },
   "expected": {
-    "installations": {"counter": {"sf": "21.00"}},
+    "installations": {
+      "counter": {
+        "sf": "21.00"
+      }
+    },
     "totalSf": "21.00",
     "optimumSlabs": 1,
     "pricing": {
       "materialCost": "771.75",
       "materialRatePerSf": "36.75",
       "laborPerSf": "9.10",
-      "ratePerSf": "45.85"
+      "ratePerSf": "45.85",
+      "markupPercent": "0",
+      "materialCharge": "771.75"
     },
-    "invoiceAmounts": ["962.85"],
+    "invoiceAmounts": [
+      "962.85"
+    ],
     "blanks": []
   },
   "why": "108*28 = 3024 sq in = 21 SF gross. Center is 108/2 = 54; opening top-left is (54-24/2, (28-16)/2) = (42,6), size 24x16. EXACTLY two pieces are required even though 108x28 fits uncut. A seam at x=36 is 6 inches from the opening. Pieces 36x28 and 72x28 stack at (0,0) and (0,28.25) on usable 124x61, reaching only y=56.25; one slab is feasible and the positive-area bound is one. Nominal slab SF = 126*63/144 = 55.125; cost = 55.125*14 = 771.75; material rate = 771.75/21 = 36.75; invoice rate = 36.75+9.10 = 45.85; amount = 21.00*45.85 = 962.85. This separate contract workload does not alter the frozen baseline."

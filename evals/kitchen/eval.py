@@ -170,6 +170,18 @@ def expand_job(job: dict) -> dict:
             count = installation["requiredPieceCount"]
             require(type(count) is int and count > 0, "requiredPieceCount must be a positive integer")
             expanded["requiredPieceCount"] = count
+        if "seam" in installation:
+            request = installation["seam"]
+            require(shape["kind"] == "rect", "center-through-cutout requires a rectangular run")
+            require(request["kind"] == "center-through-cutout", "unknown explicit seam kind")
+            index = request["cutoutIndex"]
+            require(type(index) is int and 0 <= index < len(cutouts), "invalid selected cutout index")
+            length = ticks(shape["lengthIn"])
+            selected = cutout_rect(cutouts[index])
+            require(length % 2 == 0, "the exact midpoint falls between sixteenth-inch marks")
+            require(2 * selected.x + selected.w == length, "selected opening must be centered along the run")
+            require(installation.get("requiredPieceCount", 2) == 2, "explicit center join requires exactly two pieces")
+            expanded["seam"] = dict(request)
         installations.append(expanded)
     return {"slab": job["material"]["slab"], "settings": DEFAULTS | job.get("settings", {}),
             "installations": installations}
@@ -271,9 +283,35 @@ def check_piece_fit(data: dict, layout: dict) -> None:
 def check_piece_counts(data: dict, layout: dict) -> None:
     counts = Counter(installation for installation, _ in pieces(layout).values())
     for installation in data["installations"]:
-        if "requiredPieceCount" in installation:
-            require(counts[installation["id"]] == installation["requiredPieceCount"],
-                    f"{installation['id']} requires exactly {installation['requiredPieceCount']} fabrication pieces")
+        required = 2 if "seam" in installation else installation.get("requiredPieceCount")
+        if required is not None:
+            require(counts[installation["id"]] == required,
+                    f"{installation['id']} requires exactly {required} fabrication pieces")
+
+
+def fixed_join(installation: dict) -> Edge:
+    r = rectangle(installation["outline"])
+    require(r.w % 2 == 0, "exact midpoint is not on the sixteenth grid")
+    return Edge(installation["id"], "v", r.x + r.w // 2, r.y, r.bottom)
+
+
+def exempt_join(installation: dict, edge: Edge, cutout_index: int) -> bool:
+    request = installation.get("seam")
+    return request is not None and request["cutoutIndex"] == cutout_index and edge == fixed_join(installation)
+
+
+def check_fixed_joins(data: dict, layout: dict) -> None:
+    available = list(pieces(layout).values())
+    for installation in data["installations"]:
+        if "seam" not in installation:
+            continue
+        r = rectangle(installation["outline"])
+        edge = fixed_join(installation)
+        halves = [Rect(r.x, r.y, r.w // 2, r.h), Rect(edge.line, r.y, r.w // 2, r.h)]
+        actual = [piece for identifier, piece in available if identifier == installation["id"]]
+        require(Counter(actual) == Counter(halves), "explicit center join needs exactly the two equal gross blanks")
+        declared = [e for e in declared_edges(layout) if e.installation == installation["id"]]
+        require(merge_edges(declared) == [edge], "explicit center seam must span the exact run midpoint")
 
 
 def check_placements(data: dict, layout: dict) -> None:
@@ -313,7 +351,9 @@ def check_seams(data: dict, layout: dict) -> None:
     for edge in actual:
         for installation in data["installations"]:
             if installation["id"] == edge.installation:
-                for cutout in installation["cutouts"]:
+                for index, cutout in enumerate(installation["cutouts"]):
+                    if exempt_join(installation, edge, index):
+                        continue
                     gap = distance2(edge.rect(), cutout_rect(cutout))
                     require(gap > 0 and gap >= minimum * minimum, "seam crosses or is too close to cutout")
 
@@ -323,7 +363,9 @@ def check_seam_material(data: dict, layout: dict) -> None:
     for edge in shared_edges(layout):
         for installation in data["installations"]:
             if installation["id"] == edge.installation:
-                for cutout in installation["cutouts"]:
+                for index, cutout in enumerate(installation["cutouts"]):
+                    if exempt_join(installation, edge, index):
+                        continue
                     require(distance2(edge.rect(), cutout_rect(cutout)) >= minimum * minimum,
                             "seam-made edge leaves too little material beside cutout")
 
@@ -381,12 +423,14 @@ def check_quantities(job: dict, data: dict, quote: dict, expected: dict) -> None
     require(len(entries) == len(areas) and {i["id"] for i in entries} == set(areas), "quantity installation ids differ")
     labels = {i["id"]: i["label"] for i in job["installations"]}
     required_counts = {i["id"]: i.get("requiredPieceCount") for i in job["installations"]}
+    requested_seams = {i["id"]: i.get("seam") for i in job["installations"]}
     for installation in entries:
         identifier = installation["id"]
         require(installation["label"] == labels[identifier], "wrong installation label")
         require(installation.get("requiredPieceCount") == required_counts[identifier], "quote lost or invented requiredPieceCount")
         if required_counts[identifier] is not None:
             require(type(installation["requiredPieceCount"]) is int, "requiredPieceCount must remain an integer")
+        require(installation.get("seam") == requested_seams[identifier], "quote lost or invented the explicit seam request")
         require(isinstance(installation["areaSqIn"], str) and D(installation["areaSqIn"]) == areas[identifier], "wrong exact area")
         sf = money(areas[identifier] / 144)
         require(installation["sf"] == sf, f"wrong sf for {identifier}")
@@ -399,14 +443,19 @@ def check_quantities(job: dict, data: dict, quote: dict, expected: dict) -> None
 
 def expected_pricing(job: dict, data: dict, slab_count: int | None) -> dict:
     slab, material = job["material"]["slab"], job["material"]["pricePerSf"]
+    markup = job["material"]["markupPercent"]
     labor = None if job["laborPerSf"] is None else money(D(job["laborPerSf"]))
-    cost = rate = None
+    cost = charge = rate = None
     if slab is not None and slab_count is not None and material is not None:
         numerator = slab_count * D(str(slab["lengthIn"])) * D(str(slab["widthIn"])) * D(material)
         cost = money(numerator / 144)
-        # Cancel the common /144 before division; repeating slab SF must not spoil half-cent ties.
-        rate = money(numerator / sum(exact_areas(data).values()))
-    return {"materialCost": cost, "materialRatePerSf": rate, "laborPerSf": labor,
+        if markup is not None:
+            marked_numerator = numerator * (100 + D(markup)) / 100
+            charge = money(marked_numerator / 144)
+            # Cancel /144 before division; use unrounded purchased cost, including waste.
+            rate = money(marked_numerator / sum(exact_areas(data).values()))
+    return {"materialCost": cost, "markupPercent": markup, "materialCharge": charge,
+            "materialRatePerSf": rate, "laborPerSf": labor,
             "ratePerSf": None if rate is None or labor is None else money(D(rate) + D(labor))}
 
 
@@ -440,7 +489,7 @@ def check_pricing(job: dict, data: dict, quote: dict, expected: dict) -> None:
 
 
 def blank_fields(job: dict) -> list[str]:
-    result = [f"material.{key}" for key in ("name", "vendor", "pricePerSf", "slab") if job["material"][key] is None]
+    result = [f"material.{key}" for key in ("name", "vendor", "pricePerSf", "slab", "markupPercent") if job["material"][key] is None]
     if job["laborPerSf"] is None:
         result.append("laborPerSf")
     return result
@@ -461,7 +510,11 @@ def check_blanks(job: dict, quote: dict, expected: dict) -> None:
         require(pricing["laborPerSf"] is None and pricing["ratePerSf"] is None, "unknown labor produced a rate")
         require(all(i["ratePerSf"] is None and i["amount"] is None for i in quote["invoice"]), "unknown labor produced invoice amounts")
     if job["material"]["pricePerSf"] is None or job["material"]["slab"] is None:
-        require(all(pricing[k] is None for k in ("materialCost", "materialRatePerSf", "ratePerSf")), "unknown material input produced pricing")
+        require(all(pricing[k] is None for k in ("materialCost", "materialCharge", "materialRatePerSf", "ratePerSf")), "unknown material input produced pricing")
+    if job["material"]["markupPercent"] is None:
+        require(pricing["markupPercent"] is None and all(pricing[k] is None for k in ("materialCharge", "materialRatePerSf", "ratePerSf")),
+                "unknown markup produced a material charge or rate")
+        require(all(i["ratePerSf"] is None and i["amount"] is None for i in quote["invoice"]), "unknown markup produced invoice amounts")
 
 
 def check_assumptions(job: dict, quote: dict) -> None:
@@ -527,7 +580,8 @@ def evaluate(case: dict, output: dict, layout_only: bool) -> dict:
     gates = {}
     if data["slab"] is not None:
         gates["response"] = run_gate(lambda: check_response(layout))
-        checks = {"tiling": check_tiling, "pieceFit": check_piece_fit, "pieceCounts": check_piece_counts, "placements": check_placements,
+        checks = {"tiling": check_tiling, "pieceFit": check_piece_fit, "pieceCounts": check_piece_counts,
+                  "fixedJoins": check_fixed_joins, "placements": check_placements,
                   "seams": check_seams, "seamMaterial": check_seam_material}
         for name, check in checks.items():
             gates[name] = run_gate(lambda check=check: check(data, layout))

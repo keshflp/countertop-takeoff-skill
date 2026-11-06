@@ -8,7 +8,8 @@
       "slab": {
         "lengthIn": 126,
         "widthIn": 63
-      }
+      },
+      "markupPercent": "0"
     },
     "laborPerSf": "12.25",
     "installations": [
@@ -72,7 +73,9 @@
       "materialCost": "826.88",
       "materialRatePerSf": "32.77",
       "laborPerSf": "12.25",
-      "ratePerSf": "45.02"
+      "ratePerSf": "45.02",
+      "markupPercent": "0",
+      "materialCharge": "826.88"
     },
     "blanks": [],
     "invoiceAmounts": [
