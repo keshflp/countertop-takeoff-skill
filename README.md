@@ -1,6 +1,6 @@
 # Kitchen countertop takeoff
 
-Rishi: this skill replaces the kitchen sketch handoff to the contractor. Dad confirms a picture of the counter, then gets total SF, slab count, a slab layout and invoice lines. The CLI computes quantities and prices; unanswered inputs stay blank. ChatGPT makes the invoice PDF from `quote.json`.
+Rishi: this skill replaces the kitchen sketch handoff to the contractor. Dad confirms a picture of the counter, then gets total SF, slab count, a slab layout and invoice lines. The CLI computes quantities and prices; unanswered inputs stay blank. Explicitly authorized cutout estimates stay labeled preliminary in the quote and pictures. ChatGPT makes the invoice PDF from `quote.json`.
 
 ## Laptop setup
 

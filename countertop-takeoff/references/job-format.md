@@ -8,7 +8,7 @@ The root has `version: 1`, `material`, `laborPerSf`, `installations` and `settin
 
 - `material`: `name`, `vendor`, `pricePerSf`, and `slab` (`lengthIn`, `widthIn`, or `null` for the whole slab).
 - `laborPerSf`: a decimal string or `null`.
-- `installations`: one entry per perimeter, island or other installation, each with an `id`, `label`, `shape` and `cutouts` array. Confirm grouping with Dad. Optional `requiredPieceCount` is an exact positive fabrication-piece count Dad requests, not a preference; omit it when layout should decide. An empty cutouts array means Dad confirmed there are none; resolve visible possible openings before writing the job.
+- `installations`: one entry per perimeter, island or other installation, each with an `id`, `label`, `shape` and `cutouts` array. Confirm grouping with Dad. Optional `requiredPieceCount` is an exact positive fabrication-piece count Dad requests, not a preference; omit it when layout should decide. An unsatisfiable count needs clarification with Dad. An empty cutouts array means Dad confirmed there are none; resolve visible possible openings before writing the job.
 - `settings`: start with `{}`. The CLI reports defaults as assumed so Dad can confirm them. Record supplied overrides here: `slabTrimIn`, `kerfIn`, `minSeamToCutoutIn`, `minMaterialBesideCutoutIn`, `allowRotate`.
 
 ## Shapes
