@@ -30,7 +30,7 @@ For a leg-relative position, `at` holds `leg` and `centerFromStartIn`: either th
 
 When Dad supplies corner coordinates, `at` may instead hold `xIn` and `yIn`, the cutout's top-left corner. This is the only position format for an `outline`. Installation coordinates start at the outer top-left, x right and y down.
 
-Optional `estimate` holds `fields`, a nonempty unique list drawn from `"wIn"`, `"hIn"`, `"at"`, and a plain `note` recording what was authorized and assumed. Mark only the estimated fields; omit it for measured cutouts. Authorized centered estimates include `"at"`; a confirmed centered placement alone is not an estimate. `quote.geometryEstimates` preserves each cutout's installation, index, estimated fields, note and resolved rectangle; send it with the quote and preliminary invoice.
+Optional `estimate` holds `fields`, a nonempty unique list drawn from `"wIn"`, `"hIn"`, `"at"`, and a plain `note` recording the explicit authorization and basis for the estimate. Mark only the estimated fields; omit it for measured cutouts. Authorized centered estimates include `"at"`; a confirmed centered placement alone is not an estimate. `quote.geometryEstimates` preserves each cutout's installation, index, estimated fields, note and resolved rectangle; send it with the quote and preliminary invoice.
 
 ## Confirm and quote
 

@@ -11,7 +11,7 @@ Talk to Dad like an estimator: sizes, square feet, slabs and price.
 
 **Blank, not guessed.** Unknown values stay `null`, with one plain question for each. Keep unresolved geometry as questions until supplied or covered by an explicitly authorized preliminary estimate.
 
-**Authorized estimates are preliminary.** Mark assumed cutout fields in `estimate`, with a note recording the authorization and chosen inputs. Keep measured fields separate. Carry `geometryEstimates` into every delivery and label the invoice PDF "Preliminary: estimated geometry". Actual opening templates are needed before cutting. Price and labor come from Dad, not estimates.
+**Authorized estimates are preliminary.** Mark assumed cutout fields in `estimate`, with a note recording the authorization and basis. Keep measured fields separate. Carry `geometryEstimates` into every delivery and label the invoice PDF "Preliminary: estimated geometry". Actual opening templates are needed before cutting. Price and labor come from Dad, not estimates.
 
 `<skill>` is this skill folder. Keep job folders outside the skill folder and its repository, for example `C:\Users\<user>\takeoff-private\<job>`, because plans are private.
 Whenever you are unsure what comes next, run `bun <skill>/cli/takeoff.js next <jobDir>` after preflight.
