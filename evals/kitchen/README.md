@@ -16,6 +16,30 @@ Default commands are `bun countertop-takeoff/cli/src/eval.ts` for quotes and
 Commands run at the repository root. `--timeout` defaults to 60 seconds per case.
 Each process receives one JSON object on stdin and must return one on stdout.
 
+## Milestone 03 independent oracle
+
+The original 19 fixtures remain historical geometry/pricing evidence. Their
+hashes and accepted measurements are recorded in `historical-baseline.json`;
+they do not assert material/profile/thickness facts. Source-assessed automatic
+planning uses a separate workload and cannot inherit the old score as evidence
+of manufacturer-rule compliance.
+
+`polygon_oracle.py` independently checks gross polygon tiling, solid connectivity,
+clockwise quarter turns, polygon kerf, reserved opening footprints and actual
+stone join segments. Internal rectangle cells are never fabrication seams.
+`source_predicates.py` compares the narrow documented predicates in exact mm:
+one sixteenth inch is 1.5875 mm; 100/150 mm require 63/95 ticks respectively.
+Metric thickness and radius metadata are not rounded onto that geometry grid.
+
+The pinned Silestone diagram relationships are sink rear 100 mm, cooktop rear
+50 mm and adjacent illustrated opening gap 50 mm. The earlier research table's
+100 mm adjacent-gap statement is incorrect. Original front/rear/end constraints
+remain on the original installation after splitting, including inside joins.
+MSI's exact 3/8-inch radius is 9.525 mm and cannot substitute for Silestone's
+10 mm sink/cooktop radius. Neither profile applicability nor thickness is inferred
+from a material or supplier name. Arithmetic/geometry predicates do not by
+themselves establish satisfied support conditions or fabrication certification.
+
 ## Gates
 
 Every gate runs independently. A failure exits 1, even when a slab count looks

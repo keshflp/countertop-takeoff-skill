@@ -1,0 +1,40 @@
+{
+  "fixtureCommit": "478f65327b5eeed3619709139e77e6f181758369",
+  "fixtures": {
+    "evals/kitchen/cases/01-straight.json": "2fcecfff0690ebdd18b44f85392241a8c2d6162cca99941883ff532a371ec128",
+    "evals/kitchen/cases/02-L-left.json": "340af8ec1fc3dc48dfabd1473cfb2a9b29e26b72ab488fe8a48d4e6bf910f1b2",
+    "evals/kitchen/cases/03-U.json": "beb52ee82ef8c2401f33446261691012dbfe9a22e3dc1a9bb5cdc00c5fd35b8c",
+    "evals/kitchen/cases/04-island-sink.json": "3a79cb1cfb555bdd5a9521483aae7010368fddc452720af1958a5a5b3a91d61f",
+    "evals/kitchen/cases/05-long-run.json": "83a52ec88756f8c4162e9730ff491afc546a58fb056dc809dd86efaccc3844d4",
+    "evals/kitchen/cases/06-midpoint-cooktop.json": "7b50d56a8fc72e7a6c4600192ce825da3ee06ab5671ef94e3232c2654d8352b9",
+    "evals/kitchen/cases/07-perimeter-island.json": "9373e0489b60425b5569cb2fc53f0bb6125c2f3da05a07963dbc60b173ed7598",
+    "evals/kitchen/cases/08-pricing-rounding.json": "774dea044658e6f82cbec23b0f4ed863f0460a8068d728b999dcfe3807c05ef8",
+    "evals/kitchen/cases/09-labor-null.json": "6947b7a9d662aee8314f104f0706e090e0a9e0ce2f5cb15d6fe0a28dfc4f3556",
+    "evals/kitchen/cases/10-original-edge-warning.json": "77266c3aaea6a79716abe4720082f2668aeb84a7d4b9f83e6cc13d3b5e806fc6",
+    "evals/kitchen/cases/11-two-slabs-bound.json": "cc9e222502c16e07e1ba83d9925a1c7481af1aafbfb5b77d7919f25a88695ce4",
+    "evals/kitchen/cases/12-rotation-required.json": "1990b448edfb60308ab328801c8f2cf5d8acc149ecdbff1513ffb23a0133a1e2",
+    "evals/kitchen/cases/13-outline-no-rotate.json": "ca09d4403850cb6021f90e10a0b47e9d220e72c043298082fb406ca91b332d7d",
+    "evals/kitchen/cases/14-material-nulls.json": "ba530d537130a9fcc8b694d8c844d73da79ff7f3357f147ed79609f0ea9758f9",
+    "evals/kitchen/cases/15-slab-null.json": "07c66e50b4a7f230d5be2eee5323ebe4fd03167d96d49ec950b4912b960b97db",
+    "evals/kitchen/cases/16-round-total-once.json": "602b3f04e58208695ac93efeedc45105c1c7a43a5c541f15dbdff102ce42c415",
+    "evals/kitchen/contract-cases/01-centered-estimates-count.json": "2359fe4857570fdb7e11ac05a29f8c97e74b34a91e77edaf125629a34b14aa2b",
+    "evals/kitchen/contract-cases/02-fixed-join-markup-rounding.json": "eee69cce4c849102397a023a80aa5c91a2c9d723be7d1b2011636b5c25f1c5b9",
+    "evals/kitchen/contract-cases/03-markup-null.json": "5ffee1996ea7064099a5949cf244e5d0cfe542fb0f741c775c3f7b836de098d0"
+  },
+  "historical": {
+    "naive": {
+      "evaluated": 15,
+      "unknownSlabSkipped": 1,
+      "slabs": 27,
+      "handOptimumSlabs": 16,
+      "excessSlabs": 11
+    },
+    "quotes": {
+      "evaluated": 19,
+      "passing": 19,
+      "cli": "f487e16b6f40ff1426e9a4a38a5545d13a5915e0",
+      "layout": "5544c8ccebc5f33d7537478005f16e4251e3fe88"
+    }
+  },
+  "meaning": "Historical geometry/pricing workload only. Not a material-assessed automatic-seam benchmark. Explicit development replay may label outputs unassessed; never inject material facts into these fixtures."
+}
