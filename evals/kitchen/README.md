@@ -107,7 +107,7 @@ adds facts to fixture files or claims manufacturer assessment. The original
 naive code, 19 fixture hashes, and score evidence remain frozen. Changing the
 physical model does not establish an improvement over historical excess 11.
 
-At this adapter handoff, 99 focused tests pass, including all synthetic answer
+At evaluator `c321a5f`, 99 focused tests pass, including all synthetic answer
 key arithmetic and frozen fixture hashes. First integration used kernel
 `1441ff9`, CLI `bf1b01b` and evaluator `0802422`: all 19 cases executed, but the
 run was unscored. It exposed an oracle mismatch (nominal thickness carries the
@@ -115,18 +115,41 @@ supplied numeric mm value) and two new fixtures that intended a documented
 50 mm pair but used `other` for one opening. The corrected fixtures explicitly
 use two cooktops with radius 10 mm and retain 49.2125 mm reject / 50.8 mm pass.
 An independent hand-built `other` witness retains unsupported/conditional scope;
-no universal pair rule was added. This is a workload/oracle correction requiring
-rebaselining, not an optimizer improvement. MSI known positive thickness still
+no universal pair rule was added. This workload/oracle correction was rebaselined
+below; it is not an optimizer improvement. MSI known positive thickness still
 admits sparse calculations, but its missing applicability table is explicitly
 unsupported, not a manufacturer class pass. Cooktop pair evidence uses the
 inspected file p.6 / printed p.10, which also illustrates the 50 mm gap.
 
-The same snapshot's diagnostic quote recheck reached all 19 cases. The remaining
-actual kernel question defect (source datum text lacked a question mark) was
-reported to T2. Final corrected-evaluator runtime integration and drawings await
-the next coordinated phase; there is no accepted new optimizer score yet.
+Final integration reports were reviewed with evaluator
+`c321a5f1e89ff1a23f173005d7b8f128ff2cbdbf`:
+
+| Runtime snapshot | Workload | Result | Score |
+|---|---|---|---|
+| Kernel `1441ff9` | Corrected 19 source cases, raw layout | Only case 15's missing-datum question gate fails: the question lacks `?`. | Unavailable |
+| Kernel `3b27fdd` | Same 19 source cases, raw layout | All 205 gates pass. | 0 on 7 assessed cases |
+| CLI `e841026` + kernel `3b27fdd` | Same 19 source cases, full quote | All 300 gates pass. | 0 on 7 assessed cases |
+| CLI `e841026` + kernel `3b27fdd` | Separate 19 historical replay cases | All 297 gates pass; all remain replay-unassessed. | 0, historical replay only |
+
+Both passing source runs report **7 assessed, 4 conflict, 2 unresolved and
+6 conditional** outcomes. All 19 cases are evaluated, including the unknown-slab
+case; none is skipped or pending. Conditional layouts do not enter the source
+score. The 7 assessed cases meet their hand slab targets, but report
+`provenOptimal:false`; score 0 does not override their search/proof limits.
+
+The current runtime commits are CLI
+`e8410262170c8b1fd00d0a818964679a10e507d6` and kernel/drawing
+`3b27fdd8aadef40026fd0a5439565cdf9f41cb83`. This is an honest rebaseline of
+**one measured planning strategy**, with evaluator/workload corrections and a
+question-text fix, not another optimizer experiment or an improvement claim
+against changed physical constraints. The historical fixture hashes and naive
+excess-11 baseline remain unchanged. The quote evaluator skips drawing; these
+reports add no PNG visual-validation claim. No suite or optimizer experiment
+was rerun for this documentation update.
+
 Copy all imported helpers with a runtime snapshot, including
-`layout_geometry.py`, `seam_model.py`, `seam_planner.py` and `polygon_pack.py`.
+`layout_geometry.py`, `seam_model.py`, `seam_planner.py`, `polygon_pack.py` and
+`draw_assessment.py`.
 
 ## Historical v1 gates and evidence
 
