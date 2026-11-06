@@ -644,6 +644,7 @@ def solve(data: dict, *, work_budget: float = WORK_BUDGET) -> Layout:
 
 
 def main() -> None:
+    from seam_planner import solve_assessment
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selfcheck", action="store_true")
     args = parser.parse_args()
@@ -651,11 +652,11 @@ def main() -> None:
         print('{"ok":true}')
         return
     try:
-        result = solve(json.load(sys.stdin))
+        result = solve_assessment(json.load(sys.stdin))
     except LayoutError as exc:
         result = {"ok": False, "error": {"tag": exc.tag, "message": str(exc)}}
-    except (ValueError, OverflowError):
-        result = {"ok": False, "error": {"tag": "invalid_input", "message": "Check the layout measurements and send valid JSON numbers."}}
+    except (ValueError, OverflowError, TypeError) as exc:
+        result = {"ok": False, "error": {"tag": "invalid_input", "message": str(exc) or "Check the layout measurements and send valid JSON numbers."}}
     print(json.dumps(result, separators=(",", ":")))
 
 

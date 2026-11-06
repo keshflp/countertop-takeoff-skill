@@ -13,7 +13,12 @@ from layout_geometry import (
     FabricationPolygon,
     InvalidPolygon,
     Rect,
+    connected,
     packing_fits,
+    reentrant_vertices,
+    solid_cells,
+    split_polygon,
+    stone_segments,
     tiles,
 )
 
@@ -21,6 +26,29 @@ L = ((0, 0), (6, 0), (6, 2), (2, 2), (2, 5), (0, 5))
 
 
 class GeometryTests(unittest.TestCase):
+    def test_corner_splits_tile_without_becoming_collision_cells(self):
+        whole = FabricationPolygon(L)
+        self.assertEqual(reentrant_vertices(whole), ((2, 2),))
+        for axis in (0, 1):
+            pieces = split_polygon(whole, axis, 2)
+            self.assertEqual(len(pieces), 2)
+            self.assertTrue(tiles(whole, pieces))
+        u = FabricationPolygon(((0, 0), (8, 0), (8, 6), (6, 6), (6, 2), (2, 2), (2, 6), (0, 6)))
+        pieces = split_polygon(u, 1, 4)
+        self.assertEqual(len(pieces), 3)
+        self.assertTrue(tiles(u, pieces))
+
+    def test_opening_voids_clip_join_segments_and_check_solid_connectivity(self):
+        whole = FabricationPolygon(((0, 0), (100, 0), (100, 40), (0, 40)))
+        cut = Rect(20, 10, 30, 20)
+        self.assertTrue(connected(solid_cells(whole, [cut])))
+        self.assertEqual(stone_segments(whole, Rect(35, 0, 0, 40), [cut]),
+                         (Rect(35, 0, 0, 10), Rect(35, 30, 0, 10)))
+        for piece in split_polygon(whole, 0, 35):
+            self.assertTrue(connected(solid_cells(piece, [cut])))
+        self.assertFalse(connected(solid_cells(whole, [Rect(20, 0, 30, 40)])))
+        self.assertFalse(connected([Rect(0, 0, 2, 2), Rect(2, 2, 2, 2)]))
+
     def test_whole_l_is_one_piece_despite_touching_collision_cells(self):
         whole = FabricationPolygon(L)
         self.assertEqual(whole.area, 18)

@@ -160,3 +160,130 @@ def packing_fits(pieces: Sequence[FabricationPolygon], usable: Rect, kerf: int) 
                and p.bounds.y + p.bounds.h <= usable.y + usable.h for p in pieces) and all(
         _separated(a, b, kerf) for a, b in combinations(pieces, 2)
     )
+
+
+def solid_cells(polygon: FabricationPolygon, openings: Sequence[Rect]) -> tuple[Rect, ...]:
+    """Subtract opening envelopes for connectivity/drawing, never stock reuse."""
+    cells = list(polygon.collision_cells)
+    for cut in openings:
+        remaining = []
+        for cell in cells:
+            left, top = max(cell.x, cut.x), max(cell.y, cut.y)
+            right, bottom = min(cell.x + cell.w, cut.x + cut.w), min(cell.y + cell.h, cut.y + cut.h)
+            if left >= right or top >= bottom:
+                remaining.append(cell)
+                continue
+            remaining.extend(r for r in (
+                Rect(cell.x, cell.y, cell.w, top - cell.y),
+                Rect(cell.x, bottom, cell.w, cell.y + cell.h - bottom),
+                Rect(cell.x, top, left - cell.x, bottom - top),
+                Rect(right, top, cell.x + cell.w - right, bottom - top),
+            ) if r.area > 0)
+        cells = remaining
+    return tuple(cells)
+
+
+def connected(cells: Sequence[Rect]) -> bool:
+    """Solid regions must share an edge with positive length, not just a point."""
+    if not cells:
+        return False
+    unseen = set(range(1, len(cells)))
+    queue = [0]
+    while queue:
+        a = cells[queue.pop()]
+        adjacent = {i for i in unseen if (
+            (a.x + a.w == cells[i].x or cells[i].x + cells[i].w == a.x)
+            and max(a.y, cells[i].y) < min(a.y + a.h, cells[i].y + cells[i].h)
+        ) or (
+            (a.y + a.h == cells[i].y or cells[i].y + cells[i].h == a.y)
+            and max(a.x, cells[i].x) < min(a.x + a.w, cells[i].x + cells[i].w)
+        )}
+        unseen -= adjacent
+        queue.extend(sorted(adjacent))
+    return not unseen
+
+
+def reentrant_vertices(polygon: FabricationPolygon) -> tuple[Point, ...]:
+    ring = polygon.outline
+    clockwise = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(ring, ring[1:] + ring[:1])) > 0
+    return tuple(b for a, b, c in zip(ring[-1:] + ring[:-1], ring, ring[1:] + ring[:1])
+                 if ((b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]))
+                 * (1 if clockwise else -1) < 0)
+
+
+def place_rect(rect: Rect, bounds: Rect, x: int, y: int, turns: int) -> Rect:
+    """Apply the parent piece's rigid transform to a collision cell or opening."""
+    u, v, w, h = rect.x - bounds.x, rect.y - bounds.y, rect.w, rect.h
+    if turns == 1:
+        u, v, w, h = bounds.h - v - h, u, h, w
+    elif turns == 2:
+        u, v = bounds.w - u - w, bounds.h - v - h
+    elif turns == 3:
+        u, v, w, h = v, bounds.w - u - w, h, w
+    return Rect(x + u, y + v, w, h)
+
+
+def split_polygon(polygon: FabricationPolygon, axis: int, at: int) -> tuple[FabricationPolygon, ...]:
+    """Split along an axis line; each connected gross component is one piece."""
+    xs = sorted({x for x, _ in polygon.outline} | ({at} if axis == 0 else set()))
+    ys = sorted({y for _, y in polygon.outline} | ({at} if axis == 1 else set()))
+    cells = {(i, j) for i, (left, right) in enumerate(pairwise(xs))
+             for j, (top, bottom) in enumerate(pairwise(ys))
+             if any(2 * c.x < left + right < 2 * (c.x + c.w)
+                    and 2 * c.y < top + bottom < 2 * (c.y + c.h) for c in polygon.collision_cells)}
+    pieces = []
+    for side in (False, True):
+        todo = {cell for cell in cells if ((xs[cell[0]] if axis == 0 else ys[cell[1]]) >= at) == side}
+        while todo:
+            component = {min(todo)}
+            queue = list(component)
+            todo -= component
+            while queue:
+                i, j = queue.pop()
+                adjacent = {(i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)} & todo
+                todo -= adjacent
+                component |= adjacent
+                queue.extend(sorted(adjacent))
+            boundary: set[tuple[Point, Point]] = set()
+            for i, j in sorted(component):
+                ring = ((xs[i], ys[j]), (xs[i + 1], ys[j]),
+                        (xs[i + 1], ys[j + 1]), (xs[i], ys[j + 1]))
+                for a, b in zip(ring, ring[1:] + ring[:1]):
+                    if (b, a) in boundary:
+                        boundary.remove((b, a))
+                    else:
+                        boundary.add((a, b))
+            following = dict(boundary)
+            start = min(following)
+            traced = [start]
+            point = following.pop(start)
+            while point != start:
+                traced.append(point)
+                point = following.pop(point)
+            if following:
+                raise InvalidPolygon("A split produced a hole or touching boundary.")
+            simplified = tuple(b for a, b, c in zip(traced[-1:] + traced[:-1], traced, traced[1:] + traced[:1])
+                               if not (a[0] == b[0] == c[0] or a[1] == b[1] == c[1]))
+            pieces.append(FabricationPolygon(simplified))
+    return tuple(sorted(pieces, key=lambda p: p.outline))
+
+
+def stone_segments(polygon: FabricationPolygon, line: Rect, openings: Sequence[Rect]) -> tuple[Rect, ...]:
+    """Intersect a logical join with stone; join geometry never bridges a void."""
+    horizontal = line.h == 0
+    intervals = []
+    for cell in solid_cells(polygon, openings):
+        if horizontal and cell.y <= line.y <= cell.y + cell.h:
+            intervals.append((max(line.x, cell.x), min(line.x + line.w, cell.x + cell.w)))
+        elif not horizontal and cell.x <= line.x <= cell.x + cell.w:
+            intervals.append((max(line.y, cell.y), min(line.y + line.h, cell.y + cell.h)))
+    merged: list[tuple[int, int]] = []
+    for lo, hi in sorted(intervals):
+        if lo >= hi:
+            continue
+        if merged and lo <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(hi, merged[-1][1]))
+        else:
+            merged.append((lo, hi))
+    return tuple(Rect(lo, line.y, hi - lo, 0) if horizontal else Rect(line.x, lo, 0, hi - lo)
+                 for lo, hi in merged)
