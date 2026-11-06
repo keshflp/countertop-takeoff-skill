@@ -1,0 +1,111 @@
+{
+  "job": {
+    "version": 2,
+    "material": {
+      "name": "Synthetic profiled surface",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "10.40185",
+      "markupPercent": "12.5",
+      "slab": {
+        "lengthIn": 120,
+        "widthIn": 55
+      },
+      "profileId": "silestone-2024-02",
+      "profileProvenance": "Synthetic material explicitly specified to the pinned Cosentino Silestone REV.03 02/2024 countertop profile.",
+      "nominalThicknessMm": "20"
+    },
+    "laborPerSf": "9.35",
+    "installations": [
+      {
+        "id": "counter",
+        "label": "Counter",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 104,
+          "depthIn": 27
+        },
+        "cutouts": [
+          {
+            "kind": "cooktop",
+            "wIn": 26,
+            "hIn": 17,
+            "at": {
+              "xIn": 39,
+              "yIn": 5
+            },
+            "radiusMm": "10",
+            "mount": "under"
+          }
+        ],
+        "insideCornerRadiusMm": null,
+        "sourceArrangement": {
+          "kind": "rectangular-run",
+          "axis": "x",
+          "rear": "min",
+          "provenance": "Synthetic source explicitly identifies x as the run and min-y as rear."
+        },
+        "conditions": [
+          {
+            "kind": "installation-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "level-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-continuous-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-reinforcement",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "fixture-support",
+            "cutoutIndex": 0,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "opening-continuous-support",
+            "cutoutIndex": 0,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          }
+        ]
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "assessmentStatus": "assessed",
+    "installations": {
+      "counter": {
+        "sf": "19.50"
+      }
+    },
+    "totalSf": "19.50",
+    "optimumSlabs": 1,
+    "pricing": {
+      "materialCost": "476.75",
+      "markupPercent": "12.5",
+      "materialCharge": "536.35",
+      "materialRatePerSf": "27.50",
+      "laborPerSf": "9.35",
+      "ratePerSf": "36.85"
+    },
+    "invoiceAmounts": [
+      "718.58"
+    ]
+  },
+  "why": "104*27=2808 sq in. Whole rectangle fits usable118x53, positive-area bound1. Rear/front5 inches=127mm, ends39 inches; opening radius10mm is exact, supported class20mm. All applicable source support evidence is explicitly supplied. Nominal cost476.751458333... ->476.75; charge536.345390625 ->536.35; material rate27.5048918269... ->27.50. Marking rounded cost gives536.34; dividing rounded charge gives27.51. Labor9.35 yields36.85;19.50*36.85=718.575 ->718.58. Gross quantities: counter: 2808 sq in /144 ->19.50 SF. Total rounds exact sum once. Cutout envelopes are included. Pricing, if a layout qualifies, uses nominal purchased slab area, exact supplier cost times (1+markup/100), then exact job SF before rate rounding; labor is separate."
+}

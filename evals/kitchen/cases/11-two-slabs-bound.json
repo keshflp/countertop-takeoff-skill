@@ -1,0 +1,65 @@
+{
+  "job": {
+    "version": 1,
+    "material": {
+      "name": "Synthetic quartz",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "15.00",
+      "slab": {
+        "lengthIn": 126,
+        "widthIn": 63
+      },
+      "markupPercent": "0"
+    },
+    "laborPerSf": "12.25",
+    "installations": [
+      {
+        "id": "perimeter",
+        "label": "Perimeter",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 180,
+          "depthIn": 25.5
+        },
+        "cutouts": []
+      },
+      {
+        "id": "island",
+        "label": "Island",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 180,
+          "depthIn": 25.5
+        },
+        "cutouts": []
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "installations": {
+      "perimeter": {
+        "sf": "31.88"
+      },
+      "island": {
+        "sf": "31.88"
+      }
+    },
+    "totalSf": "63.75",
+    "pricing": {
+      "materialCost": "1653.75",
+      "materialRatePerSf": "25.94",
+      "laborPerSf": "12.25",
+      "ratePerSf": "38.19",
+      "markupPercent": "0",
+      "materialCharge": "1653.75"
+    },
+    "blanks": [],
+    "invoiceAmounts": [
+      "1217.50",
+      "1217.50"
+    ],
+    "optimumSlabs": 2
+  },
+  "why": "2*180*25.5 = 9180 sq in. Usable slab area = 124*61=7564; ceil(9180/7564)=2. Split each run at 90 and stack its two 90x25.5 pieces on one slab, so two is a tight area lower bound. Nominal slab SF = 126*63/144 = 55.125. At 2 slab(s), unrounded material cost = 1653.75000; cost = 1653.75; material rate = round(1653.75000/(9180/144), 2) = 25.94. Installation SF = ['31.88', '31.88']; exact-total SF rounds to 63.75. Labor = 12.25; invoice rate = 38.19; rounded line amounts = ['1217.50', '1217.50']. Cutouts do not reduce gross area."
+}

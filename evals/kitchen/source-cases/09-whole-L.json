@@ -1,0 +1,84 @@
+{
+  "job": {
+    "version": 2,
+    "material": {
+      "name": "Synthetic profiled surface",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "12.00",
+      "markupPercent": "10",
+      "slab": {
+        "lengthIn": 100,
+        "widthIn": 80
+      },
+      "profileId": "silestone-2024-02",
+      "profileProvenance": "Synthetic material explicitly specified to the pinned Cosentino Silestone REV.03 02/2024 countertop profile.",
+      "nominalThicknessMm": "20"
+    },
+    "laborPerSf": "8.00",
+    "installations": [
+      {
+        "id": "counter",
+        "label": "Counter",
+        "shape": {
+          "kind": "L",
+          "backIn": 72,
+          "sideIn": 60,
+          "depthIn": 24,
+          "side": "left"
+        },
+        "cutouts": [],
+        "insideCornerRadiusMm": "10",
+        "sourceArrangement": null,
+        "conditions": [
+          {
+            "kind": "installation-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "level-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-continuous-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-reinforcement",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          }
+        ]
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "assessmentStatus": "assessed",
+    "installations": {
+      "counter": {
+        "sf": "18.00"
+      }
+    },
+    "totalSf": "18.00",
+    "optimumSlabs": 1,
+    "pricing": {
+      "materialCost": "666.67",
+      "markupPercent": "10",
+      "materialCharge": "733.33",
+      "materialRatePerSf": "40.74",
+      "laborPerSf": "8.00",
+      "ratePerSf": "48.74"
+    },
+    "invoiceAmounts": [
+      "877.32"
+    ]
+  },
+  "why": "L area72*24+(60-24)*24=2592sqin=18SF. Whole72x60 bbox fits usable98x78; one connected polygon, one slab, ZERO physical joins. Continuous reentrant radius10mm and level/corner support/reinforcement are documented. Collision decomposition must not become fabrication seams. Gross quantities: counter: 2592 sq in /144 ->18.00 SF. Total rounds exact sum once. Cutout envelopes are included. Pricing, if a layout qualifies, uses nominal purchased slab area, exact supplier cost times (1+markup/100), then exact job SF before rate rounding; labor is separate."
+}
