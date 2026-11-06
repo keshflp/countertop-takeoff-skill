@@ -1,41 +1,67 @@
 # Kitchen job format
 
-Write `job.json` with the facts Dad supplies or preliminary cutout geometry he or the owner explicitly authorizes you to estimate. Length fields are inches in multiples of 1/16; prices are decimal strings. Material fields and labor may be `null`. Keep other unknown geometry as questions until resolved, then write a valid job for `check`.
+Write `job.json` with supplied facts and explicitly authorized preliminary cutout estimates. The root has `version: 2`, `material`, `laborPerSf`, `installations` and `settings`. Objects accept only the fields described here. Include every nullable field; unknown means `null`. Resolve unknown outline/opening dimensions as questions before making a valid job, unless the owner authorizes a preliminary cutout estimate.
 
-For explicitly authorized preliminary cutout estimates, use the cutout's `estimate` metadata below. Keep installation names descriptive; the quote and drawings carry estimate annotations themselves. Generated `assumptions` still describe CLI defaults, separately from `geometryEstimates`.
+Inch lengths are numbers on the 1/16-inch grid. Prices, markup and metric measurements are nonnegative decimal strings; sizes and thickness are positive. Code computes conversions and derived geometry. Radius `"0"` means a supplied sharp corner, which may fail a product rule; it is different from unknown. Metric radii/thickness stay exact in mm, off the inch grid.
 
-The root has `version: 1`, `material`, `laborPerSf`, `installations` and `settings`.
+## Material and settings
 
-- `material`: `name`, `vendor`, supplier `pricePerSf`, required `markupPercent` (nonnegative decimal string or `null`), and `slab` (`lengthIn`, `widthIn`, or `null` for the whole slab). Include markup even when unknown; use `"0"` only when Dad explicitly specifies no markup.
-- `laborPerSf`: a decimal string or `null`.
-- `installations`: one entry per perimeter, island or other installation, each with an `id`, `label`, `shape` and `cutouts` array. Confirm grouping with Dad. Optional `requiredPieceCount` is an exact positive fabrication-piece count Dad requests, not a preference; omit it when layout should decide. An unsatisfiable count needs clarification with Dad. An empty cutouts array means Dad confirmed there are none; resolve visible possible openings before writing the job.
-- `settings`: start with `{}`. The CLI reports defaults as assumed so Dad can confirm them. Record supplied overrides here: `slabTrimIn`, `kerfIn`, `minSeamToCutoutIn`, `minMaterialBesideCutoutIn`, `allowRotate`.
+- `material`: `name`, `vendor`, supplier `pricePerSf`, `markupPercent`, `slab`, `profileId`, `profileProvenance`, `nominalThicknessMm`. Each accepts `null`; a known slab is `{lengthIn, widthIn}`. Use `"0"` markup only when explicitly supplied.
+- `profileId` selects documented product rules: `silestone-2024-02` or sparse `msi-q-pinned`. `profileProvenance` is a nonempty note identifying the explicit product/source basis. A marketing name or supplier alone establishes neither. Other ids remain unsupported. Missing profile/provenance/thickness leaves automatic planning unresolved.
+- `nominalThicknessMm` records the actual supplied nominal class, without rounding or interpolation. Use the selected source's supported class; ask when it is unknown.
+- `laborPerSf`: decimal string or `null`, separate from material markup.
+- `settings`: start with `{}`. Supplied overrides are only `slabTrimIn`, `kerfIn`, `allowRotate`. The CLI lists defaults as assumptions for Dad. Product rules supply opening requirements; generic opening-clearance settings are retired.
 
-## Shapes
+## Installations and shapes
 
-| `kind` | Other fields | Meaning |
+One entry per installed perimeter, run or island: `id`, `label`, `shape`, `cutouts`, `insideCornerRadiusMm`, `sourceArrangement`, `conditions`, plus optional supplied `seam`/`requiredPieceCount`. Confirm grouping with Dad. The program proposes fabrication pieces, including whole L candidates. An empty `cutouts` array means confirmed none; retain visible possible openings as questions until identified.
+
+| `shape.kind` | Other fields | Meaning |
 |---|---|---|
 | `rect` | `lengthIn`, `depthIn` | Straight run or island |
-| `L` | `backIn`, `sideIn`, `depthIn`, `side` (`left` or `right`) | Back wall plus one return |
-| `U` | `leftIn`, `backIn`, `rightIn`, `depthIn` | Back wall plus two returns |
-| `outline` | `points`: clockwise `[x, y]` corners | Supplied axis-aligned outline |
+| `L` | `backIn`, `sideIn`, `depthIn`, `side` (`left` or `right`) | Back wall and one return |
+| `U` | `leftIn`, `backIn`, `rightIn`, `depthIn` | Back wall and two returns |
+| `outline` | `points`: clockwise `[x,y]` corners, without repeated closing point | Supplied simple orthogonal outline |
 
-Leg lengths are the outer wall lengths. All legs share the written depth. The CLI computes overlaps, outlines and areas. An L describes the installation; layout splits it into rectangular slab pieces.
+Leg lengths are outer wall lengths with a common written depth. Code computes overlaps, outlines and gross SF. Coordinates start at the outer top-left, x right/y down. Whole pieces remain connected polygons; internal packing cells are not cuts. U/general shapes are representable, while undocumented source arrangements remain unsupported.
 
-## Cutouts
+`insideCornerRadiusMm` is the minimum actual continuous inside-corner radius, or `null`. `sourceArrangement` is `null` or `{kind:"rectangular-run", axis:"x"|"y", rear:"min"|"max", provenance}`. The axis runs along the original rectangle; rear identifies the low/high edge on its transverse axis. Record intake evidence for that rear datum in the nonempty provenance note. An L/U leg is not this documented rectangular-run arrangement.
 
-Each cutout has `kind` (`sink`, `cooktop` or `other`), `wIn`, `hIn` and `at`.
+`conditions` is an array of scoped evidence: `{kind, cutoutIndex, status, note}`. `kind` is `level-support`, `corner-continuous-support`, `corner-reinforcement`, `opening-continuous-support`, `fixture-support` or `installation-support`. `cutoutIndex` is a zero-based opening index, or `null` for the whole installation. `status` is `documented`, `failed` or `unknown`; `note` is required and nonempty for documented/failed, otherwise nullable. Empty evidence means no evidence. Continuous front/back rail support at a join differs from independent fixture support. Notes establish supplied facts, not manufacturer authority or a reinforcement design; apply only the selected source's conditions.
 
-For a leg-relative position, `at` holds `leg` and `centerFromStartIn`: either the written inch value or `"center"` for that leg's midpoint, resolved by the CLI. Use `main` for a rect, `back` for the back leg, and `left` or `right` for a side. Back and main start at the left end; sides start at the back wall's outer edge. The cutout is centered within the leg's depth. `wIn` is horizontal width and `hIn` is vertical depth on the installation picture.
+## Cutouts and supplied joins
 
-When Dad supplies corner coordinates, `at` may instead hold `xIn` and `yIn`, the cutout's top-left corner. This is the only position format for an `outline`. Installation coordinates start at the outer top-left, x right and y down.
+Each cutout has `kind` (`sink`, `cooktop`, `other`), `wIn`, `hIn`, `at`, required nullable `radiusMm` and `mount` (`top`, `under`, `flush`, `other`). A rectangular envelope establishes neither its radius nor mount.
 
-Optional `estimate` holds `fields`, a nonempty unique list drawn from `"wIn"`, `"hIn"`, `"at"`, and a plain `note` recording the explicit authorization and basis for the estimate. Mark only the estimated fields; omit it for measured cutouts. Authorized centered estimates include `"at"`; a confirmed centered placement alone is not an estimate. `quote.geometryEstimates` preserves each cutout's installation, index, estimated fields, note and resolved rectangle; send it with the quote and preliminary invoice.
+For leg-relative positioning, `at` is `{leg, centerFromStartIn}`. Use `main` for a rect, `back` for the back leg, `left`/`right` for sides. Back/main start at the left end; sides start at the back wall's outer edge. Copy a written center offset or `"center"` for the full leg midpoint, resolved by code. The cutout is centered within the leg depth. `wIn`/`hIn` are horizontal/vertical on the installation picture. Supplied top-left coordinates use `{xIn,yIn}` instead; this is the only position form for `outline`.
 
-For Dad's explicit equal-half join through a centered opening on a `rect`, add installation `seam: {kind: "center-through-cutout", cutoutIndex}`. The zero-based index selects the opening. Code fixes the seam at the run midpoint and makes two equal blanks; `requiredPieceCount`, if supplied, must be two. Only that seam/selected opening gets the crossing and seam-edge clearance exception. Other openings, original-edge warnings and slab rules remain. The drawing shows the joint in stone on either side of the empty opening. Omit `seam` for the ordinary safe-seam choice.
+Optional `estimate` is `{fields, note}`. `fields` is a nonempty unique list of `"wIn"`, `"hIn"`, `"at"`; the note records authorization and basis. Mark only assumed fields. An authorized estimated location includes `"at"`; a confirmed centered placement alone is not estimated. `quote.geometryEstimates` retains fields, note and resolved rectangles for drawings and the preliminary PDF. Keep measured facts distinct.
 
-## Confirm and quote
+Ordinary automatic planning needs no supplied constraints:
 
-Editing any job field voids its recorded confirmation. Run `check`, compare the readback and picture with Dad's explicit approvals, ask about changed or unresolved facts, then run `confirm` for the current job. `quote.json` supplies quantities, rates, invoice lines, assumptions, warnings and `blanks`, each with one question. Copy those results into the reply; leave calculation to the CLI.
+- `requiredPieceCount`: an exact positive fabrication-piece count, only when explicitly supplied.
+- `seam: {kind:"opening-center", cutoutIndex}`: pins a join at the selected opening's center; additional joins remain possible unless an exact count constrains them.
+- `seam: {kind:"center-through-cutout", cutoutIndex}`: historical explicit equal-halves request on a rectangular run with a centered opening; fixes the exact midpoint and exactly two equal blanks. A supplied count must agree.
+- `seam: {kind:"tangent-cutout", cutoutIndex, side:"start"|"end"}`: representable but unsupported in this implementation.
 
-Markup applies to the exact cost of all purchased slab material, including waste, before code divides by exact job SF and rounds the material rate. Labor is added separately without markup. `pricing.materialCost` stays supplier cost; `markupPercent` and `materialCharge` show markup and the marked-up charge. Unknown markup leaves the charge, material rate and invoice totals blank, with one question; known supplier cost and labor remain visible.
+Supplied joins/counts never waive product rules, original opening-strip checks or other openings' requirements. Inside-opening permission is scoped to that opening; drawings show joins only in stone beside the void.
+
+## Check, confirm and deliver
+
+`check` evaluates original geometry and source facts and draws the input preview; it does not solve a slab layout. Show product/provenance/thickness, datum, radii/mount/support evidence, checks, outstanding conditions and assumptions before confirmation. Reuse explicit approvals for matching facts. Every edit invalidates confirmation: check again, compare with approvals, resolve changed facts, then confirm the exact current job.
+
+`quote` retains all input facts, estimates and source evidence in standalone `quote.json`. Copy its computed quantities/prices and `blanks` questions; one question per missing fact. Explain automatic joins as stock-fit, source-rule or yield choices; supplied constraints retain their own reason. A seam is not automatically a strength requirement.
+
+| Assessment | Delivery |
+|---|---|
+| `unresolved` | Known SF, input preview and independent prices; no final layout or slab-derived charges. Ask the listed missing-fact questions. |
+| `conditional` | Candidate layout and preliminary quote with every outstanding radius/support/source condition visible. |
+| `assessed` | Layout assessed only within the named implemented rule scope. |
+| `conflict` | Particular failed rule/condition or incompatible supplied constraint; retain independent quantities, with no qualifying final layout. |
+| `search-incomplete` | Search cap without a qualifying incumbent, not proof of physical impossibility. |
+
+A capped incumbent retains proof/coverage limits. An assessed original-rule subset from `check` does not imply a solved stock layout. Handling remains `not-evaluated` for every result. Sparse MSI stays incomplete; it inherits no Silestone corner conditions or numerical opening rules, and its independent sink-support statement is not a cooktop rule.
+
+Preserve source profile/version, rule status, URL/pages, outstanding conditions, estimates, assumptions and search limits in both drawings and the invoice-PDF request. These are estimator results within stated scope, rather than fabrication certification. Estimated geometry retains the visible label "Preliminary: estimated geometry" and needs actual templates before cutting.
+
+Code applies markup to exact full purchased-slab supplier cost, including waste, before dividing by exact job SF and rounding the material rate. Labor is unmarked-up. `pricing.materialCost` stays supplier cost; `markupPercent` and `materialCharge` show markup and marked-up charge. Unknown markup keeps dependent totals blank. With no layout, purchased cost/charge/rates/amounts stay null while known supplier unit price, markup and labor remain available.

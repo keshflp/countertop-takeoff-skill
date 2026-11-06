@@ -1,6 +1,6 @@
 # Kitchen countertop takeoff
 
-Rishi: this skill replaces the kitchen sketch handoff to the contractor. Dad confirms a picture of the counter, then gets total SF, slab count, a slab layout and invoice lines. The CLI computes quantities and prices, applying Dad's supplied markup to purchased material and adding labor separately; unanswered inputs stay blank. Explicitly authorized cutout estimates stay labeled preliminary, and requested equal-half joins through centered openings are recorded explicitly. ChatGPT makes the invoice PDF from `quote.json`.
+Rishi: Dad confirms a kitchen sketch readback; the program proposes seams, checks the documented product rules and nests connected pieces on slabs. It computes gross SF, material markup and separate labor. Missing product facts leave a partial result; conditional layouts keep outstanding requirements visible. Explicitly authorized estimates stay preliminary. Results name the assessed scope; handling is not evaluated. ChatGPT makes the invoice PDF from `quote.json` with the same labels and blanks.
 
 ## Laptop setup
 
@@ -19,12 +19,12 @@ Keep private jobs in `%USERPROFILE%\takeoff-private\<job>\`, outside the skill a
 
 ## Evaluate
 
-For evaluator development, run `bun install --cwd countertop-takeoff/cli` once. From the repo root, run the public synthetic cases:
+For evaluator development, run `bun install --cwd countertop-takeoff/cli` once. From the repo root, run the public synthetic source-rule workload:
 
 ```powershell
-uv run evals/kitchen/eval.py --layout-cmd "uv run countertop-takeoff/kernels/layout.py" --quote-cmd "bun countertop-takeoff/cli/src/eval.ts"
+uv run evals/kitchen/eval.py
 ```
 
-Pass `--cases C:\Users\<user>\takeoff-private\<cases>` for private cases. The evaluator checks quantities, slab placement and seams, pricing, and blanks, then reports excess slabs against the case optimum. Dad runs the bundled CLI.
+Pass `--cases C:\Users\<user>\takeoff-private\<cases>` for private cases. The evaluator independently checks polygons, source predicates/evidence, conditions, quantities, prices and blanks. It reports assessment counts and scored slab results separately. The frozen historical geometry/pricing workload uses the developer-only `--geometry-replay` flag; its score is separate and provides no source-rule assessment. See [evaluator details](evals/kitchen/README.md). Dad uses the bundled CLI and v2 [job format](countertop-takeoff/references/job-format.md).
 
 [Parked ideas](IDEAS.md) enter the skill when a real job needs them. The tag `baseline-2026-11-06` preserves the removed multi-family pipeline. [MIT license](countertop-takeoff/LICENSE).
