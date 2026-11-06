@@ -1,6 +1,8 @@
 # Kitchen job format
 
-Write `job.json` with the facts Dad supplies. Length fields are inches in multiples of 1/16; prices are decimal strings. Material fields and labor may be `null`. Keep unknown shape or cutout geometry as questions until Dad resolves it, then write a valid job for `check`.
+Write `job.json` with the facts Dad supplies or preliminary geometry he or the owner explicitly authorizes you to estimate. Length fields are inches in multiples of 1/16; prices are decimal strings. Material fields and labor may be `null`. Keep other unknown geometry as questions until resolved, then write a valid job for `check`.
+
+The schema has no per-measurement provenance field. Keep estimate authorization, chosen values and sources in private job notes; include "Preliminary: estimated geometry" and what was estimated in affected installation labels and every delivery. Send the notes with `quote.json` for the invoice. Its generated `assumptions` describe CLI defaults, not an estimate's source.
 
 The root has `version: 1`, `material`, `laborPerSf`, `installations` and `settings`.
 
