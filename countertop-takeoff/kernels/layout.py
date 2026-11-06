@@ -19,13 +19,13 @@ from itertools import combinations, product
 import json
 from math import ceil, isqrt
 import sys
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 
 from ortools.sat.python import cp_model
 
 GRID = 16
 MAX_PIECES = 12
-WORK_BUDGET = 0.12
+WORK_BUDGET = 1.0
 Point = tuple[int, int]
 
 
@@ -285,6 +285,16 @@ class Slot:
     rotated: cp_model.IntVar
 
 
+class PackedPiece(NamedTuple):
+    run: Run
+    start: int
+    length: int
+    bin: int
+    x: int
+    y: int
+    rotated: bool
+
+
 def run_direction(rect: Rect, partition: tuple[Rect, ...]) -> bool:
     # A short end of a side leg still runs vertically. Its full-width corner
     # connection identifies the direction even when it is shorter than deep.
@@ -365,6 +375,13 @@ def build_model(job: Job, runs: list[Run], fixed: list[tuple[str, Rect]], lower:
             end, previous = next_end, active
         model.add(end == run.start + run.length)
     model.add_no_overlap_2d(x_intervals, y_intervals)
+    # Number slabs in first-use order to remove equivalent bin permutations.
+    maximum = model.new_int_var(0, 0, "first_slab")
+    for index, slot in enumerate(slots):
+        model.add(slot.bin <= maximum + (index != 0))
+        next_maximum = model.new_int_var(0, max_bins - 1, "used_slabs")
+        model.add_max_equality(next_maximum, [maximum, slot.bin])
+        maximum = next_maximum
     piece_count = sum(s.active for s in slots)
     model.add(piece_count <= piece_limit)
     # These weights preserve the three priorities exactly, including corners.
@@ -400,21 +417,18 @@ def run_lengths(job: Job, run: Run) -> list[int]:
     return split_run(run, max(capacities), max(job.clearance, job.material))
 
 
-def extract(job: Job, solver: cp_model.CpSolver, slots: list[Slot], fixed: list[tuple[str, Rect]],
-            lower: int, warnings: list[str]) -> Layout:
+def make_layout(packed: list[PackedPiece], fixed: list[tuple[str, Rect]], lower: int, warnings: list[str]) -> Layout:
     pieces: list[Piece] = []
     seams: list[Seam] = []
     bins: dict[int, list[Placement]] = {}
     all_seams = list(fixed)
-    for s in slots:
-        if not solver.value(s.active):
-            continue
-        r, start, length = s.run.rect, solver.value(s.start), solver.value(s.length)
+    for s in packed:
+        r, start, length = s.run.rect, s.start, s.length
         rect = Rect(start, r.y, length, r.h) if s.run.horizontal else Rect(r.x, start, r.w, length)
         identity = f"P{len(pieces) + 1}"
         pieces.append({"id": identity, "installationId": s.run.installation.id, "outline": rect.points})
-        bins.setdefault(solver.value(s.bin), []).append({"pieceId": identity, "x": solver.value(s.x) / GRID,
-                                                       "y": solver.value(s.y) / GRID, "rotated": bool(solver.value(s.rotated))})
+        bins.setdefault(s.bin, []).append({"pieceId": identity, "x": s.x / GRID,
+                                          "y": s.y / GRID, "rotated": s.rotated})
         if start != s.run.start:
             all_seams.append((s.run.installation.id, Rect(start, r.y, 0, r.h) if s.run.horizontal else Rect(r.x, start, r.w, 0)))
     for identity, s in sorted(all_seams):
@@ -422,7 +436,48 @@ def extract(job: Job, solver: cp_model.CpSolver, slots: list[Slot], fixed: list[
                       "x1": (s.x + s.w) / GRID, "y1": (s.y + s.h) / GRID})
     slabs: list[Slab] = [{"index": i + 1, "placements": bins[b]} for i, b in enumerate(sorted(bins))]
     return {"ok": True, "pieces": pieces, "seams": seams, "slabs": slabs, "slabCount": len(slabs),
-            "lowerBound": lower, "provenOptimal": False, "warnings": warnings}
+            "lowerBound": lower, "provenOptimal": False, "warnings": list(warnings)}
+
+
+def greedy_pack(job: Job, runs: list[Run]) -> list[PackedPiece]:
+    """Seed every search with a legal layout, even with a zero search budget."""
+    packed: list[PackedPiece] = []
+    bins: list[list[Rect]] = []
+    for run in runs:
+        start = run.start
+        for length in run_lengths(job, run):
+            w, h = (length, run.depth) if run.horizontal else (run.depth, length)
+            options = [(False, w, h)] + ([(True, h, w)] if job.rotate else [])
+            placed = False
+            for index in range(len(bins) + 1):
+                existing = bins[index] if index < len(bins) else []
+                xs = sorted({0} | {r.x + r.w + job.kerf for r in existing})
+                ys = sorted({0} | {r.y + r.h + job.kerf for r in existing})
+                for rotated, pw, ph in options:
+                    for y, x in product(ys, xs):
+                        if x + pw > job.width or y + ph > job.height:
+                            continue
+                        if all(x + pw + job.kerf <= r.x or r.x + r.w + job.kerf <= x or
+                               y + ph + job.kerf <= r.y or r.y + r.h + job.kerf <= y for r in existing):
+                            if index == len(bins):
+                                bins.append([])
+                            bins[index].append(Rect(x, y, pw, ph))
+                            packed.append(PackedPiece(run, start, length, index, x, y, rotated))
+                            placed = True
+                            break
+                    if placed:
+                        break
+                if placed:
+                    break
+            start += length
+    return packed
+
+
+def layout_score(layout: Layout, job: Job) -> tuple[int, int, int]:
+    gaps = [distance2(Rect(round(s["x0"] * GRID), round(s["y0"] * GRID),
+                          round((s["x1"] - s["x0"]) * GRID), round((s["y1"] - s["y0"]) * GRID)), c)
+            for s in layout["seams"] for inst in job.installations if inst.id == s["installationId"] for c in inst.cutouts]
+    return layout["slabCount"], len(layout["seams"]), -min(gaps, default=sys.maxsize)
 
 
 def solve(data: dict, *, work_budget: float = WORK_BUDGET) -> Layout:
@@ -458,19 +513,35 @@ def solve(data: dict, *, work_budget: float = WORK_BUDGET) -> Layout:
         except LayoutError as exc:
             last_error = exc
             continue
+        seed = greedy_pack(job, runs)
+        candidate = make_layout(seed, fixed, lower, warnings)
+        score = layout_score(candidate, job)
+        if best_score is None or score < best_score:
+            best, best_score = candidate, score
         # First solve the smallest possible piece count. It is both much easier
         # and a proof for all piece counts when it attains the area lower bound.
         for limit in dict.fromkeys((minimum, MAX_PIECES)):
             model, slots, distance = build_model(job, runs, fixed, lower, limit,
                                                  best["slabCount"] if best else None)
+            for run in runs:
+                parts = [p for p in seed if p.run == run]
+                for index, slot in enumerate(s for s in slots if s.run == run):
+                    active = index < len(parts)
+                    p = parts[index] if active else PackedPiece(run, run.start + run.length, 0, 0, 0, 0, False)
+                    for variable, value in ((slot.active, active), (slot.start, p.start), (slot.length, p.length),
+                                            (slot.bin, p.bin), (slot.x, p.x), (slot.y, p.y), (slot.rotated, p.rotated)):
+                        model.add_hint(variable, int(value))
             solver = cp_model.CpSolver()
             solver.parameters.num_search_workers = 1
             solver.parameters.random_seed = 0
             solver.parameters.max_deterministic_time = work_budget / (2 * combinations_count)
             status = solver.solve(model)
             if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-                candidate = extract(job, solver, slots, fixed, lower, warnings)
-                score = (candidate["slabCount"], len(candidate["seams"]), -solver.value(distance))
+                packed = [PackedPiece(s.run, solver.value(s.start), solver.value(s.length), solver.value(s.bin),
+                                      solver.value(s.x), solver.value(s.y), bool(solver.value(s.rotated)))
+                          for s in slots if solver.value(s.active)]
+                candidate = make_layout(packed, fixed, lower, warnings)
+                score = layout_score(candidate, job)
                 if best_score is None or score < best_score:
                     best, best_score = candidate, score
                 if candidate["slabCount"] == lower:

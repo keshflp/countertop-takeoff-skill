@@ -122,6 +122,33 @@ class LayoutTests(unittest.TestCase):
         data = job(cutouts=[{"kind": "sink", "x": 80, "y": 4, "w": 30, "h": 17}])
         self.assertEqual(solve(data), solve(copy.deepcopy(data)))
 
+    def test_budget_keeps_a_safe_layout_without_claiming_proof(self):
+        data = job(cutouts=[{"kind": "cooktop", "x": 85, "y": 4, "w": 30, "h": 17}])
+        result = solve(data, work_budget=0)
+        self.check_layout(data, result)
+        self.assertFalse(result["provenOptimal"])
+        self.assertEqual(result, solve(data, work_budget=0))
+
+    def test_extra_seams_can_reduce_slab_count(self):
+        # Ten 70x25 runs need five slabs if left whole. Two seams suffice:
+        # six whole runs on three slabs, plus two lanes of 70+53.75 on slab four;
+        # the two 16-inch remainders fit alongside the first six whole runs.
+        data = job(70, 25)
+        data["installations"] = [dict(data["installations"][0], id=f"run{i}") for i in range(10)]
+        result = solve(data)
+        self.check_layout(data, result)
+        self.assertEqual(result["slabCount"], 4)
+        self.assertEqual(len(result["pieces"]), 12)
+
+    def test_corner_cutout_selects_the_other_partition(self):
+        data = job()
+        data["installations"][0].update(
+            outline=[[0, 0], [120, 0], [120, 25], [25, 25], [25, 90], [0, 90]],
+            cutouts=[{"kind": "sink", "x": 3, "y": 15, "w": 15, "h": 30}])
+        result = solve(data)
+        self.check_layout(data, result)
+        self.assertTrue(any(s["x0"] == s["x1"] == 25 for s in result["seams"]))
+
     def test_errors(self):
         cases = [(job(200, 70, rotate=False), "piece_too_wide"),
                  (job(200, 25, cutouts=[{"kind": "sink", "x": 20, "y": 4, "w": 160, "h": 17}]), "no_legal_seam"),
