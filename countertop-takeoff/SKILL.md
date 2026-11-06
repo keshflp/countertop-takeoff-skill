@@ -11,7 +11,7 @@ Talk to Dad like an estimator: sizes, square feet, slabs and price.
 
 **Blank, not guessed.** Unknown values stay `null`, with one plain question for each. Keep unresolved geometry as questions until supplied or covered by an explicitly authorized preliminary estimate.
 
-**Authorized estimates are preliminary.** Mark assumed cutout fields in `estimate`, with a note recording the authorization and basis. Keep measured fields separate. Carry `geometryEstimates` into every delivery and label the invoice PDF "Preliminary: estimated geometry". Actual opening templates are needed before cutting. Price and labor come from Dad, not estimates.
+**Authorized estimates are preliminary.** Mark assumed cutout fields in `estimate`, with a note recording the authorization and basis. Keep measured fields separate. Carry `geometryEstimates` into every delivery and label the invoice PDF "Preliminary: estimated geometry". Actual opening templates are needed before cutting. Prices, markup and labor come from Dad, not estimates.
 
 `<skill>` is this skill folder. Keep job folders outside the skill folder and its repository, for example `C:\Users\<user>\takeoff-private\<job>`, because plans are private.
 Whenever you are unsure what comes next, run `bun <skill>/cli/takeoff.js next <jobDir>` after preflight.
@@ -21,13 +21,13 @@ Whenever you are unsure what comes next, run `bun <skill>/cli/takeoff.js next <j
 1. **Preflight.** The first command every run is `bun <skill>/cli/takeoff.js preflight <jobDir> <files>`. Use local input paths; quote paths containing spaces. This check is required, including when resuming a job. If it fails, stop and tell Dad in plain words what is missing.
    Done when: preflight passed and every input can be read, or Dad knows what to resend or fix and the run has stopped.
 
-2. **Read the sketch.** Look at every input picture or rendered PDF page. Resolve the sketch questions below with Dad. Read [the job format](references/job-format.md), then write `<jobDir>/job.json` using `rect`, `L`, `U` or `outline`, and cutouts positioned on their legs. Run `bun <skill>/cli/takeoff.js check <jobDir>`. Send Dad the readback and `preview.png`, including the assumptions to confirm, and ask "Is this right?". Make corrections and check again as needed. After his yes, run `bun <skill>/cli/takeoff.js confirm <jobDir>`.
-   Done when: Dad said yes to the readback and picture, and the CLI recorded confirmation of that exact job.
+2. **Read the sketch.** Look at every input picture or rendered PDF page. Resolve the sketch questions below with Dad. Read [the job format](references/job-format.md), then write `<jobDir>/job.json` using `rect`, `L`, `U` or `outline`, and cutouts positioned on their legs. Run `bun <skill>/cli/takeoff.js check <jobDir>`. Send Dad the readback and `preview.png`, including the assumptions to confirm. Reuse his explicit approval for matching facts; ask "Is this right?" about changed or unresolved facts. Make corrections and check again as needed. After approval, run `bun <skill>/cli/takeoff.js confirm <jobDir>`.
+   Done when: Dad explicitly approved the facts shown, and the CLI recorded confirmation of that exact job.
 
-3. **Fill the gaps.** Ask for missing material name, vendor, material $/SF, slab length and width, and labor per SF. Keep unanswered values `null`. Each edit to `job.json` needs another check, readback and picture for Dad, his yes, and confirm before quoting.
+3. **Fill the gaps.** Ask for missing material name, vendor, supplier $/SF, material markup percent on cost, slab length and width, and labor per SF. Keep unanswered values `null`; zero markup needs an explicit answer. Labor stays separate from material markup. Each edit to `job.json` needs another check and confirmation of the current job against Dad's explicit approvals before quoting.
    Done when: Dad's answers are recorded, each remaining blank has one plain question, and the current job is confirmed.
 
-4. **Quote.** Run `bun <skill>/cli/takeoff.js quote <jobDir>`. Send `layout.png` when available, total SF, slab count, rate per SF and the invoice lines from `quote.json`. Explain warnings and `geometryEstimates` in plain words. List each remaining blank with its question. Ask ChatGPT to make the invoice PDF from `quote.json`, preserving blanks and any preliminary label; ask Dad for the company header and customer details if needed.
+4. **Quote.** Run `bun <skill>/cli/takeoff.js quote <jobDir>`. Send `layout.png` when available, total SF, slab count, rate per SF and the invoice lines from `quote.json`. Show supplier material cost, markup, material charge and labor per SF separately. Explain warnings and `geometryEstimates` in plain words. List each remaining blank with its question. Ask ChatGPT to make the invoice PDF from `quote.json`, preserving blanks and any preliminary label; ask Dad for the company header and customer details if needed.
    Done when: Dad has the available layout, quantities, pricing and invoice lines, every blank has its question, and ChatGPT has the PDF request and quote data.
 
 ## Reading phone sketches
@@ -36,6 +36,7 @@ Whenever you are unsure what comes next, run `bun <skill>/cli/takeoff.js next <j
 - An inch mark means inches; a foot mark followed by inches means feet-inches. Keep that distinction in the readback. For notation the CLI cannot accept, ask Dad for decimal inches instead of converting it yourself.
 - Match each written wall length to its own leg. Back runs left to right; side legs run from the back wall toward the front. Use the outer wall lengths and the written common depth. Ask when a dimension could belong to either leg.
 - For a sink or cooktop, copy its width, depth and the written distance to its center along that leg. Use `centerFromStartIn: "center"` when Dad requests the midpoint; code resolves it. It sits centered front to back. If Dad measured to an edge instead, ask for the center distance.
+- When Dad explicitly requests equal halves joined at a centered opening on a rectangular run, record `seam: {kind: "center-through-cutout", cutoutIndex}` using that opening's zero-based index. Code places the midpoint join. This permission covers only that join and opening; other clearance rules remain.
 - Treat inner shapes as possible openings until Dad identifies them. Ask for their kind, dimensions and position, or explicit permission for a preliminary estimate; use `cutouts: []` only when Dad confirms there are none. Read written measurements instead of measuring sketch proportions.
 - A missing, blurred or conflicting number gets one question. Keep it blank until answered or an estimate is explicitly authorized. Use an `outline` only when its corner coordinates are supplied; code draws the outline for other shapes.
 - A PDF is another sketch: look at its rendered pages in the input's `previews` folder and read the written dimensions the same way.
