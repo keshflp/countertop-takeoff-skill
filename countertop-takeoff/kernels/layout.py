@@ -101,11 +101,24 @@ class Rect:
 
 
 @dataclass(frozen=True)
+class CenterJoin:
+    cutout_index: int
+    edge: Rect
+    halves: tuple[Rect, Rect]
+
+
+@dataclass(frozen=True)
 class Installation:
     id: str
     outline: tuple[Point, ...]
     cutouts: tuple[Rect, ...]
     required_pieces: int | None = None
+    join: CenterJoin | None = None
+
+    def protected_cutouts(self, seam: Rect) -> tuple[Rect, ...]:
+        # Authorization belongs to one exact seam/opening pair, never a job.
+        return tuple(c for i, c in enumerate(self.cutouts)
+                     if self.join is None or seam != self.join.edge or i != self.join.cutout_index)
 
 
 @dataclass(frozen=True)
@@ -133,6 +146,28 @@ def distance2(a: Rect, b: Rect) -> int:
 def edges(outline: tuple[Point, ...]) -> list[Rect]:
     return [Rect(min(a[0], b[0]), min(a[1], b[1]), abs(a[0] - b[0]), abs(a[1] - b[1]))
             for a, b in zip(outline, outline[1:] + outline[:1])]
+
+
+def read_join(raw: object, identity: str, outline: tuple[Point, ...],
+              cutouts: tuple[Rect, ...], required: int | None) -> CenterJoin:
+    if not isinstance(raw, dict) or raw.get("kind") != "center-through-cutout":
+        raise LayoutError("invalid_seam", f"{identity}: choose a supported join instruction.")
+    index = raw.get("cutoutIndex")
+    if type(index) is not int or not 0 <= index < len(cutouts):
+        raise LayoutError("invalid_seam", f"{identity}: the join must name an opening in this countertop.")
+    if required is not None and required != 2:
+        raise LayoutError("piece_count_conflict", f"{identity}: a middle join makes exactly two equal pieces. The requested piece count must be 2.")
+    xs, ys = [p[0] for p in outline], [p[1] for p in outline]
+    x, y, w, h = min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
+    twice_area = abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(outline, outline[1:] + outline[:1])))
+    if twice_area != 2 * w * h:
+        raise LayoutError("invalid_seam", f"{identity}: a middle join through an opening needs a rectangular countertop.")
+    if w % 2:
+        raise LayoutError("invalid_seam", f"{identity}: the exact middle falls between 1/16-inch marks. Check the countertop length.")
+    if 2 * cutouts[index].x + cutouts[index].w != 2 * x + w:
+        raise LayoutError("invalid_seam", f"{identity}: the selected opening must be centered along the countertop length for this join.")
+    middle = x + w // 2
+    return CenterJoin(index, Rect(middle, y, 0, h), (Rect(x, y, w // 2, h), Rect(middle, y, w // 2, h)))
 
 
 def read_job(data: dict) -> Job:
@@ -180,7 +215,8 @@ def read_job(data: dict) -> Job:
                     raise LayoutError("invalid_cutout", f"{identity}: a cutout extends outside the countertop or has no size.")
             if any(distance2(a, b) == 0 for a, b in combinations(cutouts, 2)):
                 raise LayoutError("invalid_cutout", f"{identity}: two cutouts touch or overlap. Check their positions.")
-            installations.append(Installation(identity, outline, cutouts, required))
+            join = read_join(item["seam"], identity, outline, cutouts, required) if "seam" in item else None
+            installations.append(Installation(identity, outline, cutouts, 2 if join else required, join))
         if not installations:
             raise LayoutError("invalid_input", "Add at least one countertop installation.")
         return Job(width, height, ticks(settings["kerfIn"], "Saw gap"),
@@ -213,6 +249,11 @@ def partitions(inst: Installation, clearance: int) -> tuple[list[tuple[Rect, ...
     Mergeable rectangles are excluded: a straight run's movable cuts belong in
     the solver, not in the corner partition. L/U corners retain both directions.
     """
+    if inst.join is not None:
+        if any(distance2(inst.join.edge, c) < clearance * clearance or distance2(inst.join.edge, c) == 0
+               for c in inst.protected_cutouts(inst.join.edge)):
+            raise LayoutError("no_legal_seam", f"{inst.id}: the requested middle join crosses or is too close to another opening. Check the join and opening positions.")
+        return [inst.join.halves], True
     xs, ys = sorted({p[0] for p in inst.outline}), sorted({p[1] for p in inst.outline})
     cells = {(x, y) for x in range(len(xs) - 1) for y in range(len(ys) - 1)
              if inside((xs[x] + xs[x + 1]) / 2, (ys[y] + ys[y + 1]) / 2, inst.outline)}
@@ -332,7 +373,7 @@ def build_model(job: Job, runs: list[Run], fixed: list[tuple[str, Rect]], lower:
     clearance2 = model.new_int_var(0, far * far, "clearance_squared")
     for identity, seam in fixed:
         inst = next(i for i in job.installations if i.id == identity)
-        for c in inst.cutouts:
+        for c in inst.protected_cutouts(seam):
             model.add(clearance2 <= distance2(seam, c))
     slots: list[Slot] = []
     x_intervals, y_intervals = [], []
@@ -342,7 +383,8 @@ def build_model(job: Job, runs: list[Run], fixed: list[tuple[str, Rect]], lower:
     for run, minimum in zip(runs, min_counts):
         previous = None
         end = model.new_int_var(run.start, run.start, "run_start")
-        for j in range(minimum + piece_limit - sum(min_counts)):
+        slot_count = 1 if run.installation.join else minimum + piece_limit - sum(min_counts)
+        for j in range(slot_count):
             active = model.new_bool_var("piece")
             length = model.new_int_var(0, run.length, "length")
             model.add(length >= 1).only_enforce_if(active)
@@ -432,6 +474,10 @@ def run_lengths(job: Job, run: Run) -> list[int]:
         capacities.append(job.height if run.horizontal else job.width)
     if not capacities:
         raise LayoutError("piece_too_wide", f"{run.installation.id}: the countertop is wider than the usable slab. Choose a wider slab or allow rotation.")
+    if run.installation.join is not None:
+        if run.length > max(capacities):
+            raise LayoutError("piece_too_long", f"{run.installation.id}: each equal half is too long for the usable slab. Choose a larger slab or change the join instruction.")
+        return [run.length]
     return split_run(run, max(capacities), max(job.clearance, job.material))
 
 
@@ -526,9 +572,12 @@ def greedy_pack(job: Job, runs: list[Run], lengths: list[list[int]]) -> list[Pac
 
 
 def layout_score(layout: Layout, job: Job) -> tuple[int, int, int]:
-    gaps = [distance2(Rect(round(s["x0"] * GRID), round(s["y0"] * GRID),
-                          round((s["x1"] - s["x0"]) * GRID), round((s["y1"] - s["y0"]) * GRID)), c)
-            for s in layout["seams"] for inst in job.installations if inst.id == s["installationId"] for c in inst.cutouts]
+    gaps = []
+    for s in layout["seams"]:
+        seam = Rect(round(s["x0"] * GRID), round(s["y0"] * GRID),
+                    round((s["x1"] - s["x0"]) * GRID), round((s["y1"] - s["y0"]) * GRID))
+        inst = next(i for i in job.installations if i.id == s["installationId"])
+        gaps.extend(distance2(seam, c) for c in inst.protected_cutouts(seam))
     return layout["slabCount"], len(layout["seams"]), -min(gaps, default=sys.maxsize)
 
 
@@ -559,7 +608,7 @@ def solve(data: dict, *, work_budget: float = WORK_BUDGET) -> Layout:
     best_score: tuple[int, int, int] | None = None
     last_error: LayoutError | None = None
     for selected in islice(product(*choices), MAX_PARTITIONS):
-        runs = [Run(inst, r, run_direction(r, partition))
+        runs = [Run(inst, r, True if inst.join else run_direction(r, partition))
                 for inst, partition in zip(job.installations, selected) for r in partition]
         fixed = [(inst.id, s) for inst, partition in zip(job.installations, selected) for s in corner_seams(partition)]
         try:

@@ -40,6 +40,14 @@ class LayoutTests(unittest.TestCase):
         settings = data["settings"]
         for inst in data["installations"]:
             pieces = [p for p in result["pieces"] if p["installationId"] == inst["id"]]
+            join = inst.get("seam")
+            if join:
+                x, y, right, bottom = box(inst["outline"])
+                middle = (x + right) / 2
+                self.assertEqual(sorted(box(p["outline"]) for p in pieces),
+                                 [(x, y, middle, bottom), (middle, y, right, bottom)])
+                self.assertEqual([s for s in result["seams"] if s["installationId"] == inst["id"]],
+                                 [{"installationId": inst["id"], "x0": middle, "y0": y, "x1": middle, "y1": bottom}])
             if "requiredPieceCount" in inst:
                 self.assertEqual(len(pieces), inst["requiredPieceCount"])
             xs = sorted({p[0] for r in [inst["outline"]] + [p["outline"] for p in pieces] for p in r})
@@ -51,7 +59,9 @@ class LayoutTests(unittest.TestCase):
                                      int(point_inside(x, y, inst["outline"])))
             for seam in [s for s in result["seams"] if s["installationId"] == inst["id"]]:
                 x0, y0, x1, y1 = box([[seam["x0"], seam["y0"]], [seam["x1"], seam["y1"]]])
-                for cut in inst["cutouts"]:
+                for index, cut in enumerate(inst["cutouts"]):
+                    if join and index == join["cutoutIndex"]:
+                        continue  # The exact exempt seam was independently asserted above.
                     dx = max(x0 - cut["x"] - cut["w"], cut["x"] - x1, 0)
                     dy = max(y0 - cut["y"] - cut["h"], cut["y"] - y1, 0)
                     self.assertGreater(dx * dx + dy * dy, 0)
@@ -192,6 +202,78 @@ class LayoutTests(unittest.TestCase):
                 with self.assertRaises(LayoutError) as error:
                     solve(data)
                 self.assertEqual(error.exception.tag, "too_many_pieces" if count == 13 else "invalid_input")
+
+    def test_explicit_center_join_is_exact_even_when_capped(self):
+        data = job(96, 30, cutouts=[{"kind": "cooktop", "x": 36, "y": 1, "w": 24, "h": 16}])
+        data["installations"][0]["seam"] = {"kind": "center-through-cutout", "cutoutIndex": 0}
+        for count in (None, 2):
+            if count is not None:
+                data["installations"][0]["requiredPieceCount"] = count
+            for budget in (0, 1):
+                with self.subTest(count=count, budget=budget):
+                    result = solve(data, work_budget=budget)
+                    self.check_layout(data, result)
+                    self.assertEqual(result["slabCount"], 1)
+                    self.assertTrue(any("original countertop edge" in w for w in result["warnings"]))
+                    if budget == 0:
+                        self.assertFalse(result["provenOptimal"])
+        del data["installations"][0]["seam"]
+        result = solve(data)
+        self.check_layout(data, result)
+        self.assertNotEqual(result["seams"][0]["x0"], 48)
+
+    def test_center_join_is_vertical_and_still_requires_slab_fit(self):
+        data = job(40, 80, slab=(86, 44), cutouts=[{"kind": "sink", "x": 12, "y": 32, "w": 16, "h": 16}])
+        data["installations"][0]["seam"] = {"kind": "center-through-cutout", "cutoutIndex": 0}
+        self.check_layout(data, solve(data))
+        data["settings"]["allowRotate"] = False
+        with self.assertRaises(LayoutError) as error:
+            solve(data)
+        self.assertEqual(error.exception.tag, "piece_too_wide")
+        data = job(300, 25, cutouts=[{"kind": "sink", "x": 138, "y": 4, "w": 24, "h": 17}])
+        data["installations"][0]["seam"] = {"kind": "center-through-cutout", "cutoutIndex": 0}
+        with self.assertRaises(LayoutError) as error:
+            solve(data, work_budget=0)
+        self.assertEqual(error.exception.tag, "piece_too_long")
+
+    def test_center_join_does_not_exempt_another_opening(self):
+        data = job(96, 30, cutouts=[{"kind": "sink", "x": 36, "y": 12, "w": 24, "h": 14},
+                                  {"kind": "other", "x": 40, "y": 2, "w": 3, "h": 4}])
+        data["installations"][0]["seam"] = {"kind": "center-through-cutout", "cutoutIndex": 0}
+        for seam_gap, material_gap in ((6, 3), (1, 6)):
+            data["settings"].update(minSeamToCutoutIn=seam_gap, minMaterialBesideCutoutIn=material_gap)
+            with self.subTest(seam_gap=seam_gap), self.assertRaises(LayoutError) as error:
+                solve(data, work_budget=0)
+            self.assertEqual(error.exception.tag, "no_legal_seam")
+        data["installations"][0]["cutouts"][1]["x"] = 10
+        self.check_layout(data, solve(data))
+
+    def test_invalid_center_join_requests(self):
+        base = job(96, 30, cutouts=[{"kind": "sink", "x": 36, "y": 7, "w": 24, "h": 16}])
+        base["installations"][0]["seam"] = {"kind": "center-through-cutout", "cutoutIndex": 0}
+        cases = []
+        for index in (-1, 1, True, 0.5):
+            data = copy.deepcopy(base)
+            data["installations"][0]["seam"]["cutoutIndex"] = index
+            cases.append((data, "invalid_seam"))
+        data = copy.deepcopy(base)
+        data["installations"][0]["cutouts"][0]["x"] = 35
+        cases.append((data, "invalid_seam"))
+        data = copy.deepcopy(base)
+        data["installations"][0]["requiredPieceCount"] = 1
+        cases.append((data, "piece_count_conflict"))
+        data = copy.deepcopy(base)
+        data["installations"][0]["outline"] = [[0, 0], [96, 0], [96, 30], [30, 30], [30, 72], [0, 72]]
+        cases.append((data, "invalid_seam"))
+        data = copy.deepcopy(base)
+        data["installations"][0]["outline"][1][0] = 96.0625
+        data["installations"][0]["outline"][2][0] = 96.0625
+        data["installations"][0]["cutouts"][0]["w"] = 24.0625
+        cases.append((data, "invalid_seam"))
+        for data, tag in cases:
+            with self.subTest(data=data), self.assertRaises(LayoutError) as error:
+                solve(data)
+            self.assertEqual(error.exception.tag, tag)
 
     def test_errors(self):
         cases = [(job(200, 70, rotate=False), "piece_too_wide"),
