@@ -85,6 +85,18 @@ class PolygonTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             poly([[0, 0], [8, 0], [8, 8], [4, 8], [4, -4], [0, -4]])
 
+    def test_opening_containment_and_piece_clipping(self):
+        gross = poly([[0, 0], [96, 0], [96, 30], [0, 30]])
+        opening = Rect(ticks(24), ticks(5), ticks(24), ticks(20))
+        polygon.contained_openings(gross, [opening])
+        left_half = poly([[0, 0], [36, 0], [36, 30], [0, 30]])
+        self.assertEqual(polygon.clipped_opening(left_half, opening),
+                         [Rect(ticks(24), ticks(5), ticks(12), ticks(20))])
+        for holes in ([Rect(-1, 80, 100, 100)], [opening, opening],
+                      [Rect(ticks(80), ticks(5), ticks(24), ticks(20))]):
+            with self.subTest(holes=holes), self.assertRaises(ValueError):
+                polygon.contained_openings(gross, holes)
+
 
 if __name__ == "__main__":
     unittest.main()

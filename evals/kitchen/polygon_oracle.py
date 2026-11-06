@@ -14,6 +14,8 @@ def edges(poly: Polygon) -> list[tuple[Point, Point]]:
 def simple(raw: list) -> Polygon:
     poly = points(raw)
     area(poly)
+    require(sum(a[0] * b[1] - b[0] * a[1] for a, b in edges(poly)) > 0,
+            "polygon must be clockwise in y-down coordinates")
     sides = edges(poly)
     for index, (a, b) in enumerate(sides):
         for other, (c, d) in enumerate(sides[index + 1:], index + 1):
@@ -70,6 +72,25 @@ def tile(outline: Polygon, pieces: list[Polygon]) -> None:
             count = sum(inside(p, x0 + x1, y0 + y1) for p in pieces)
             require(count == int(inside(outline, x0 + x1, y0 + y1)),
                     "gross polygons do not tile original outline exactly once")
+
+
+def intersection(a: Rect, b: Rect) -> Rect | None:
+    x, y = max(a.x, b.x), max(a.y, b.y)
+    w, h = min(a.right, b.right) - x, min(a.bottom, b.bottom) - y
+    return Rect(x, y, w, h) if w > 0 and h > 0 else None
+
+
+def clipped_opening(poly: Polygon, hole: Rect) -> list[Rect]:
+    return [overlap for cell in cells(poly) if (overlap := intersection(cell, hole)) is not None]
+
+
+def contained_openings(poly: Polygon, holes: list[Rect]) -> None:
+    for index, hole in enumerate(holes):
+        require(hole.w > 0 and hole.h > 0, "cutout rectangle needs positive dimensions")
+        require(sum(c.area for c in clipped_opening(poly, hole)) == hole.area,
+                "cutout envelope is not wholly contained in original installation")
+        for other in holes[index + 1:]:
+            require(intersection(hole, other) is None, "cutout envelopes overlap")
 
 
 def turn(poly: Polygon, quarter_turns: int) -> Polygon:

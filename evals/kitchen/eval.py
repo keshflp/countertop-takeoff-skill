@@ -644,12 +644,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", action="append", type=Path, help="repeatable; replaces the default public directory")
     parser.add_argument("--layout-only", action="store_true")
+    parser.add_argument("--geometry-replay", action="store_true", help="explicit developer-only frozen v1 workload; never source assessed")
     parser.add_argument("--layout-cmd", default="uv run countertop-takeoff/kernels/layout.py")
-    parser.add_argument("--quote-cmd", default="bun countertop-takeoff/cli/src/eval.ts")
+    parser.add_argument("--quote-cmd", help="default: bun countertop-takeoff/cli/src/eval.ts (src/replay.ts with --geometry-replay)")
     parser.add_argument("--timeout", type=float, default=60, help="seconds per case")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    directories = args.cases or [Path(__file__).parent / "cases"]
+    directories = args.cases or [Path(__file__).parent / ("cases" if args.geometry_replay else "source-cases")]
     sources = discover_cases(directories)
     if not sources:
         parser.error("no case JSON files or intake folders found")
@@ -666,29 +667,43 @@ def main() -> int:
                 result.update({"pending": case.get("reason", "awaiting confirmed facts"), "gates": {}})
                 results.append(result)
                 continue
-            data = expand_job(case["job"])
-            if args.layout_only and data["slab"] is None:
+            source_mode = case["job"]["version"] == 2
+            result["workload"] = "source-rules" if source_mode else "geometry-replay" if args.geometry_replay else "historical-v1"
+            if args.geometry_replay:
+                import replay_eval as adapter
+            elif source_mode:
+                import source_eval as adapter
+            else:
+                require(args.layout_only or args.quote_cmd is not None,
+                        "normal quote requires v2; use --geometry-replay or an explicit historical --quote-cmd for v1")
+                adapter = None
+            data = expand_job(case["job"]) if adapter is None else adapter.expand(case["job"])
+            if args.layout_only and data["slab"] is None and not source_mode:
                 result.update({"skipped": "slab dimensions unknown", "gates": {}})
             else:
                 payload = data if args.layout_only else case["job"]
-                command = args.layout_cmd if args.layout_only else args.quote_cmd
+                command = args.layout_cmd if args.layout_only else args.quote_cmd or (
+                    "bun countertop-takeoff/cli/src/replay.ts" if args.geometry_replay else "bun countertop-takeoff/cli/src/eval.ts")
                 completed = subprocess.run(command_argv(command), input=json.dumps(payload), text=True,
                                            encoding="utf-8", capture_output=True, timeout=args.timeout, cwd=ROOT)
                 require(completed.returncode == 0, f"command exited {completed.returncode}: {completed.stderr.strip()[:600]}")
                 output = json.loads(completed.stdout)
                 require(isinstance(output, dict), "command must return a JSON object")
-                result.update(evaluate(case, output, args.layout_only))
+                result.update((evaluate if adapter is None else adapter.evaluate)(case, output, args.layout_only))
         except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError, ArithmeticError, subprocess.TimeoutExpired) as error:
             result["gates"] = {"execution": {"pass": False, "errors": [str(error)]}}
         results.append(result)
     evaluated = sum(bool(r["gates"]) for r in results)
     passed = evaluated > 0 and all(g["pass"] for r in results for g in r["gates"].values())
     scored = [r for r in results if r.get("excessSlabs") is not None]
+    workloads = {r.get("workload") for r in results if r.get("workload")}
     summary = {"mode": "layout" if args.layout_only else "quote", "pass": passed, "cases": results,
-               "score": sum(r["excessSlabs"] for r in scored) if scored and passed else None,
+               "workloads": sorted(workloads),
+               "score": sum(r["excessSlabs"] for r in scored) if scored and passed and len(workloads) == 1 else None,
                "scoreAvailable": passed and bool(scored) and all(
                    "pending" in r or "skipped" in r or r.get("layoutApplicable") is False or
-                   r.get("excessSlabs") is not None for r in results),
+                   r.get("excessSlabs") is not None for r in results) and len(workloads) == 1,
+               "assessmentCounts": dict(Counter(r.get("assessmentStatus", "historical-unassessed") for r in results if r["gates"])),
                "evaluatedCases": evaluated, "pendingCases": sum("pending" in r for r in results),
                "skippedCases": sum("skipped" in r for r in results),
                "skillLines": line_count()}
@@ -704,7 +719,7 @@ def main() -> int:
                 print(f"{r['case']:<28} SKIP {r['skipped']}")
                 continue
             failed = [name for name, gate in r["gates"].items() if not gate["pass"]]
-            status = "PASS" if not failed else "FAIL " + ",".join(failed)
+            status = ("PASS " + r.get("assessmentStatus", "historical")) if not failed else "FAIL " + ",".join(failed)
             numbers = "/".join(str(r.get(k)) if r.get(k) is not None else "?" for k in ("slabs", "optimum", "lowerBound"))
             print(f"{r['case']:<28} {status:<29} {numbers:<25} {r.get('provenOptimal', '?')}")
             for name in failed:

@@ -6,7 +6,8 @@ points, independently expands job geometry, and checks their answers.
 ```powershell
 uv run evals/kitchen/eval.py
 uv run evals/kitchen/eval.py --json
-uv run evals/kitchen/eval.py --layout-only --layout-cmd "uv run evals/kitchen/naive_layout.py"
+uv run evals/kitchen/eval.py --layout-only
+uv run evals/kitchen/eval.py --layout-only --cases evals/kitchen/cases --layout-cmd "uv run evals/kitchen/naive_layout.py"
 uv run --no-project -m unittest discover -s evals/kitchen -p "test_*.py"
 ```
 
@@ -15,6 +16,10 @@ Default commands are `bun countertop-takeoff/cli/src/eval.ts` for quotes and
 `--quote-cmd` / `--layout-cmd`; quote paths containing spaces inside the command.
 Commands run at the repository root. `--timeout` defaults to 60 seconds per case.
 Each process receives one JSON object on stdin and must return one on stdout.
+Normal runs default to `source-cases/` and clean v2 jobs. Source cases with a
+null slab still run in layout-only mode: rule assessment must survive without
+packing. Historical v1 quote commands require an explicit older `--quote-cmd`
+or the development replay flag below; there is no normal material fallback.
 
 ## Milestone 03 independent oracle
 
@@ -40,7 +45,75 @@ MSI's exact 3/8-inch radius is 9.525 mm and cannot substitute for Silestone's
 from a material or supplier name. Arithmetic/geometry predicates do not by
 themselves establish satisfied support conditions or fabrication certification.
 
-## Gates
+`source-cases/` is a separate 19-case synthetic workload with written arithmetic:
+off-center automatic opening joins, thickness-dependent original ends, failed
+rails that splitting cannot cure, whole Ls and corner seams, transposed/reversed
+source datum, 50 mm adjacent gaps, missing facts, sharp radii, sparse MSI scope,
+uninspected U scope, and unchanged exact markup/labor pricing. Each source
+arrangement and support note is explicitly synthetic. No real job supplies a
+public benchmark or a profile/thickness assumption.
+
+| V2 gate | Independent check |
+|---|---|
+| originalGeometry | Orthogonal original footprint, contained disjoint openings, connected stone. |
+| assessment | Exact applicability, missing paths/questions, outcome admission, caps and handling limits. |
+| sourceRules | Recomputed original rails/radii/gaps and join distances; exact units, pinned hash/edition/pages; omitted, false and contradictory evidence rejected. |
+| conditions | Supplied scoped support status and note; each outside/inside join retains its applicable rail-support obligation. |
+| reasons | Stock-fit/source necessity has a physical witness; supplied joins/counts are labelled supplied. |
+| tiling / solidAndCutouts | Gross pieces tile exactly; each clipped void has the right original index; remaining stone is connected. |
+| pieceFit / pieceCounts | Actual whole polygon fits; only the legacy equal-halves request implies exactly two pieces. |
+| placements | One rigid quarter-turn/translation per piece; reserved holes, usable bounds, orthogonal-axis kerf and unique coverage. |
+| joins | Logical boundaries equal actual physical boundaries; precise stone segments, participant ids, selected-opening-only exemption. |
+| bounds | Independently recomputed area lower bound; global proof and cap/fallback claims agree. |
+| quantity / pricing | Full original facts retained; exact gross SF, supplier cost, unrounded markup, separate labor and null-derived prices. |
+| blanks / assumptions / estimates | Unique actual missing facts; three named defaults; authorized estimate fields and resolved rectangles preserved. |
+
+Sink rear 100 mm uses a confirmed source-facing datum; an L leg envelope is not
+a documented rectangular run. S1 and S2 support categories are not interchangeable:
+the sparse MSI guide establishes perimeter/front/back support and independent
+sink support, not generic corner reinforcement or independent cooktop support.
+MSI radius evidence retains the original `{value:"0.375",unit:"in"}` while
+comparing exact 9.525 mm. Missing facts never become zero or a source pass.
+
+An `opening-center` request pins that opening's exact center join and permits
+additional automatic joins. Only `center-through-cutout` requires two equal
+blanks and one midpoint join. An exemption never fixes an original rail or
+another opening's clearance. Tangencies receive no inside-join exemption.
+
+The scoreboard prints the assessment status. A correct conditional/unresolved/
+conflict result can pass evaluator gates, but only **assessed layouts** enter
+the new slab objective. JSON includes `assessmentCounts` and workload labels.
+Mixed historical/source runs have no combined score. Assessed means the named
+implemented subset passed; it never certifies fabrication or handling.
+
+`test_source_eval.py` uses hand-built outputs, not the kernel or the oracle's
+own predicate generator. Positive whole-L placements accompany corruption
+tests, including the placement-key counting bug. Assessment-only tests retain
+exactly one stock question with a null slab; that exception cannot admit a
+normal plan layout. Capped incumbents cannot claim proven optimality, and a
+cap alone cannot prove physical conflict.
+
+Development replay is explicit and remains unassessed:
+
+```powershell
+uv run evals/kitchen/eval.py --geometry-replay --cases evals/kitchen/cases --cases evals/kitchen/contract-cases
+uv run evals/kitchen/eval.py --geometry-replay --layout-only --cases evals/kitchen/cases
+```
+
+Replay quotes default to `bun countertop-takeoff/cli/src/replay.ts` and must carry
+`developmentOnly:"geometry-replay-unassessed"`. Layout-only replay sends the v2
+`mode:"geometry-replay"` request with the frozen legacy settings. Neither path
+adds facts to fixture files or claims manufacturer assessment. The original
+naive code, 19 fixture hashes, and score evidence remain frozen. Changing the
+physical model does not establish an improvement over historical excess 11.
+
+At this adapter handoff, 98 focused tests pass, including all synthetic answer
+key arithmetic and frozen fixture hashes. **V2 runtime integration is pending**
+published kernel snapshots; there is no measured new optimizer score yet.
+Copy all imported helpers with a runtime snapshot, including
+`layout_geometry.py`, `seam_model.py`, `seam_planner.py` and `polygon_pack.py`.
+
+## Historical v1 gates and evidence
 
 Every gate runs independently. A failure exits 1, even when a slab count looks
 good. Layout-only runs omit the quantity, pricing, blanks, assumptions and
@@ -125,8 +198,8 @@ are unchanged. Repeating the frozen layout run still yields 27 slabs versus 16,
 excess 11. New explicit-join constraints do not change that comparison.
 
 ```powershell
-uv run evals/kitchen/eval.py --cases evals/kitchen/contract-cases
-uv run evals/kitchen/eval.py --layout-only --cases evals/kitchen/contract-cases
+uv run evals/kitchen/eval.py --geometry-replay --cases evals/kitchen/contract-cases
+uv run evals/kitchen/eval.py --geometry-replay --layout-only --cases evals/kitchen/contract-cases
 ```
 
 The synthetic interaction case requires exactly two pieces even though the run
@@ -196,15 +269,24 @@ Missing answer-key entries are allowed, including an absent
 no case data or images. Include both directories explicitly to run both:
 
 ```powershell
-uv run evals/kitchen/eval.py --cases evals/kitchen/cases --cases C:/Users/keshflp/takeoff-private/cases
+uv run evals/kitchen/eval.py --cases evals/kitchen/source-cases --cases C:/Users/keshflp/takeoff-private/cases
 ```
 
 Supplying `--cases` replaces the default directory; repeat it to combine suites.
-Unknown slab dimensions skip layout-only evaluation; quote mode still checks
-quantities, null propagation, pricing and assumptions. Never commit real plans.
+Unknown slab dimensions skip only historical v1 layout/replay evaluation. Normal
+v2 still assesses original rules and reports unresolved packing. Quote mode
+checks quantities, null propagation, pricing and assumptions. Never commit real plans.
 Null-slab quote cases set `layoutApplicable: false` and contribute no slab score;
 they do not disqualify the scored cases when their own quote gates pass.
 JSON reports separate evaluated, pending and skipped counts. Exit 2 means no
 numeric cases were evaluated; an exclusively pending selection cannot pass.
 Mixed runs score only the explicitly evaluated workload; list pending counts
 when reporting results.
+
+A new private automatic assessment wrapper must be separate from historical
+supplied-count/join artifacts. Preserve the original intake statements and
+authorized estimates; omit count/join constraints only for that explicit new
+automatic scenario. Profile/provenance/thickness remain null until confirmed,
+so the actual result remains unresolved with null slab-derived charges. Coordinate
+with the parent before replacing any canonical wrapper; never infer a thickness
+or fabrication profile from a trade name. This evaluator does not confirm jobs.

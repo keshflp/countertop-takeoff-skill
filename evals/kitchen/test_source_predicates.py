@@ -29,6 +29,7 @@ class SourcePredicateTests(unittest.TestCase):
                 self.assertFalse(applicable(profile, note, t))
 
     def test_radius_profiles_are_not_interchangeable_or_grid_rounded(self):
+        self.assertTrue(applicable(MSI, "Explicit Q product basis; scope remains incomplete.", "19"))
         self.assertEqual(radius_minimum(SILESTONE, "sink"), 10)
         self.assertEqual(radius_minimum(SILESTONE, "cooktop"), 10)
         self.assertEqual(radius_minimum(SILESTONE, "other"), 5)

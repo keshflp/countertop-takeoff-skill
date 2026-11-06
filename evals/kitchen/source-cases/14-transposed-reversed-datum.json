@@ -1,0 +1,111 @@
+{
+  "job": {
+    "version": 2,
+    "material": {
+      "name": "Synthetic profiled surface",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "12.00",
+      "markupPercent": "10",
+      "slab": {
+        "lengthIn": 120,
+        "widthIn": 55
+      },
+      "profileId": "silestone-2024-02",
+      "profileProvenance": "Synthetic material explicitly specified to the pinned Cosentino Silestone REV.03 02/2024 countertop profile.",
+      "nominalThicknessMm": "20"
+    },
+    "laborPerSf": "8.00",
+    "installations": [
+      {
+        "id": "counter",
+        "label": "Counter",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 32,
+          "depthIn": 96
+        },
+        "cutouts": [
+          {
+            "kind": "sink",
+            "wIn": 20,
+            "hIn": 24,
+            "at": {
+              "xIn": 4,
+              "yIn": 12
+            },
+            "radiusMm": "10",
+            "mount": "under"
+          }
+        ],
+        "insideCornerRadiusMm": null,
+        "sourceArrangement": {
+          "kind": "rectangular-run",
+          "axis": "y",
+          "rear": "max",
+          "provenance": "Synthetic drawing labels y along the run and maximum x as rear."
+        },
+        "conditions": [
+          {
+            "kind": "installation-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "level-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-continuous-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-reinforcement",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "fixture-support",
+            "cutoutIndex": 0,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "opening-continuous-support",
+            "cutoutIndex": 0,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          }
+        ]
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "assessmentStatus": "assessed",
+    "installations": {
+      "counter": {
+        "sf": "21.33"
+      }
+    },
+    "totalSf": "21.33",
+    "optimumSlabs": 1,
+    "pricing": {
+      "materialCost": "550.00",
+      "markupPercent": "10",
+      "materialCharge": "605.00",
+      "materialRatePerSf": "28.36",
+      "laborPerSf": "8.00",
+      "ratePerSf": "36.36"
+    },
+    "invoiceAmounts": [
+      "775.56"
+    ]
+  },
+  "why": "Run axis is y, rear=max-x. Sink rear=32-4-20=8in=203.2mm; front=4in=101.6mm; start/end=12/60in. Do not blindly call minimum-y rear. Whole32x96 fits usable118x53 after a quarter turn; one slab. Gross quantities: counter: 3072 sq in /144 ->21.33 SF. Total rounds exact sum once. Cutout envelopes are included. Pricing, if a layout qualifies, uses nominal purchased slab area, exact supplier cost times (1+markup/100), then exact job SF before rate rounding; labor is separate."
+}

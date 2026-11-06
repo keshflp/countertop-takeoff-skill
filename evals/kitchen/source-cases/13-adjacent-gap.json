@@ -1,0 +1,122 @@
+{
+  "job": {
+    "version": 2,
+    "material": {
+      "name": "Synthetic profiled surface",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "12.00",
+      "markupPercent": "10",
+      "slab": {
+        "lengthIn": 120,
+        "widthIn": 55
+      },
+      "profileId": "silestone-2024-02",
+      "profileProvenance": "Synthetic material explicitly specified to the pinned Cosentino Silestone REV.03 02/2024 countertop profile.",
+      "nominalThicknessMm": "20"
+    },
+    "laborPerSf": "8.00",
+    "installations": [
+      {
+        "id": "counter",
+        "label": "Counter",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 96,
+          "depthIn": 32
+        },
+        "cutouts": [
+          {
+            "kind": "cooktop",
+            "wIn": 12,
+            "hIn": 12,
+            "at": {
+              "xIn": 12,
+              "yIn": 6
+            },
+            "radiusMm": "10",
+            "mount": "under"
+          },
+          {
+            "kind": "other",
+            "wIn": 12,
+            "hIn": 12,
+            "at": {
+              "xIn": 26,
+              "yIn": 6
+            },
+            "radiusMm": "5",
+            "mount": "under"
+          }
+        ],
+        "insideCornerRadiusMm": null,
+        "sourceArrangement": {
+          "kind": "rectangular-run",
+          "axis": "x",
+          "rear": "min",
+          "provenance": "Synthetic source explicitly identifies x as the run and min-y as rear."
+        },
+        "conditions": [
+          {
+            "kind": "installation-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "level-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-continuous-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-reinforcement",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "fixture-support",
+            "cutoutIndex": 0,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "opening-continuous-support",
+            "cutoutIndex": 0,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          }
+        ]
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "assessmentStatus": "assessed",
+    "installations": {
+      "counter": {
+        "sf": "21.33"
+      }
+    },
+    "totalSf": "21.33",
+    "optimumSlabs": 1,
+    "pricing": {
+      "materialCost": "550.00",
+      "markupPercent": "10",
+      "materialCharge": "605.00",
+      "materialRatePerSf": "28.36",
+      "laborPerSf": "8.00",
+      "ratePerSf": "36.36"
+    },
+    "invoiceAmounts": [
+      "775.56"
+    ]
+  },
+  "why": "Two side-by-side envelopes, first ends x24in. Clear gap26-24=2in=50.8mm. Diagram requires50mm, not100mm; both use explicit horizontal source datum. Other opening radius5mm is retained. Original cooktop strips and ends independently pass. Gross quantities: counter: 3072 sq in /144 ->21.33 SF. Total rounds exact sum once. Cutout envelopes are included. Pricing, if a layout qualifies, uses nominal purchased slab area, exact supplier cost times (1+markup/100), then exact job SF before rate rounding; labor is separate."
+}

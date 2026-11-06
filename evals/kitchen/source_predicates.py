@@ -22,7 +22,8 @@ def minimum_ticks(mm: Decimal | str | int) -> int:
 
 def applicable(profile: str | None, provenance: str | None, thickness: object) -> bool:
     return (profile in (SILESTONE, MSI) and isinstance(provenance, str) and bool(provenance.strip())
-            and thickness is not None and D(str(thickness)) in (12, 20, 30))
+            and thickness is not None and D(str(thickness)) > 0
+            and (profile == MSI or D(str(thickness)) in (12, 20, 30)))
 
 
 def radius_minimum(profile: str, kind: str) -> Decimal:
