@@ -324,9 +324,13 @@ def original_edge_violations(data: dict) -> list[str]:
 def check_warnings(data: dict, layout: dict, quote: dict | None = None) -> None:
     require(isinstance(layout["warnings"], list), "warnings must be an array")
     if original_edge_violations(data):
-        require(bool(layout["warnings"]), "original edge needs a material-beside-cutout warning")
-        if quote is not None:
-            require(bool(quote["warnings"]), "quote omits original-edge warning")
+        for warnings in (layout["warnings"],) if quote is None else (layout["warnings"], quote["warnings"]):
+            relevant = []
+            for warning in warnings:
+                text = str(warning).lower()
+                relevant.append(any(word in text for word in ("cutout", "sink", "cooktop")) and
+                                any(word in text for word in ("material", "edge", "thin", "clearance", "margin")))
+            require(any(relevant), "original edge needs a material-beside-cutout warning; unrelated warnings do not count")
 
 
 def check_bounds(data: dict, layout: dict, expected: dict) -> None:
@@ -569,7 +573,7 @@ def main() -> int:
     scored = [r for r in results if r.get("excessSlabs") is not None]
     summary = {"mode": "layout" if args.layout_only else "quote", "pass": passed, "cases": results,
                "score": sum(r["excessSlabs"] for r in scored) if scored else None,
-               "scoreAvailable": passed and bool(scored) and all(r.get("pending") or r.get("skipped") or r.get("excessSlabs") is not None for r in results),
+               "scoreAvailable": passed and bool(scored) and all("pending" in r or "skipped" in r or r.get("excessSlabs") is not None for r in results),
                "evaluatedCases": evaluated, "pendingCases": sum("pending" in r for r in results),
                "skippedCases": sum("skipped" in r for r in results),
                "skillLines": line_count()}

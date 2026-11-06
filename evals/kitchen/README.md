@@ -29,7 +29,7 @@ good. Layout-only runs omit the quantity, pricing, blanks and assumptions gates.
 | placements | Every piece appears once, slab indices are contiguous, and placements stay inside usable area with the full kerf gap. Coordinates use the usable origin, so trim is not added again. |
 | seams | Declared seams equal actual shared piece edges; no hidden seam crosses or approaches a cutout within the required distance. |
 | seamMaterial | Every seam-made edge leaves the configured material beside each cutout, independently of seam clearance. |
-| warnings | Insufficient material at original outline edges is reported as a warning. It does not make an otherwise valid layout fail. |
+| warnings | Insufficient material at original outline edges is reported as a cutout/material or edge warning. An unrelated search warning does not count. The violation does not make an otherwise valid layout fail. |
 | bounds | Count matches slabs; lower bound is recomputed from exact area; a known optimum rejects false optimality claims. |
 | quantity | Gross installation and total SF use exact area and half-up rounding. Total SF rounds once, independently of invoice line rounding. |
 | pricing | Nominal slab area, purchased material cost, effective rate, labor and each installation invoice line match Decimal arithmetic. Expected prices assume the hand optimum; a wasteful valid layout must price its actual slab count. |

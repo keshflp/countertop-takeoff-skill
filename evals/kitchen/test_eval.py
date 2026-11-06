@@ -154,6 +154,9 @@ class GateTests(unittest.TestCase):
     def test_warnings(self):
         self.assert_gate(10, "warnings", lambda c, q: q["layout"].update(warnings=[]))
 
+    def test_unrelated_warning_does_not_hide_original_edge_violation(self):
+        self.assert_gate(10, "warnings", lambda c, q: q["layout"].update(warnings=["Search has not proved optimality."]))
+
     def test_bounds(self):
         self.assert_gate(11, "bounds", lambda c, q: q["layout"].update(lowerBound=1))
 
