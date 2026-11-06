@@ -71,6 +71,13 @@ cases with **16 slabs, score 0**, proving each optimum by the area bound. This
 is a measured comparison against the same baseline workload and gates, not a
 claim that arbitrary private kitchens are solved optimally.
 
+Quote integration: CLI `8b86689` with that kernel passes every gate on all 16
+synthetic cases, including the null-slab quote. For detached checkouts, set
+`TAKEOFF_DEV_SKILL_DIR` to the layout checkout's `countertop-takeoff` directory,
+then point `--quote-cmd` at the CLI checkout's `cli/src/eval.ts`. Install the
+CLI's locked dependencies in that development checkout first. Sibling files
+are never copied into the evaluator branch.
+
 ## Cases and private plans
 
 Public synthetic cases live in `cases/*.json`: `{ "job": <job.json>,
@@ -103,6 +110,8 @@ uv run evals/kitchen/eval.py --cases evals/kitchen/cases --cases C:/Users/keshfl
 Supplying `--cases` replaces the default directory; repeat it to combine suites.
 Unknown slab dimensions skip layout-only evaluation; quote mode still checks
 quantities, null propagation, pricing and assumptions. Never commit real plans.
+Null-slab quote cases set `layoutApplicable: false` and contribute no slab score;
+they do not disqualify the scored cases when their own quote gates pass.
 JSON reports separate evaluated, pending and skipped counts. Exit 2 means no
 numeric cases were evaluated; an exclusively pending selection cannot pass.
 Mixed runs score only the explicitly evaluated workload; list pending counts

@@ -305,6 +305,28 @@ class GateTests(unittest.TestCase):
             (root / "explicit.json").write_text('{"status":"pending","reason":"facts unknown"}')
             self.assertEqual(len(oracle.discover_cases([root])), 2)
 
+    def test_null_slab_and_pending_do_not_disqualify_valid_numeric_subset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cases = root / "cases"
+            cases.mkdir()
+            for number in (1, 15):
+                (cases / f"{number}.json").write_text(json.dumps(case(number)))
+            (cases / "pending.json").write_text('{"status":"pending"}')
+            responder = root / "quote.py"
+            responder.write_text("import json,sys\nj=json.load(sys.stdin)\nprint(json.dumps(" +
+                                 repr(hand_quote(15)) + " if j['material']['slab'] is None else " +
+                                 repr(hand_quote(1)) + "))\n")
+            completed = subprocess.run([sys.executable, str(Path(oracle.__file__)), "--json",
+                                        "--cases", str(cases), "--quote-cmd", f'"{sys.executable}" "{responder}"'],
+                                       text=True, capture_output=True, timeout=10)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            report = json.loads(completed.stdout)
+            self.assertTrue(report["scoreAvailable"])
+            self.assertEqual(report["score"], 0)
+            self.assertEqual(report["evaluatedCases"], 2)
+            self.assertEqual(report["pendingCases"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -490,7 +490,8 @@ def evaluate(case: dict, output: dict, layout_only: bool) -> dict:
         total = sum(area(points(i["outline"])) for i in data["installations"])
         lower = (total + w * h - 1) // (w * h)
     target = expected.get("optimumSlabs", lower)
-    return {"gates": gates, "slabs": count, "optimum": expected.get("optimumSlabs"), "lowerBound": lower,
+    return {"gates": gates, "layoutApplicable": data["slab"] is not None,
+            "slabs": count, "optimum": expected.get("optimumSlabs"), "lowerBound": lower,
             "provenOptimal": layout.get("provenOptimal") if isinstance(layout, dict) else None,
             "excessSlabs": count - target if type(count) is int and target is not None else None}
 
@@ -573,7 +574,9 @@ def main() -> int:
     scored = [r for r in results if r.get("excessSlabs") is not None]
     summary = {"mode": "layout" if args.layout_only else "quote", "pass": passed, "cases": results,
                "score": sum(r["excessSlabs"] for r in scored) if scored else None,
-               "scoreAvailable": passed and bool(scored) and all("pending" in r or "skipped" in r or r.get("excessSlabs") is not None for r in results),
+               "scoreAvailable": passed and bool(scored) and all(
+                   "pending" in r or "skipped" in r or r.get("layoutApplicable") is False or
+                   r.get("excessSlabs") is not None for r in results),
                "evaluatedCases": evaluated, "pendingCases": sum("pending" in r for r in results),
                "skippedCases": sum("skipped" in r for r in results),
                "skillLines": line_count()}
