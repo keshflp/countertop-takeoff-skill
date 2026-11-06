@@ -1,7 +1,7 @@
 import { Clock, Effect, FileSystem, Path, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
-import { calculate, prepare } from "./core"
+import { prepare } from "./core"
 import { decodeJson, FileError, WorkflowError } from "./errors"
 import { Kernels } from "./kernels"
 import { Job, Quote } from "./schema"
@@ -21,8 +21,16 @@ const estimateReadback = (estimates: Quote["geometryEstimates"]) => estimates.le
   ...estimates.map(e => `${e.installationId}, cutout ${e.cutoutIndex + 1}: estimated ${e.fields.join(", ")}; ${e.wIn} by ${e.hIn} inches at top-left (${e.xIn}, ${e.yIn}) inches. ${e.note}`),
 ]
 const joinReadback = (installations: readonly Pick<Job["installations"][number], "label" | "seam">[]) => installations.flatMap(i => i.seam === undefined ? [] : [
-  `${i.label}: join two equal halves through cutout ${i.seam.cutoutIndex + 1} at the run's midpoint.`,
+  `${i.label}: supplied ${i.seam.kind === "center-through-cutout" ? "equal-halves join at the run midpoint through" : i.seam.kind === "opening-center" ? "join at the center of" : "unsupported tangent join at"} cutout ${i.seam.cutoutIndex + 1}; source rules still apply.`,
 ])
+const assessmentReadback = (a: Quote["assessment"]) => [
+  `Assessment: ${a.status}. Profile: ${a.profile.id ?? "unknown"}; selection basis: ${a.profile.provenance ?? "unknown"}; nominal thickness: ${a.profile.nominalThicknessMm ?? "unknown"} mm.`,
+  ...a.checks.map(c => `${c.ruleId}: ${c.status}. ${c.explanation}${c.actual ? ` Measured ${c.actual.value} ${c.actual.unit}.` : ""}${c.required ? ` Required ${c.operator} ${c.required.value} ${c.required.unit}.` : ""}${c.source ? ` ${c.source.title}, ${c.source.edition}, file page(s) ${c.source.filePages.join(",")}, printed page(s) ${c.source.printedPages.join(",")}: ${c.source.url}` : ""}`),
+  ...a.conditions.map(c => `Condition (${c.status}): ${c.explanation}${c.evidenceNote ? ` Evidence: ${c.evidenceNote}` : ""}`),
+  ...a.installations.map(i => `${i.id}: ${i.seamNecessity}. ${i.explanation}`),
+  `Search: ${a.search.status}; packing: ${a.search.packing}; proof: ${a.search.optimality}.`,
+  ...a.search.limits, ...a.limitations, "Handling and transport are not evaluated. This is a scoped estimate, not fabrication certification.",
+]
 
 /** Owns persisted step order; the concrete kernel Layer is chosen only by the entrypoint. */
 export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) {
@@ -159,7 +167,8 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
       const preflightHash = yield* preflightState(dir)
       const { job, jobHash } = yield* jobState(dir)
       const prepared = yield* prepare(job)
-      yield* kernels.draw({ slab: job.material.slab, settings: prepared.settings, installations: prepared.kernelInstallations, geometryEstimates: prepared.geometryEstimates }, path.join(dir, "preview.png"), true)
+      const readback = yield* takeoff(job, "assess")
+      yield* kernels.draw({ version: 2, slab: job.material.slab, settings: prepared.settings, installations: prepared.kernelInstallations, geometryEstimates: prepared.geometryEstimates, assessment: readback.assessment, layout: null }, path.join(dir, "preview.png"), true)
       yield* write(path.join(dir, "check.json"), { jobHash, preflightHash, previewHash: yield* fingerprint(path.join(dir, "preview.png")) })
       const lines = job.installations.map(i => {
         const s = i.shape
@@ -169,8 +178,14 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
           : `corners ${s.points.map(p => `(${p.join(", ")})`).join(" ")} inches`
         return `${i.label}: ${s.kind}, ${size}.${i.requiredPieceCount === undefined ? "" : ` Exactly ${i.requiredPieceCount} cut piece(s) required.`} ${i.cutouts.length ? i.cutouts.map(c => `${c.kind} ${c.wIn} by ${c.hIn} inches, ${"leg" in c.at ? c.at.centerFromStartIn === "center" ? `centered along the full ${c.at.leg} leg` : `${c.at.leg} leg center ${c.at.centerFromStartIn} inches from its outer start` : `top-left (${c.at.xIn}, ${c.at.yIn}) inches`}`).join("; ") : "No cutouts"}.`
       })
-      const readback = calculate(job, prepared, null)
-      return [...estimateReadback(prepared.geometryEstimates), ...lines, ...joinReadback(job.installations), `Material: ${job.material.name ?? "blank"}; vendor: ${job.material.vendor ?? "blank"}; supplier price/SF: ${job.material.pricePerSf ?? "blank"}; material markup: ${job.material.markupPercent === null ? "blank" : `${job.material.markupPercent}% on cost`}; slab: ${job.material.slab ? `${job.material.slab.lengthIn} by ${job.material.slab.widthIn} inches` : "blank"}; labor/SF: ${job.laborPerSf ?? "blank"}.`,
+      return [...estimateReadback(prepared.geometryEstimates), ...lines, ...joinReadback(job.installations),
+        ...job.installations.flatMap(i => [
+          `${i.label}: source-facing run ${i.sourceArrangement ? `axis ${i.sourceArrangement.axis}, rear ${i.sourceArrangement.rear} on transverse axis; ${i.sourceArrangement.provenance}` : "unknown"}; continuous inside-corner radius ${i.insideCornerRadiusMm ?? "unknown"} mm.`,
+          ...i.cutouts.map((c, index) => `${i.label}, cutout ${index + 1}: inside radius ${c.radiusMm ?? "unknown"} mm; mount ${c.mount ?? "unknown"}.`),
+          ...i.conditions.map(c => `${i.label}: supplied ${c.kind} evidence ${c.status}, ${c.cutoutIndex === null ? "whole installation" : `cutout ${c.cutoutIndex + 1}`}; ${c.note ?? "no evidence supplied"}.`),
+        ]),
+        `Material: ${job.material.name ?? "blank"}; vendor: ${job.material.vendor ?? "blank"}; supplier price/SF: ${job.material.pricePerSf ?? "blank"}; material markup: ${job.material.markupPercent === null ? "blank" : `${job.material.markupPercent}% on cost`}; slab: ${job.material.slab ? `${job.material.slab.lengthIn} by ${job.material.slab.widthIn} inches` : "blank"}; labor/SF: ${job.laborPerSf ?? "blank"}.`,
+        ...assessmentReadback(readback.assessment),
         ...readback.assumptions.map(a => `${a.setting}: ${a.value}, ${a.note}.`),
         ...readback.blanks.map(b => b.question), ...readback.warnings, "Show Dad preview.png and this readback. Run confirm only after he says yes."].join("\n")
     }),
@@ -189,12 +204,12 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
       yield* confirmation(dir, jobHash, preflightHash)
       const quote = yield* takeoff(job)
       const prepared = yield* prepare(job)
-      yield* kernels.draw({ slab: job.material.slab, settings: prepared.settings, installations: prepared.kernelInstallations, geometryEstimates: prepared.geometryEstimates, ...(quote.layout === null ? {} : { layout: quote.layout }) }, path.join(dir, "layout.png"), quote.layout === null)
+      yield* kernels.draw({ version: 2, slab: job.material.slab, settings: prepared.settings, installations: prepared.kernelInstallations, geometryEstimates: prepared.geometryEstimates, assessment: quote.assessment, layout: quote.layout }, path.join(dir, "layout.png"), quote.layout === null)
       // Refuse to publish if the facts or inputs changed while Python was running.
       if ((yield* preflightState(dir)) !== preflightHash || (yield* jobState(dir)).jobHash !== jobHash) return yield* Effect.fail(new WorkflowError({ message: "The job changed while quoting. Run check and confirm again." }))
       yield* write(path.join(dir, "quote.json"), quote)
       yield* write(path.join(dir, "quoted.json"), { jobHash, preflightHash, quoteHash: yield* fingerprint(path.join(dir, "quote.json")), layoutHash: yield* fingerprint(path.join(dir, "layout.png")) })
-      return [...estimateReadback(quote.geometryEstimates), ...joinReadback(quote.installations), `${quote.totalSf} SF; slabs: ${quote.slabCount ?? "blank"}; supplier material cost: ${quote.pricing.materialCost === null ? "blank" : `$${quote.pricing.materialCost}`}; material markup: ${quote.pricing.markupPercent === null ? "blank" : `${quote.pricing.markupPercent}% on cost`}; material charge: ${quote.pricing.materialCharge === null ? "blank" : `$${quote.pricing.materialCharge}`}; labor/SF: ${quote.pricing.laborPerSf ?? "blank"}; rate/SF including labor: ${quote.pricing.ratePerSf ?? "blank"}.`, `Saved quote.json and layout.png.${quote.layout === null ? " The picture shows the shapes; slab layout needs the slab size." : ""}`, ...quote.blanks.map(b => b.question), ...quote.warnings].join("\n")
+      return [...estimateReadback(quote.geometryEstimates), ...joinReadback(quote.installations), ...assessmentReadback(quote.assessment), `${quote.totalSf} SF; slabs: ${quote.slabCount ?? "blank"}; supplier material cost: ${quote.pricing.materialCost === null ? "blank" : `$${quote.pricing.materialCost}`}; material markup: ${quote.pricing.markupPercent === null ? "blank" : `${quote.pricing.markupPercent}% on cost`}; material charge: ${quote.pricing.materialCharge === null ? "blank" : `$${quote.pricing.materialCharge}`}; labor/SF: ${quote.pricing.laborPerSf ?? "blank"}; rate/SF including labor: ${quote.pricing.ratePerSf ?? "blank"}.`, `Saved quote.json and layout.png.${quote.layout === null ? " No qualifying final stock layout is available; see the assessment." : quote.assessment.status === "conditional" ? " Prices are conditional on the listed requirements." : ""}`, ...quote.blanks.map(b => b.question), ...quote.warnings].join("\n")
     }),
     next: Effect.fn("Workflow.next")(function* (jobDir: string) {
       const dir = yield* privateDir(jobDir)
@@ -209,7 +224,7 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
         const quoted = yield* saved(Quoted, quotedFile, "Run quote to refresh the takeoff.")
         if (quoted.jobHash !== jobHash || quoted.preflightHash !== preflightHash || !(yield* exists(path.join(dir, "quote.json"))) || !(yield* exists(path.join(dir, "layout.png"))) || quoted.quoteHash !== (yield* fingerprint(path.join(dir, "quote.json"))) || quoted.layoutHash !== (yield* fingerprint(path.join(dir, "layout.png")))) return "Run quote to refresh the takeoff."
         const quote = yield* saved(Quote, path.join(dir, "quote.json"), "Run quote to refresh the takeoff.")
-        return quote.blanks[0]?.question ?? `Show Dad the ${job.material.name} quote and layout.png; the invoice is ready to prepare.`
+        return quote.blanks[0]?.question ?? (quote.assessment.status === "assessed" ? `Show Dad the ${job.material.name} estimate and layout.png with its assessed scope and handling limitations.` : `Review the ${quote.assessment.status} assessment and its outstanding conditions in quote.json before using this estimate.`)
       })
       return yield* step.pipe(Effect.catch(error => Effect.succeed(error.message)))
     }),

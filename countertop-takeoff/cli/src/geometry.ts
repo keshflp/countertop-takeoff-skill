@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { JobError } from "./errors"
-import type { Job, Layout, LayoutInput, Quote, Settings } from "./schema"
+import type { Job, LayoutInput, Quote } from "./schema"
 
 type Point = readonly [bigint, bigint]
 const point = (x: bigint, y: bigint): Point => [x, y]
@@ -40,7 +40,7 @@ function containsRectangle(points: readonly Point[], x: bigint, y: bigint, w: bi
 }
 
 /** Original-edge clearance is known from installed geometry, even without a slab. */
-export function originalEdgeWarnings(installations: LayoutInput["installations"], settings: Settings) {
+export function originalEdgeWarnings(installations: LayoutInput["installations"], settings: { readonly minMaterialBesideCutoutIn: number }) {
   const minimum = ticks(settings.minMaterialBesideCutoutIn)
   return installations.flatMap(inst => inst.cutouts.flatMap((cutout, index) => {
     const left = ticks(cutout.x), right = left + ticks(cutout.w)
@@ -52,33 +52,6 @@ export function originalEdgeWarnings(installations: LayoutInput["installations"]
     })
     return tooThin ? [`${inst.id}: ${cutout.kind} cutout ${index + 1} leaves less than ${settings.minMaterialBesideCutoutIn} inches of material at an original countertop edge. Confirm this with the fabricator.`] : []
   }))
-}
-
-/** Verify actual blanks and join coordinates independently of the kernel's success flag. */
-export function matchesCenterJoin(installation: LayoutInput["installations"][number], layout: Layout, settings: Settings) {
-  if (installation.seam === undefined) return true
-  const width = installation.outline.reduce((n, [x]) => max(n, ticks(x)), 0n)
-  const depth = installation.outline.reduce((n, [, y]) => max(n, ticks(y)), 0n)
-  const midpoint = width / 2n
-  const pieces = layout.pieces.filter(p => p.installationId === installation.id)
-  const rectangle = (outline: Layout["pieces"][number]["outline"], left: bigint, right: bigint) => {
-    const points = outline.map(([x, y]) => point(ticks(x), ticks(y)))
-    const corners = new Set(points.map(([x, y]) => `${x},${y}`))
-    return points.length === 4 && corners.size === 4 &&
-      [point(left, 0n), point(right, 0n), point(right, depth), point(left, depth)].every(([x, y]) => corners.has(`${x},${y}`)) &&
-      edges(points).every(({ a, b }) => a[0] === b[0] || a[1] === b[1])
-  }
-  const seams = layout.seams.filter(s => s.installationId === installation.id)
-  const seam = seams[0]
-  return pieces.length === 2 && pieces.some(p => rectangle(p.outline, 0n, midpoint)) && pieces.some(p => rectangle(p.outline, midpoint, width)) &&
-    seams.length === 1 && seam !== undefined && ticks(seam.x0) === midpoint && ticks(seam.x1) === midpoint &&
-    min(ticks(seam.y0), ticks(seam.y1)) === 0n && max(ticks(seam.y0), ticks(seam.y1)) === depth &&
-    installation.cutouts.every((c, index) => {
-      if (index === installation.seam?.cutoutIndex) return true
-      const left = ticks(c.x), right = left + ticks(c.w)
-      const gap = max(0n, max(left - midpoint, midpoint - right))
-      return !(left < midpoint && midpoint < right) && gap >= ticks(settings.minSeamToCutoutIn) && gap >= ticks(settings.minMaterialBesideCutoutIn)
-    })
 }
 
 /** Expand confirmed shapes and cutouts; all geometry arithmetic uses 1/16-inch integers. */
@@ -153,14 +126,16 @@ export const expand = Effect.fn("Geometry.expand")(function* (job: Job) {
         x = x2 / 2n; y = y2 / 2n
       }
       if (x < 0n || y < 0n || !containsRectangle(polygon, x, y, w, h)) return yield* Effect.fail(invalid(`the ${cutout.kind} cutout extends outside the countertop. Please check its size and position.`))
-      return { kind: cutout.kind, x: inches(x), y: inches(y), w: inches(w), h: inches(h) }
+      return { kind: cutout.kind, x: inches(x), y: inches(y), w: inches(w), h: inches(h), radiusMm: cutout.radiusMm, mount: cutout.mount }
     }))
     const geometryEstimates: Quote["geometryEstimates"] = installation.cutouts.flatMap((cutout, cutoutIndex) => {
       const rectangle = cutouts[cutoutIndex]
       return cutout.estimate && rectangle ? [{ installationId: installation.id, cutoutIndex,
         ...cutout.estimate, xIn: rectangle.x, yIn: rectangle.y, wIn: rectangle.w, hIn: rectangle.h }] : []
     })
-    if (installation.seam !== undefined) {
+    if (installation.conditions.some(c => c.cutoutIndex !== null && c.cutoutIndex >= cutouts.length)) return yield* Effect.fail(invalid("support evidence refers to a missing cutout. Please check cutoutIndex."))
+    if (installation.seam !== undefined && cutouts[installation.seam.cutoutIndex] === undefined) return yield* Effect.fail(invalid("the join refers to a missing cutout. Please check cutoutIndex."))
+    if (installation.seam?.kind === "center-through-cutout") {
       const width = polygon.reduce((n, [x]) => max(n, x), 0n)
       const depth = polygon.reduce((n, [, y]) => max(n, y), 0n)
       if (twiceArea !== 2n * width * depth) return yield* Effect.fail(invalid("a center join through an opening needs a rectangular run."))
@@ -170,7 +145,8 @@ export const expand = Effect.fn("Geometry.expand")(function* (job: Job) {
       if (selected === undefined) return yield* Effect.fail(invalid("the center join refers to a missing cutout. Please check cutoutIndex."))
       if (2n * ticks(selected.x) + ticks(selected.w) !== width) return yield* Effect.fail(invalid("the selected opening must be centered along the run for an equal-halves join."))
     }
-    const wire: LayoutInput["installations"][number] = { id: installation.id, outline: polygon.map(([x, y]): readonly [number, number] => [inches(x), inches(y)]), cutouts,
+    const wire: LayoutInput["installations"][number] = { id: installation.id, shapeKind: shape.kind, outline: polygon.map(([x, y]): readonly [number, number] => [inches(x), inches(y)]), cutouts,
+      insideCornerRadiusMm: installation.insideCornerRadiusMm, sourceArrangement: installation.sourceArrangement, conditions: installation.conditions,
       ...(installation.requiredPieceCount === undefined ? {} : { requiredPieceCount: installation.requiredPieceCount }),
       ...(installation.seam === undefined ? {} : { seam: installation.seam }) }
     return { ...wire, label: installation.label, areaTicks: twiceArea / 2n, geometryEstimates }
