@@ -1,12 +1,12 @@
 # Kitchen job format
 
-Write `job.json` with the facts Dad supplies. Length fields are inches in multiples of 1/16; prices are decimal strings. Material fields and labor may be `null`. Resolve missing shape or cutout dimensions with Dad before `check`.
+Write `job.json` with the facts Dad supplies. Length fields are inches in multiples of 1/16; prices are decimal strings. Material fields and labor may be `null`. Keep unknown shape or cutout geometry as questions until Dad resolves it, then write a valid job for `check`.
 
 The root has `version: 1`, `material`, `laborPerSf`, `installations` and `settings`.
 
 - `material`: `name`, `vendor`, `pricePerSf`, and `slab` (`lengthIn`, `widthIn`, or `null` for the whole slab).
 - `laborPerSf`: a decimal string or `null`.
-- `installations`: one entry per perimeter, island or other installation, each with an `id`, `label`, `shape` and `cutouts` array. An empty cutouts array means Dad's sketch has none.
+- `installations`: one entry per perimeter, island or other installation, each with an `id`, `label`, `shape` and `cutouts` array. Confirm grouping with Dad. An empty cutouts array means Dad confirmed there are none; resolve visible possible openings before writing the job.
 - `settings`: start with `{}`. The CLI reports defaults as assumed so Dad can confirm them. Record supplied overrides here: `slabTrimIn`, `kerfIn`, `minSeamToCutoutIn`, `minMaterialBesideCutoutIn`, `allowRotate`.
 
 ## Shapes
