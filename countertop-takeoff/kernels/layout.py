@@ -17,7 +17,7 @@ import json
 import sys
 from dataclasses import dataclass
 from fractions import Fraction
-from itertools import combinations, product
+from itertools import combinations, islice, product
 from math import ceil, isqrt
 from typing import NamedTuple, TypedDict
 
@@ -25,6 +25,7 @@ from ortools.sat.python import cp_model
 
 GRID = 16
 MAX_PIECES = 12
+MAX_PARTITIONS = 128
 WORK_BUDGET = 1.0
 Point = tuple[int, int]
 
@@ -206,7 +207,7 @@ def corner_seams(rects: tuple[Rect, ...]) -> list[Rect]:
     return [edge for a, b in combinations(rects, 2) if (edge := shared_edge(a, b)) is not None]
 
 
-def partitions(inst: Installation, clearance: int) -> list[tuple[Rect, ...]]:
+def partitions(inst: Installation, clearance: int) -> tuple[list[tuple[Rect, ...]], bool]:
     """Enumerate irreducible rectangular covers on the outline's corner grid.
 
     Mergeable rectangles are excluded: a straight run's movable cuts belong in
@@ -218,8 +219,14 @@ def partitions(inst: Installation, clearance: int) -> list[tuple[Rect, ...]]:
     if len(cells) > 64:
         raise LayoutError("outline_too_complex", f"{inst.id}: simplify this outline into a few separate countertop runs.")
     covers: list[tuple[Rect, ...]] = []
+    visits, complete = 0, True
 
     def visit(remaining: set[tuple[int, int]], chosen: tuple[Rect, ...]) -> None:
+        nonlocal visits, complete
+        if visits >= 10_000 or len(covers) >= MAX_PARTITIONS:
+            complete = False
+            return
+        visits += 1
         if not remaining:
             covers.append(chosen)
             return
@@ -238,9 +245,11 @@ def partitions(inst: Installation, clearance: int) -> list[tuple[Rect, ...]]:
                        for e in seams for c in inst.cutouts):
                     continue
                 visit(remaining - occupied, chosen + (rect,))
+                if not complete:
+                    return
 
     visit(cells, ())
-    return sorted(covers, key=lambda p: (len(p), p))
+    return sorted(covers, key=lambda p: (len(p), p)), complete
 
 
 @dataclass(frozen=True)
@@ -527,25 +536,29 @@ def solve(data: dict, *, work_budget: float = WORK_BUDGET) -> Layout:
     job = read_job(data)
     warnings = []
     choices = []
+    complete = True
     for inst in job.installations:
         for n, cutout in enumerate(inst.cutouts, 1):
             if any(distance2(e, cutout) < job.material * job.material for e in edges(inst.outline)):
                 warnings.append(f"{inst.id}: cutout {n} leaves less than {job.material / GRID:g} inches of material at an original countertop edge. Confirm this with the fabricator.")
-        choices.append(partitions(inst, max(job.clearance, job.material)))
+        covers, exhausted = partitions(inst, max(job.clearance, job.material))
+        choices.append(covers)
+        complete &= exhausted
         if not choices[-1]:
+            if not exhausted:
+                raise LayoutError("search_limit", f"{inst.id}: this outline has too many corners to check in one search. Separate it into simpler installations.")
             raise LayoutError("no_legal_seam", f"{inst.id}: no corner seam can stay far enough from the cutouts. Move a cutout or change the countertop shape.")
     area = sum(r.area for group in choices for r in group[0])
     lower = ceil(area / (job.width * job.height))
     combinations_count = 1
     for choice in choices:
         combinations_count *= len(choice)
-    if combinations_count > 128:
-        raise LayoutError("outline_too_complex", "There are too many corners to check in one job. Separate the countertop into smaller installations.")
+    complete &= combinations_count <= MAX_PARTITIONS
+    combinations_count = min(combinations_count, MAX_PARTITIONS)
     best: Layout | None = None
     best_score: tuple[int, int, int] | None = None
-    complete = True
     last_error: LayoutError | None = None
-    for selected in product(*choices):
+    for selected in islice(product(*choices), MAX_PARTITIONS):
         runs = [Run(inst, r, run_direction(r, partition))
                 for inst, partition in zip(job.installations, selected) for r in partition]
         fixed = [(inst.id, s) for inst, partition in zip(job.installations, selected) for s in corner_seams(partition)]

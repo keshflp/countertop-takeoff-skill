@@ -9,6 +9,7 @@ import sys
 import unittest
 from itertools import combinations, pairwise
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from layout import LayoutError, solve
@@ -130,6 +131,14 @@ class LayoutTests(unittest.TestCase):
         self.check_layout(data, result)
         self.assertFalse(result["provenOptimal"])
         self.assertEqual(result, solve(data, work_budget=0))
+
+    def test_corner_search_cap_keeps_a_safe_layout(self):
+        data = job()
+        data["installations"][0]["outline"] = [[0, 0], [120, 0], [120, 25], [25, 25], [25, 90], [0, 90]]
+        with patch("layout.MAX_PARTITIONS", 1):
+            result = solve(data)
+        self.check_layout(data, result)
+        self.assertFalse(result["provenOptimal"])
 
     def test_extra_seams_can_reduce_slab_count(self):
         # Ten 70x25 runs need five slabs if left whole. Two seams suffice:
