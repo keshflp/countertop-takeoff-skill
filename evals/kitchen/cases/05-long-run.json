@@ -1,0 +1,48 @@
+{
+  "job": {
+    "version": 1,
+    "material": {
+      "name": "Synthetic quartz",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "15.00",
+      "slab": {
+        "lengthIn": 126,
+        "widthIn": 63
+      }
+    },
+    "laborPerSf": "12.25",
+    "installations": [
+      {
+        "id": "perimeter",
+        "label": "Perimeter",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 180,
+          "depthIn": 25.5
+        },
+        "cutouts": []
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "installations": {
+      "perimeter": {
+        "sf": "31.88"
+      }
+    },
+    "totalSf": "31.88",
+    "pricing": {
+      "materialCost": "826.88",
+      "materialRatePerSf": "25.94",
+      "laborPerSf": "12.25",
+      "ratePerSf": "38.19"
+    },
+    "blanks": [],
+    "invoiceAmounts": [
+      "1217.50"
+    ],
+    "optimumSlabs": 1
+  },
+  "why": "180*25.5 = 4590 sq in = 31.875 SF. The usable length is only 124, so seam at x=90. Two 90x25.5 pieces fit on ONE slab at (0,0) and (0,25.75); 51.25 < 61. Positive area makes one optimal. Nominal slab SF = 126*63/144 = 55.125. At 1 slab(s), unrounded material cost = 826.87500; cost = 826.88; material rate = round(826.87500/(4590/144), 2) = 25.94. Installation SF = ['31.88']; exact-total SF rounds to 31.88. Labor = 12.25; invoice rate = 38.19; rounded line amounts = ['1217.50']. Cutouts do not reduce gross area."
+}

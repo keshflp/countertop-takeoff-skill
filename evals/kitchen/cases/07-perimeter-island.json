@@ -1,0 +1,64 @@
+{
+  "job": {
+    "version": 1,
+    "material": {
+      "name": "Synthetic quartz",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "15.00",
+      "slab": {
+        "lengthIn": 126,
+        "widthIn": 63
+      }
+    },
+    "laborPerSf": "12.25",
+    "installations": [
+      {
+        "id": "perimeter",
+        "label": "Perimeter",
+        "shape": {
+          "kind": "L",
+          "backIn": 96,
+          "sideIn": 72,
+          "depthIn": 25.5,
+          "side": "right"
+        },
+        "cutouts": []
+      },
+      {
+        "id": "island",
+        "label": "Island",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 60,
+          "depthIn": 25.5
+        },
+        "cutouts": []
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "installations": {
+      "perimeter": {
+        "sf": "25.23"
+      },
+      "island": {
+        "sf": "10.63"
+      }
+    },
+    "totalSf": "35.86",
+    "pricing": {
+      "materialCost": "826.88",
+      "materialRatePerSf": "23.06",
+      "laborPerSf": "12.25",
+      "ratePerSf": "35.31"
+    },
+    "blanks": [],
+    "invoiceAmounts": [
+      "890.87",
+      "375.35"
+    ],
+    "optimumSlabs": 1
+  },
+  "why": "Perimeter: 96*25.5+(72-25.5)*25.5 = 3633.75 sq in. Island: 60*25.5=1530. Total 5163.75. Back at (0,0); rotated extension 46.5x25.5 at (0,25.75); island at (46.75,25.75), ending at x=106.75. All fit usable 124x61 with 0.25 kerf; area bound is one slab. Two installations require two invoice lines. Nominal slab SF = 126*63/144 = 55.125. At 1 slab(s), unrounded material cost = 826.87500; cost = 826.88; material rate = round(826.87500/(5163.75/144), 2) = 23.06. Installation SF = ['25.23', '10.63']; exact-total SF rounds to 35.86. Labor = 12.25; invoice rate = 35.31; rounded line amounts = ['890.87', '375.35']. Cutouts do not reduce gross area."
+}

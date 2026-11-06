@@ -1,0 +1,50 @@
+{
+  "job": {
+    "version": 1,
+    "material": {
+      "name": "Synthetic quartz",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "15.00",
+      "slab": {
+        "lengthIn": 126,
+        "widthIn": 63
+      }
+    },
+    "laborPerSf": "12.25",
+    "installations": [
+      {
+        "id": "perimeter",
+        "label": "Perimeter",
+        "shape": {
+          "kind": "L",
+          "backIn": 96,
+          "sideIn": 72,
+          "depthIn": 25.5,
+          "side": "left"
+        },
+        "cutouts": []
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "installations": {
+      "perimeter": {
+        "sf": "25.23"
+      }
+    },
+    "totalSf": "25.23",
+    "pricing": {
+      "materialCost": "826.88",
+      "materialRatePerSf": "32.77",
+      "laborPerSf": "12.25",
+      "ratePerSf": "45.02"
+    },
+    "blanks": [],
+    "invoiceAmounts": [
+      "1135.85"
+    ],
+    "optimumSlabs": 1
+  },
+  "why": "96*25.5 + (72-25.5)*25.5 = 3633.75 sq in. Pack 96x25.5 at (0,0) and rotated 46.5x25.5 at (0,25.75) on usable 124x61. One slab is both feasible and the area lower bound. Nominal slab SF = 126*63/144 = 55.125. At 1 slab(s), unrounded material cost = 826.87500; cost = 826.88; material rate = round(826.87500/(3633.75/144), 2) = 32.77. Installation SF = ['25.23']; exact-total SF rounds to 25.23. Labor = 12.25; invoice rate = 45.02; rounded line amounts = ['1135.85']. Cutouts do not reduce gross area."
+}

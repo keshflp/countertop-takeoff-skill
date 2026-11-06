@@ -1,0 +1,53 @@
+{
+  "job": {
+    "version": 1,
+    "material": {
+      "name": null,
+      "vendor": null,
+      "pricePerSf": null,
+      "slab": {
+        "lengthIn": 126,
+        "widthIn": 63
+      }
+    },
+    "laborPerSf": null,
+    "installations": [
+      {
+        "id": "perimeter",
+        "label": "Perimeter",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 96,
+          "depthIn": 25.5
+        },
+        "cutouts": []
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "installations": {
+      "perimeter": {
+        "sf": "17.00"
+      }
+    },
+    "totalSf": "17.00",
+    "pricing": {
+      "materialCost": null,
+      "materialRatePerSf": null,
+      "laborPerSf": null,
+      "ratePerSf": null
+    },
+    "blanks": [
+      "material.name",
+      "material.vendor",
+      "material.pricePerSf",
+      "laborPerSf"
+    ],
+    "invoiceAmounts": [
+      null
+    ],
+    "optimumSlabs": 1
+  },
+  "why": "96*25.5=2448 sq in=17 SF. One piece fits. Missing name, vendor, price and labor each require exactly one blank; material cost and all invoice rates/amounts are null. Installation SF = ['17.00']; exact-total SF rounds to 17.00. Labor = None; invoice rate = None; rounded line amounts = [None]. Cutouts do not reduce gross area."
+}

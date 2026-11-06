@@ -1,0 +1,62 @@
+{
+  "job": {
+    "version": 1,
+    "material": {
+      "name": "Synthetic quartz",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "15.00",
+      "slab": {
+        "lengthIn": 126,
+        "widthIn": 63
+      }
+    },
+    "laborPerSf": "12.25",
+    "installations": [
+      {
+        "id": "perimeter",
+        "label": "Perimeter",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 30.0625,
+          "depthIn": 25.5
+        },
+        "cutouts": []
+      },
+      {
+        "id": "island",
+        "label": "Island",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 30.0625,
+          "depthIn": 25.5
+        },
+        "cutouts": []
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "installations": {
+      "perimeter": {
+        "sf": "5.32"
+      },
+      "island": {
+        "sf": "5.32"
+      }
+    },
+    "totalSf": "10.65",
+    "pricing": {
+      "materialCost": "826.88",
+      "materialRatePerSf": "77.66",
+      "laborPerSf": "12.25",
+      "ratePerSf": "89.91"
+    },
+    "blanks": [],
+    "invoiceAmounts": [
+      "478.32",
+      "478.32"
+    ],
+    "optimumSlabs": 1
+  },
+  "why": "Each area is 30.0625*25.5 = 766.59375 sq in; each line SF = 5.3235677083... -> 5.32. Exact total = 1533.1875/144 = 10.6471354167... -> 10.65, not 10.64. Two pieces at (0,0) and (30.3125,0) fit one usable slab. Nominal slab SF = 126*63/144 = 55.125. At 1 slab(s), unrounded material cost = 826.87500; cost = 826.88; material rate = round(826.87500/(1533.18750/144), 2) = 77.66. Installation SF = ['5.32', '5.32']; exact-total SF rounds to 10.65. Labor = 12.25; invoice rate = 89.91; rounded line amounts = ['478.32', '478.32']. Cutouts do not reduce gross area."
+}

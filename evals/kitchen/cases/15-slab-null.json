@@ -1,0 +1,46 @@
+{
+  "job": {
+    "version": 1,
+    "material": {
+      "name": "Synthetic quartz",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "15.00",
+      "slab": null
+    },
+    "laborPerSf": "12.25",
+    "installations": [
+      {
+        "id": "perimeter",
+        "label": "Perimeter",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 96,
+          "depthIn": 25.5
+        },
+        "cutouts": []
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "installations": {
+      "perimeter": {
+        "sf": "17.00"
+      }
+    },
+    "totalSf": "17.00",
+    "pricing": {
+      "materialCost": null,
+      "materialRatePerSf": null,
+      "laborPerSf": "12.25",
+      "ratePerSf": null
+    },
+    "blanks": [
+      "material.slab"
+    ],
+    "invoiceAmounts": [
+      null
+    ]
+  },
+  "why": "96*25.5=2448 sq in=17 SF. Slab dimensions are unknown: slab count, slab SF and derived material pricing are null. Known labor stays 12.25; invoice rate/amount are null. Exactly one material.slab question is required. Installation SF = ['17.00']; exact-total SF rounds to 17.00. Labor = 12.25; invoice rate = None; rounded line amounts = [None]. Cutouts do not reduce gross area."
+}

@@ -1,0 +1,89 @@
+# Kitchen evaluator (development only)
+
+This directory never ships to Dad. It calls the stdin/stdout development entry
+points, independently expands job geometry, and checks their answers.
+
+```powershell
+uv run evals/kitchen/eval.py
+uv run evals/kitchen/eval.py --json
+uv run evals/kitchen/eval.py --layout-only --layout-cmd "uv run evals/kitchen/naive_layout.py"
+uv run --no-project -m unittest discover -s evals/kitchen -p "test_*.py"
+```
+
+Default commands are `bun countertop-takeoff/cli/src/eval.ts` for quotes and
+`uv run countertop-takeoff/kernels/layout.py` for layout-only runs. Override with
+`--quote-cmd` / `--layout-cmd`; quote paths containing spaces inside the command.
+Commands run at the repository root. `--timeout` defaults to 60 seconds per case.
+Each process receives one JSON object on stdin and must return one on stdout.
+
+## Gates
+
+Every gate runs independently. A failure exits 1, even when a slab count looks
+good. Layout-only runs omit the quantity, pricing, blanks and assumptions gates.
+
+| Gate | Independent check |
+| --- | --- |
+| response | Kernel succeeded. A crash, invalid JSON, or timeout fails execution. |
+| tiling | Rectangular pieces cover exactly the installation outline, once. Coordinate compression and integer sixteenths find holes, overlaps and protrusions. |
+| pieceFit | Each rectangle fits trimmed slab dimensions, with rotation only when allowed. |
+| placements | Every piece appears once, slab indices are contiguous, and placements stay inside usable area with the full kerf gap. Coordinates use the usable origin, so trim is not added again. |
+| seams | Declared seams equal actual shared piece edges; no hidden seam crosses or approaches a cutout within the required distance. |
+| seamMaterial | Every seam-made edge leaves the configured material beside each cutout, independently of seam clearance. |
+| warnings | Insufficient material at original outline edges is reported as a warning. It does not make an otherwise valid layout fail. |
+| bounds | Count matches slabs; lower bound is recomputed from exact area; a known optimum rejects false optimality claims. |
+| quantity | Gross installation and total SF use exact area and half-up rounding. Total SF rounds once, independently of invoice line rounding. |
+| pricing | Nominal slab area, purchased material cost, effective rate, labor and each installation invoice line match Decimal arithmetic. Expected prices assume the hand optimum; a wasteful valid layout must price its actual slab count. |
+| blanks | Exactly one plain question per null input; dependent prices and amounts remain null. |
+| assumptions | Every omitted setting appears once with its actual default and an instruction to confirm with Dad. |
+
+Seam distance is shortest Euclidean distance from the finite seam segment to the
+cutout rectangle, compared using squared integers. Equality at the minimum is
+allowed; intersection is always forbidden. Kerf requires separation along at
+least one axis. Cutouts do not subtract gross SF.
+
+`provenOptimal` is a claim, not a score bonus. Known hand optima can refute it;
+private cases without an optimum cannot independently establish a stronger
+packing proof than the area bound.
+
+## Baseline and score
+
+The score is the sum of `slabs - optimumSlabs`, using the recomputed area lower
+bound when a partial answer key omits an optimum. Lower is better. A score is
+eligible for comparison only when every gate passes. `--json` includes both
+`score` and `scoreAvailable`, plus per-gate errors and case counts.
+
+On 2026-11-06, `naive_layout.py` passed all layout gates on the 15 cases with
+known slabs; the unknown-slab case was skipped. It used **27 slabs against 16
+optimal slabs: score 11**. This is T2's fixed baseline to beat, with these cases
+and these gates. The naive kernel seams at corners and only splits strips that
+cannot fit a slab, moving splits away from cutouts, then puts one piece on each
+slab. Difficult corner arrangements can return a plain failure instead of an
+unsafe layout. It is deliberately not a packing algorithm.
+
+`baseline-2026-11-06` cannot produce slab counts or layouts at all, so its layout
+score is unavailable. The brief records 17,454 Python/Markdown lines at that
+tag. The evaluator's broader line metric counts `.py`, `.md`, `.ts`, and `.json`
+under `countertop-takeoff/`, excluding `cli/takeoff.js` and `node_modules`; the
+first local measurement was 18,108. These are different file sets.
+
+## Cases and private plans
+
+Public synthetic cases live in `cases/*.json`: `{ "job": <job.json>,
+"expected": { ... }, "why": "hand arithmetic and a feasible optimal packing" }`.
+Expected installation SF is keyed by installation id, prices are decimal
+strings, `blanks` lists field paths, and `optimumSlabs` is an integer when proved.
+The evaluator always recomputes answers instead of trusting the answer key.
+
+Real plans live outside this public repository in `takeoff-private/cases/`.
+Put a confirmed sketch's facts in the same JSON wrapper there; keep the image
+alongside it. Missing answer-key entries are allowed, including an absent
+`expected` or absent `optimumSlabs`. The evaluator reads only `*.json` and writes
+no case data or images. Include both directories explicitly to run both:
+
+```powershell
+uv run evals/kitchen/eval.py --cases evals/kitchen/cases --cases C:/Users/keshflp/takeoff-private/cases
+```
+
+Supplying `--cases` replaces the default directory; repeat it to combine suites.
+Unknown slab dimensions skip layout-only evaluation; quote mode still checks
+quantities, null propagation, pricing and assumptions. Never commit real plans.

@@ -5,3 +5,8 @@ __pycache__/
 build/
 *.index.json
 *.geometry.json
+# Real plans live in takeoff-private, outside this public repository.
+node_modules/
+jobs/
+job-*/
+*-job/
