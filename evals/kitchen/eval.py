@@ -343,12 +343,14 @@ def original_edge_violations(data: dict) -> list[str]:
     return violations
 
 
-def check_warnings(data: dict, layout: dict, quote: dict | None = None) -> None:
-    require(isinstance(layout["warnings"], list), "warnings must be an array")
+def check_warnings(data: dict, layout: dict | None, quote: dict | None = None) -> None:
+    reports = ([] if layout is None else [layout]) + ([] if quote is None else [quote])
+    for report in reports:
+        require(isinstance(report["warnings"], list), "warnings must be an array")
     if original_edge_violations(data):
-        for warnings in (layout["warnings"],) if quote is None else (layout["warnings"], quote["warnings"]):
+        for report in reports:
             relevant = []
-            for warning in warnings:
+            for warning in report["warnings"]:
                 text = str(warning).lower()
                 relevant.append(any(word in text for word in ("cutout", "sink", "cooktop")) and
                                 any(word in text for word in ("material", "edge", "thin", "clearance", "margin")))
@@ -532,6 +534,8 @@ def evaluate(case: dict, output: dict, layout_only: bool) -> dict:
         gates["warnings"] = run_gate(lambda: check_warnings(data, layout, None if layout_only else output))
         gates["bounds"] = run_gate(lambda: check_bounds(data, layout, expected))
     if not layout_only:
+        if data["slab"] is None:
+            gates["warnings"] = run_gate(lambda: check_warnings(data, None, output))
         gates["quantity"] = run_gate(lambda: check_quantities(job, data, output, expected))
         gates["pricing"] = run_gate(lambda: check_pricing(job, data, output, expected))
         gates["blanks"] = run_gate(lambda: check_blanks(job, output, expected))

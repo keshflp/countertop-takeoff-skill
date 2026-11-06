@@ -251,6 +251,16 @@ class GateTests(unittest.TestCase):
     def test_unrelated_warning_does_not_hide_original_edge_violation(self):
         self.assert_gate(10, "warnings", lambda c, q: q["layout"].update(warnings=["Search has not proved optimality."]))
 
+    def test_original_edge_warnings_do_not_depend_on_knowing_slab_dimensions(self):
+        source, quote = case(10), hand_quote(10)
+        source["job"]["material"]["slab"] = None
+        quote["layout"] = None
+        result = oracle.evaluate(source, quote, False)
+        self.assertTrue(result["gates"]["warnings"]["pass"])
+        quote["warnings"] = []
+        result = oracle.evaluate(source, quote, False)
+        self.assertFalse(result["gates"]["warnings"]["pass"])
+
     def test_bounds(self):
         self.assert_gate(11, "bounds", lambda c, q: q["layout"].update(lowerBound=1))
 

@@ -31,7 +31,7 @@ estimate-output gates.
 | placements | Every piece appears once, slab indices are contiguous, and placements stay inside usable area with the full kerf gap. Coordinates use the usable origin, so trim is not added again. |
 | seams | Declared seams equal actual shared piece edges; no hidden seam crosses or approaches a cutout within the required distance. |
 | seamMaterial | Every seam-made edge leaves the configured material beside each cutout, independently of seam clearance. |
-| warnings | Insufficient material at original outline edges is reported as a cutout/material or edge warning. An unrelated search warning does not count. The violation does not make an otherwise valid layout fail. |
+| warnings | Insufficient material at original outline edges is reported as a cutout/material or edge warning, including quotes with unknown slabs. An unrelated search warning does not count. The violation does not make an otherwise valid layout fail. |
 | bounds | Count matches slabs; lower bound is recomputed from exact area; a known optimum rejects false optimality claims. |
 | quantity | Gross installation and total SF use exact area and half-up rounding. Total SF rounds once, independently of invoice line rounding. |
 | pricing | Nominal slab area, purchased material cost, effective rate, labor and each installation invoice line match Decimal arithmetic. Expected prices assume the hand optimum; a wasteful valid layout must price its actual slab count. |
@@ -96,6 +96,9 @@ fits unseamed, centers an explicitly estimated cutout, and has a one-slab hand
 packing proof. The old naive kernel legitimately fails its count constraint;
 that result is unscored, not an improvement over baseline 11. Failed runs emit
 `score: null` and `scoreAvailable: false`.
+CLI `5e310a0` with layout `73b4f72` passes this interaction case with two pieces
+and one slab. The original workload and the constrained workload are reported
+separately.
 
 Leg-relative `centerFromStartIn: "center"` resolves halfway along the named full
 outer leg. Numeric rectangles must still land on the sixteenth grid. Centering
