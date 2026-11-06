@@ -66,6 +66,11 @@ tag. The evaluator's broader line metric counts `.py`, `.md`, `.ts`, and `.json`
 under `countertop-takeoff/`, excluding `cli/takeoff.js` and `node_modules`; the
 first local measurement was 18,108. These are different file sets.
 
+Integration check: T2's first pushed kernel, `e76f2bf`, passed all 15 layout
+cases with **16 slabs, score 0**, proving each optimum by the area bound. This
+is a measured comparison against the same baseline workload and gates, not a
+claim that arbitrary private kitchens are solved optimally.
+
 ## Cases and private plans
 
 Public synthetic cases live in `cases/*.json`: `{ "job": <job.json>,
@@ -75,8 +80,19 @@ strings, `blanks` lists field paths, and `optimumSlabs` is an integer when prove
 The evaluator always recomputes answers instead of trusting the answer key.
 
 Real plans live outside this public repository in `takeoff-private/cases/`.
-Put a confirmed sketch's facts in the same JSON wrapper there; keep the image
-alongside it. Missing answer-key entries are allowed, including an absent
+An incomplete source folder containing `INTAKE.md` is **pending** until it has
+an explicit `case.json` wrapper. Discovery includes intake folders immediately
+inside a supplied directory, or pass one intake folder directly. Pending intakes
+never reach geometry expansion or the quote/layout command, never count as
+passing numeric cases, and never contribute a zero to the slab score. JSON
+wrappers can also use `{ "status": "pending", "reason": "awaiting confirmed facts" }`
+without a job. No real image, dimensions, or transcript belongs in git or CI.
+
+Only after the needed facts are confirmed, put the job in `case.json` alongside
+the private source. Do not replace unknown cutouts with `[]`, unresolved lengths
+with zero or standard dimensions, or guess installation grouping. No pending
+intake should become a runnable job just to obtain a benchmark number.
+Missing answer-key entries are allowed, including an absent
 `expected` or absent `optimumSlabs`. The evaluator reads only `*.json` and writes
 no case data or images. Include both directories explicitly to run both:
 
@@ -87,3 +103,7 @@ uv run evals/kitchen/eval.py --cases evals/kitchen/cases --cases C:/Users/keshfl
 Supplying `--cases` replaces the default directory; repeat it to combine suites.
 Unknown slab dimensions skip layout-only evaluation; quote mode still checks
 quantities, null propagation, pricing and assumptions. Never commit real plans.
+JSON reports separate evaluated, pending and skipped counts. Exit 2 means no
+numeric cases were evaluated; an exclusively pending selection cannot pass.
+Mixed runs score only the explicitly evaluated workload; list pending counts
+when reporting results.

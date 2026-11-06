@@ -358,8 +358,8 @@ def check_quantities(job: dict, data: dict, quote: dict, expected: dict) -> None
         require(isinstance(installation["areaSqIn"], str) and D(installation["areaSqIn"]) == areas[identifier], "wrong exact area")
         sf = money(areas[identifier] / 144)
         require(installation["sf"] == sf, f"wrong sf for {identifier}")
-        if identifier in expected.get("installations", {}):
-            require(expected["installations"][identifier]["sf"] == sf, "answer key sf is inconsistent")
+        answer = expected.get("installations", {}).get(identifier, {})
+        require(answer.get("sf", sf) == sf, "answer key sf is inconsistent")
     total = money(sum(areas.values()) / 144)
     require(quote["totalSf"] == total, "totalSf must round the exact total, not sum rounded lines")
     require(expected.get("totalSf", total) == total, "answer key totalSf is inconsistent")
@@ -370,9 +370,10 @@ def expected_pricing(job: dict, data: dict, slab_count: int | None) -> dict:
     labor = None if job["laborPerSf"] is None else money(D(job["laborPerSf"]))
     cost = rate = None
     if slab is not None and slab_count is not None and material is not None:
-        exact_cost = slab_count * D(str(slab["lengthIn"])) * D(str(slab["widthIn"])) / 144 * D(material)
-        cost = money(exact_cost)
-        rate = money(exact_cost / (sum(exact_areas(data).values()) / 144))
+        numerator = slab_count * D(str(slab["lengthIn"])) * D(str(slab["widthIn"])) * D(material)
+        cost = money(numerator / 144)
+        # Cancel the common /144 before division; repeating slab SF must not spoil half-cent ties.
+        rate = money(numerator / sum(exact_areas(data).values()))
     return {"materialCost": cost, "materialRatePerSf": rate, "laborPerSf": labor,
             "ratePerSf": None if rate is None or labor is None else money(D(rate) + D(labor))}
 
@@ -381,7 +382,8 @@ def check_pricing(job: dict, data: dict, quote: dict, expected: dict) -> None:
     count = quote["slabCount"]
     require(count is None or type(count) is int, "quote slabCount must be integer or null")
     if job["material"]["slab"] is None:
-        require(count is None and quote["slabSf"] is None, "unknown slab must propagate null")
+        require(count is None and quote["slabSf"] is None and quote["layout"] is None,
+                "unknown slab must propagate null")
     else:
         require(count == quote["layout"]["slabCount"], "quote and layout slab counts differ")
         slab = job["material"]["slab"]
@@ -401,6 +403,8 @@ def check_pricing(job: dict, data: dict, quote: dict, expected: dict) -> None:
         amount = None if pricing["ratePerSf"] is None else money(D(sf) * D(pricing["ratePerSf"]))
         require(line == {"installation": source["label"], "material": job["material"]["name"], "sf": sf,
                          "ratePerSf": pricing["ratePerSf"], "amount": amount}, "wrong invoice line")
+    if count == expected.get("optimumSlabs") and "invoiceAmounts" in expected:
+        require([i["amount"] for i in invoice] == expected["invoiceAmounts"], "answer key invoice amounts are inconsistent")
 
 
 def blank_fields(job: dict) -> list[str]:
@@ -448,8 +452,13 @@ def run_gate(check: Callable[[], None]) -> dict:
     try:
         check()
         return {"pass": True, "errors": []}
-    except (ValueError, KeyError, TypeError, IndexError, ArithmeticError) as error:
+    except (ValueError, KeyError, TypeError, IndexError, AttributeError, ArithmeticError) as error:
         return {"pass": False, "errors": [str(error)]}
+
+
+def check_response(layout: dict) -> None:
+    require(isinstance(layout, dict), "layout must be an object")
+    require(layout.get("ok") is True, f"layout failed: {layout.get('error')}")
 
 
 def evaluate(case: dict, output: dict, layout_only: bool) -> dict:
@@ -458,7 +467,7 @@ def evaluate(case: dict, output: dict, layout_only: bool) -> dict:
     layout = output if layout_only else output.get("layout")
     gates = {}
     if data["slab"] is not None:
-        gates["response"] = run_gate(lambda: require(layout["ok"] is True, f"layout failed: {layout.get('error')}"))
+        gates["response"] = run_gate(lambda: check_response(layout))
         checks = {"tiling": check_tiling, "pieceFit": check_piece_fit, "placements": check_placements,
                   "seams": check_seams, "seamMaterial": check_seam_material}
         for name, check in checks.items():
@@ -494,6 +503,26 @@ def command_argv(command: str) -> list[str]:
             for part in shlex.split(command, posix=False)]
 
 
+def discover_cases(directories: list[Path]) -> dict[Path, str | None]:
+    """An intake folder needs an explicit case.json before any numeric work can run."""
+    found: dict[Path, str | None] = {}
+
+    def intake(folder: Path) -> None:
+        wrapper = folder / "case.json"
+        found[wrapper.resolve() if wrapper.is_file() else folder.resolve()] = (
+            None if wrapper.is_file() else "intake awaits confirmed facts; no case.json")
+
+    for directory in directories:
+        if (directory / "INTAKE.md").is_file():
+            intake(directory)
+            continue
+        for path in directory.glob("*.json"):
+            found[path.resolve()] = None
+        for record in directory.glob("*/INTAKE.md"):
+            intake(record.parent)
+    return dict(sorted(found.items()))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", action="append", type=Path, help="repeatable; replaces the default public directory")
@@ -504,14 +533,22 @@ def main() -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     directories = args.cases or [Path(__file__).parent / "cases"]
-    paths = sorted({path.resolve() for directory in directories for path in directory.glob("*.json")})
-    if not paths:
-        parser.error("no case JSON files found")
+    sources = discover_cases(directories)
+    if not sources:
+        parser.error("no case JSON files or intake folders found")
     results = []
-    for path in paths:
+    for path, pending in sources.items():
         result = {"case": path.stem}
         try:
+            if pending is not None:
+                result.update({"pending": pending, "gates": {}})
+                results.append(result)
+                continue
             case = json.loads(path.read_text(encoding="utf-8-sig"))
+            if case.get("status") == "pending":
+                result.update({"pending": case.get("reason", "awaiting confirmed facts"), "gates": {}})
+                results.append(result)
+                continue
             data = expand_job(case["job"])
             if args.layout_only and data["slab"] is None:
                 result.update({"skipped": "slab dimensions unknown", "gates": {}})
@@ -527,17 +564,23 @@ def main() -> int:
         except (OSError, ValueError, KeyError, TypeError, ArithmeticError, subprocess.TimeoutExpired) as error:
             result["gates"] = {"execution": {"pass": False, "errors": [str(error)]}}
         results.append(result)
-    passed = all(g["pass"] for r in results for g in r["gates"].values())
+    evaluated = sum(bool(r["gates"]) for r in results)
+    passed = evaluated > 0 and all(g["pass"] for r in results for g in r["gates"].values())
     scored = [r for r in results if r.get("excessSlabs") is not None]
     summary = {"mode": "layout" if args.layout_only else "quote", "pass": passed, "cases": results,
                "score": sum(r["excessSlabs"] for r in scored) if scored else None,
-               "scoreAvailable": passed and all(r.get("skipped") or r.get("excessSlabs") is not None for r in results),
+               "scoreAvailable": passed and bool(scored) and all(r.get("pending") or r.get("skipped") or r.get("excessSlabs") is not None for r in results),
+               "evaluatedCases": evaluated, "pendingCases": sum("pending" in r for r in results),
+               "skippedCases": sum("skipped" in r for r in results),
                "skillLines": line_count()}
     if args.json:
         print(json.dumps(summary, indent=2))
     else:
         print("case                         gates                         slabs/optimum/lowerBound  provenOptimal")
         for r in results:
+            if "pending" in r:
+                print(f"{r['case']:<28} PENDING {r['pending']}")
+                continue
             if "skipped" in r:
                 print(f"{r['case']:<28} SKIP {r['skipped']}")
                 continue
@@ -548,8 +591,11 @@ def main() -> int:
             for name in failed:
                 for error in r["gates"][name]["errors"]:
                     print(f"  {name}: {error}")
-        score = summary["score"] if summary["scoreAvailable"] else "unavailable (failed gates or missing layouts)"
+        score = summary["score"] if summary["scoreAvailable"] else "unavailable (failed gates or no scored layouts)"
         print(f"excess slabs: {score}; skill lines: {summary['skillLines']}")
+        print(f"evaluated: {evaluated}; pending: {summary['pendingCases']}; skipped: {summary['skippedCases']}")
+    if evaluated == 0:
+        return 2
     return 0 if passed else 1
 
 
