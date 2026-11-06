@@ -338,6 +338,8 @@ def check_reasons(data: dict, assessment: dict, layout: dict | None) -> None:
         w, h = old.usable(data)
         box = poly.bbox(poly.simple(installation["outline"]))
         whole_fits = box.w <= w and box.h <= h or data["settings"]["allowRotate"] and box.h <= w and box.w <= h
+        if report["seamNecessity"] == "none-required":
+            require(whole_fits, "stock-infeasible whole piece was reported to need no seam")
         if report["seamNecessity"] == "stock-fit":
             require(not whole_fits, "a whole polygon that fits was falsely declared stock-infeasible")
         if report["seamNecessity"] == "source-rule":

@@ -150,6 +150,7 @@ class SourceEvaluationTests(unittest.TestCase):
             (evaluator.placements, lambda l: l["slabs"][0]["placements"][1].update(y=25.6875)),
             (evaluator.joins, lambda l: l["joins"][0].update(segments=[{"x0": 85, "y0": 0, "x1": 85, "y1": 25.5}])),
             (evaluator.joins, lambda l: l["joins"][0].update(installationId="invented")),
+            (evaluator.joins, lambda l: l["joins"].append(dict(l["joins"][0], id="duplicate-boundary"))),
             (evaluator.counts, lambda l: l["pieces"].pop()),
         ):
             fixture, output = witness("02")
