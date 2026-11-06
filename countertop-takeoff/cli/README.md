@@ -90,15 +90,17 @@ the shipped CLI always resolves kernels relative to its own bundle.
   assumptions alongside every omitted named setting.
 - The brief does not specify draw stdout. T2's concrete reply is decoded as
   `{ok: true, path: <requested PNG>}`; the returned path must match the request.
+- Exact piece counts do not introduce a minimum piece width. A narrow end strip
+  is permitted by the stated rules; the CLI does not invent a fabrication limit.
 
 ## Evaluation record
 
 Baseline: the tagged starting code has no CLI, so a quote score is unavailable.
 T1's naive layout baseline passes layout gates with score 11 on its 15 cases
-with known slabs. The first CLI candidate with T2 layout passes all gates on all
-16 public cases and has zero excess slabs on the 15 scored cases. T1's initial
-report marks its aggregate score unavailable because one case has no slab size;
-do not interpret the absence of that layout as a failed gate.
+with known slabs. The first CLI candidate with T2 layout passes all gates on the
+same 16 public cases and has zero excess slabs on the 15 scored cases. Its later
+evaluator revision correctly leaves the unknown-slab case unscored while still
+checking its quantity, pricing and null propagation.
 
 The base synthetic preflight/check/confirm/quote/next run passed against all three
 real kernels, with the bundle outside the repository and no node_modules. The
