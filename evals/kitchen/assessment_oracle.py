@@ -73,7 +73,8 @@ def predicates(data: dict, layout: dict | None) -> list[Predicate]:
     profile, provenance, thickness = (material[k] for k in ("profileId", "profileProvenance", "nominalThicknessMm"))
     checks = [Predicate("profile-selection", None, status="unknown" if profile is None else "pass" if profile in SOURCES else "unsupported", operator="applicable"),
               Predicate("profile-provenance", None, status="unknown" if provenance is None else "pass", operator="documented"),
-              Predicate("nominal-thickness", None, status="unknown" if thickness is None else "pass" if D(thickness) > 0 and (profile == MSI or D(thickness) in (12, 20, 30)) else "unsupported", operator="applicable")]
+              Predicate("nominal-thickness", None, status="unknown" if thickness is None else "pass" if profile == SILESTONE and D(thickness) in (12, 20, 30) else "unsupported",
+                        actual=None if thickness is None else D(thickness), operator="applicable")]
     if not applicable(profile, provenance, thickness):
         return checks
     for installation in data["installations"]:
@@ -87,6 +88,7 @@ def predicates(data: dict, layout: dict | None) -> list[Predicate]:
             checks.append(Predicate("opening-radius", identifier, index, status="unknown" if actual is None else "pass" if actual >= minimum else "fail",
                                     actual=actual, minimum=minimum, page=page, printed=printed))
             if profile != SILESTONE or cutout["kind"] not in ("sink", "cooktop"):
+                checks.append(Predicate("rectangular-run-applicability", identifier, index, status="unsupported", operator="applicable"))
                 continue
             if run is None:
                 checks.append(Predicate("rectangular-run-applicability", identifier, index, status="unsupported" if installation["sourceArrangement"] else "unknown", operator="applicable"))
@@ -99,12 +101,17 @@ def predicates(data: dict, layout: dict | None) -> list[Predicate]:
                                         actual=measurement.actual, minimum=measurement.minimum, page=page, printed=printed))
         if profile == SILESTONE and run is not None:
             for index, a in enumerate(run[1]):
-                for b in run[1][index + 1:]:
+                for other_index, b in enumerate(run[1][index + 1:], index + 1):
+                    if cutouts[index]["kind"] not in ("sink", "cooktop") or cutouts[other_index]["kind"] not in ("sink", "cooktop"):
+                        continue
                     measurement = adjacent_gap(a, b)
                     checks.append(Predicate("adjacent-opening-gap", identifier, index,
                                             status="unsupported" if measurement is None else "pass" if measurement.passes else "fail",
                                             actual=None if measurement is None else measurement.actual,
-                                            minimum=D(50), page=5, printed=8))
+                                            minimum=None if measurement is None else D(50),
+                                            page=5 if cutouts[index]["kind"] == "sink" else 6,
+                                            printed=8 if cutouts[index]["kind"] == "sink" else 10,
+                                            operator="applicable" if measurement is None else ">="))
         original = poly.simple(installation["outline"])
         if installation["shapeKind"] == "U" or len(poly.reentrant(original)) > 1:
             checks.append(Predicate("corner-detail-applicability", identifier, status="unsupported", operator="applicable"))
@@ -116,6 +123,8 @@ def predicates(data: dict, layout: dict | None) -> list[Predicate]:
             checks.append(Predicate("continuous-inside-radius", identifier, status="unknown" if actual is None else "pass" if actual >= minimum else "fail",
                                     actual=actual, minimum=minimum, page=10 if profile == SILESTONE else 2,
                                     printed=18 if profile == SILESTONE else None))
+        elif poly.reentrant(original):
+            checks.append(Predicate("continuous-inside-radius", identifier, status="not-applicable", operator="applicable"))
         if layout is None:
             continue
         for join in (j for j in layout["joins"] if j["installationId"] == identifier):
@@ -162,7 +171,7 @@ def check_evidence(data: dict, assessment: dict, layout: dict | None) -> None:
         require(isinstance(record["explanation"], str) and bool(record["explanation"].strip()), "rule explanation missing")
         if record["ruleId"] in STRUCTURAL:
             require(record["source"] is None, "structural constraint was presented as manufacturer authority")
-        elif record["status"] in ("pass", "fail"):
+        elif record["status"] in ("pass", "fail") and record["ruleId"] not in ("profile-selection", "profile-provenance", "nominal-thickness"):
             source(record["source"], profile)
         if record["source"] is not None:
             source(record["source"], profile)

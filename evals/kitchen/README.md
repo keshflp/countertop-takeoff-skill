@@ -107,9 +107,24 @@ adds facts to fixture files or claims manufacturer assessment. The original
 naive code, 19 fixture hashes, and score evidence remain frozen. Changing the
 physical model does not establish an improvement over historical excess 11.
 
-At this adapter handoff, 98 focused tests pass, including all synthetic answer
-key arithmetic and frozen fixture hashes. **V2 runtime integration is pending**
-published kernel snapshots; there is no measured new optimizer score yet.
+At this adapter handoff, 99 focused tests pass, including all synthetic answer
+key arithmetic and frozen fixture hashes. First integration used kernel
+`1441ff9`, CLI `bf1b01b` and evaluator `0802422`: all 19 cases executed, but the
+run was unscored. It exposed an oracle mismatch (nominal thickness carries the
+supplied numeric mm value) and two new fixtures that intended a documented
+50 mm pair but used `other` for one opening. The corrected fixtures explicitly
+use two cooktops with radius 10 mm and retain 49.2125 mm reject / 50.8 mm pass.
+An independent hand-built `other` witness retains unsupported/conditional scope;
+no universal pair rule was added. This is a workload/oracle correction requiring
+rebaselining, not an optimizer improvement. MSI known positive thickness still
+admits sparse calculations, but its missing applicability table is explicitly
+unsupported, not a manufacturer class pass. Cooktop pair evidence uses the
+inspected file p.6 / printed p.10, which also illustrates the 50 mm gap.
+
+The same snapshot's diagnostic quote recheck reached all 19 cases. The remaining
+actual kernel question defect (source datum text lacked a question mark) was
+reported to T2. Final corrected-evaluator runtime integration and drawings await
+the next coordinated phase; there is no accepted new optimizer score yet.
 Copy all imported helpers with a runtime snapshot, including
 `layout_geometry.py`, `seam_model.py`, `seam_planner.py` and `polygon_pack.py`.
 

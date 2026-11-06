@@ -57,7 +57,7 @@ def witness(prefix="01"):
     job = fixture["job"]
     profile = job["material"]
     checks = [check("profile-selection", operator="applicable"), check("profile-provenance", operator="documented"),
-              check("nominal-thickness", operator="applicable")]
+              check("nominal-thickness", 20, operator="applicable")]
     conditions = [condition("installation-support")]
     joins = []
     if prefix == "09":
@@ -300,6 +300,7 @@ class SourceEvaluationTests(unittest.TestCase):
         fixture["job"]["installations"][0]["insideCornerRadiusMm"] = "9.525"
         data = evaluator.expand(fixture["job"])
         a = output["assessment"]
+        a["checks"][2]["status"] = "unsupported"
         a["checks"][-1].update(actual={"value": "9.525", "unit": "mm"}, required={"value": "0.375", "unit": "in"})
         s2 = dict(SOURCE, id="S2", url="https://cdn.msisurfaces.com/files/downloads/quartz-installation-guidelines.pdf",
                   sha256="8b9011f17cf55712fc17a4b2aecc40a87cbf2d9f30b6bfe00803c56c425a4074", filePages=[2], printedPages=[])
@@ -326,7 +327,7 @@ class SourceEvaluationTests(unittest.TestCase):
                             "cutoutIndex": None, "origin": "supplied", "reason": "supplied-count"}]
         layout["slabs"][0]["placements"] = [{"pieceId": "top", "x": 0, "y": 0, "quarterTurns": 0},
                                                 {"pieceId": "leg", "x": 0, "y": 24.25, "quarterTurns": 0}]
-        output["assessment"]["checks"].pop()
+        output["assessment"]["checks"][-1] = check("continuous-inside-radius", status="not-applicable", operator="applicable")
         self.assert_passes(fixture, output)
         output["assessment"]["conditions"].pop()
         with self.assertRaises(ValueError):
@@ -397,6 +398,24 @@ class SourceEvaluationTests(unittest.TestCase):
         a["unresolved"].append(deepcopy(a["unresolved"][0]))
         with self.assertRaises(ValueError):
             rules.check_assessment(data, a, None, {})
+
+    def test_other_opening_scope_remains_conditional_without_universal_gap_rule(self):
+        fixture, output = witness()
+        fixture["job"]["installations"][0]["cutouts"].append({"kind": "other", "wIn": 8, "hIn": 8,
+            "at": {"xIn": 75, "yIn": 5}, "radiusMm": "5", "mount": "other"})
+        fixture["expected"]["assessmentStatus"] = "conditional"
+        output["layout"]["pieces"][0]["cutouts"].append({"cutoutIndex": 1, "outline": rect(75, 5, 8, 8)})
+        a = output["assessment"]
+        a["status"] = "conditional"
+        a["checks"] += [check("opening-radius", 5, 5, cutout=1),
+                         check("rectangular-run-applicability", cutout=1, status="unsupported", operator="applicable")]
+        a["conditions"].append(dict(condition("unsupported-detail", 1), status="unsupported", evidenceNote=None))
+        self.assert_passes(fixture, output)
+        recomputed = rules.predicates(evaluator.expand(fixture["job"]), output["layout"])
+        self.assertFalse(any(p.rule == "adjacent-opening-gap" for p in recomputed))
+        a["status"] = "assessed"
+        with self.assertRaises(ValueError):
+            rules.check_assessment(evaluator.expand(fixture["job"]), a, output["layout"], {})
 
 
 if __name__ == "__main__":

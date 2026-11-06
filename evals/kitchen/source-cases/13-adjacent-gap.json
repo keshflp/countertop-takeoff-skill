@@ -37,14 +37,14 @@
             "mount": "under"
           },
           {
-            "kind": "other",
+            "kind": "cooktop",
             "wIn": 12,
             "hIn": 12,
             "at": {
               "xIn": 26,
               "yIn": 6
             },
-            "radiusMm": "5",
+            "radiusMm": "10",
             "mount": "under"
           }
         ],
@@ -91,6 +91,12 @@
             "cutoutIndex": 0,
             "status": "documented",
             "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "fixture-support",
+            "cutoutIndex": 1,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
           }
         ]
       }
@@ -118,5 +124,5 @@
       "775.56"
     ]
   },
-  "why": "Two side-by-side envelopes, first ends x24in. Clear gap26-24=2in=50.8mm. Diagram requires50mm, not100mm; both use explicit horizontal source datum. Other opening radius5mm is retained. Original cooktop strips and ends independently pass. Gross quantities: counter: 3072 sq in /144 ->21.33 SF. Total rounds exact sum once. Cutout envelopes are included. Pricing, if a layout qualifies, uses nominal purchased slab area, exact supplier cost times (1+markup/100), then exact job SF before rate rounding; labor is separate."
+  "why": "Both openings are explicitly cooktops in the documented rectangular-run arrangement. Two side-by-side envelopes, first ends x24in. Clear gap26-24=2in=50.8mm. Diagram requires50mm, not100mm; both use explicit horizontal source datum. Original cooktop strips and ends independently pass. Gross quantities: counter: 3072 sq in /144 ->21.33 SF. Total rounds exact sum once. Cutout envelopes are included. Pricing, if a layout qualifies, uses nominal purchased slab area, exact supplier cost times (1+markup/100), then exact job SF before rate rounding; labor is separate."
 }
