@@ -89,6 +89,10 @@ def installation_panel(inst: dict, layout: dict | None, colors: dict[str, str]) 
     image = Image.new("RGB", (WIDTH, diagram_bottom + 140 + 52 * rows), "black")
     draw = ImageDraw.Draw(image)
     fitted_text(draw, (44, 42), str(inst.get("label", inst["id"])), WIDTH - 88, size=46, anchor="lm")
+    join = inst.get("seam")
+    if join:
+        draw.text((44, 92), f"Join equal halves at opening {join['cutoutIndex'] + 1}",
+                  font=font(34, True), fill=WHITE)
 
     def point(x: float, y: float) -> tuple[float, float]:
         return MARGIN + (x - x0) * scale, 190 + (y - y0) * scale
@@ -104,11 +108,17 @@ def installation_panel(inst: dict, layout: dict | None, colors: dict[str, str]) 
         for s in layout["seams"]:
             if s["installationId"] == inst["id"]:
                 draw.line([point(s["x0"], s["y0"]), point(s["x1"], s["y1"])], fill=WHITE, width=6)
+    elif join:
+        middle = (x0 + x1) / 2
+        draw.line([point(middle, y0), point(middle, y1)], fill=WHITE, width=6)
     for n, cut in enumerate(inst["cutouts"], 1):
         a = point(cut["x"], cut["y"])
         b = point(cut["x"] + cut["w"], cut["y"] + cut["h"])
         draw.rectangle((*a, *b), fill="black", outline=WHITE, width=3)
-        draw.text(((a[0] + b[0]) / 2, (a[1] + b[1]) / 2), str(n), font=font(32, True), fill=WHITE, anchor="mm")
+        # Paint the void after the seam. The selected opening stays empty; its
+        # number is in the join caption and cutout key, not on the join's path.
+        if not join or n - 1 != join["cutoutIndex"]:
+            draw.text(((a[0] + b[0]) / 2, (a[1] + b[1]) / 2), str(n), font=font(32, True), fill=WHITE, anchor="mm")
     # Every wall and return gets its own dimension; no shape-specific formulas.
     for a, b in zip(outline, outline[1:] + outline[:1]):
         horizontal = a[1] == b[1]

@@ -63,6 +63,27 @@ class DrawingTests(unittest.TestCase):
                 with Image.open(path) as image:
                     self.assertIn((255, 211, 110), image.crop((0, 90, 1080, 165)).getdata())
 
+    def test_center_join_shows_stone_front_and_back_with_an_empty_opening(self):
+        data = {"slab": {"lengthIn": 126, "widthIn": 63}, "settings": {"slabTrimIn": 1},
+                "installations": [{"id": "run", "outline": [[0, 0], [96, 0], [96, 30], [0, 30]],
+                                   "seam": {"kind": "center-through-cutout", "cutoutIndex": 0},
+                                   "cutouts": [{"kind": "cooktop", "x": 36, "y": 7, "w": 24, "h": 16}]}],
+                "layout": {"ok": True, "slabCount": 1,
+                           "seams": [{"installationId": "run", "x0": 48, "y0": 0, "x1": 48, "y1": 30}],
+                           "pieces": [{"id": "P1", "installationId": "run", "outline": [[0, 0], [48, 0], [48, 30], [0, 30]]},
+                                      {"id": "P2", "installationId": "run", "outline": [[48, 0], [96, 0], [96, 30], [48, 30]]}],
+                           "slabs": [{"index": 1, "placements": [{"pieceId": "P1", "x": 0, "y": 0, "rotated": False},
+                                                                 {"pieceId": "P2", "x": 48.25, "y": 0, "rotated": False}]}]}}
+        for preview in (False, True):
+            with self.subTest(preview=preview), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "join.png"
+                render(data, path, preview=preview)
+                with Image.open(path) as image:
+                    self.assertEqual(image.getpixel((540, 350)), (255, 255, 255))
+                    self.assertEqual(image.getpixel((540, 560)), (255, 255, 255))
+                    self.assertEqual(set(image.crop((450, 400, 630, 510)).getdata()), {(0, 0, 0)})
+                    self.assertIn((255, 255, 255), image.crop((44, 232, 800, 270)).getdata())
+
 
 if __name__ == "__main__":
     unittest.main()
