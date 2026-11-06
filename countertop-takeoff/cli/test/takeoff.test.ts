@@ -137,6 +137,24 @@ test("assessment coherence rejects fabricated evidence, profile and proof", asyn
   expect(q.pricing.materialCost).toBe("500.00"); expect(q.assessment.conditions).toEqual(conditional.assessment.conditions)
 })
 
+test("structural count evidence needs no manufacturer source; source dimensional evidence does", async () => {
+  const r = await request(), good = response(r)
+  const c = good.assessment.checks[0]
+  if (!c) throw new Error("missing fixture")
+  const counted = { ...good, assessment: { ...good.assessment, checks: [{ ...c, ruleId: "supplied-piece-count", operator: "=", actual: { value: "1", unit: "count" }, required: { value: "1", unit: "count" }, source: null }] } } satisfies PlanReply
+  expect(replyIssue(r, counted)).toBeNull()
+  expect(replyIssue(r, { ...counted, assessment: { ...counted.assessment, checks: [{ ...c, ruleId: "opening-rear-strip", operator: ">=", actual: { value: "101.6", unit: "mm" }, required: { value: "100", unit: "mm" }, source: null }] } })).toContain("source")
+})
+
+test("assess can assess the original subset without stock, while still asking for slab dimensions", async () => {
+  const r: LayoutInput = { ...await request(), phase: "assess", slab: null }
+  const a = assessment(r)
+  const partial: PlanReply = { ok: true, version: 2, assessment: { ...a, status: "assessed" }, layout: null }
+  expect(replyIssue(r, partial)).toBeNull()
+  expect(replyIssue(r, { ...partial, assessment: { ...partial.assessment, unresolved: [] } })).toContain("question")
+  expect(replyIssue({ ...r, phase: "plan" }, partial)).not.toBeNull()
+})
+
 function splitLayout(): Layout {
   return {...layout,pieces:[{id:"a",installationId:"island",outline:rectangle(0,0,30,24),cutouts:[{cutoutIndex:0,outline:rectangle(20,4,30,20)}]},
     {id:"b",installationId:"island",outline:rectangle(30,0,70,24),cutouts:[{cutoutIndex:0,outline:rectangle(30,4,40,20)}]},

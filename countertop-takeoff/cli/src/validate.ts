@@ -74,10 +74,13 @@ export function replyIssue(request: LayoutInput, reply: PlanReply): string | nul
     if (e.joinId !== null && !layout?.joins.some(j => j.id === e.joinId && j.installationId === e.installationId)) return "evidence refers to an unknown joint"
     if (e.source !== null && (e.source.sha256 !== sourceRegistry[e.source.id].hash || e.source.url !== sourceRegistry[e.source.id].url)) return "source evidence does not identify the pinned document"
   }
-  if (a.checks.some(c => (c.status === "pass" || c.status === "fail") && c.required !== null && c.source === null)) return "a dimensional rule result omitted its source evidence"
+  // Supplied constraints and geometric truth are not manufacturer assertions.
+  const structuralRules = new Set(["supplied-piece-count", "supplied-join", "solid-connectivity", "stock-fit"])
+  if (a.checks.some(c => (c.status === "pass" || c.status === "fail") && c.required !== null && c.source === null && !structuralRules.has(c.ruleId))) return "a dimensional source-rule result omitted its source evidence"
   const failed = a.geometry === "invalid" || a.checks.some(c => c.status === "fail") || a.conditions.some(c => c.status === "failed")
   if ((a.status === "assessed" || a.status === "conditional") && failed) return "a rejected condition was admitted as an assessed candidate"
-  if (a.status === "assessed" && (a.checks.length === 0 || a.checks.some(c => c.status === "unknown" || c.status === "unsupported") || a.conditions.some(c => c.status !== "satisfied") || a.unresolved.length > 0)) return "an incomplete assessment was labelled fully assessed"
+  const missingAssessmentFacts = a.unresolved.filter(b => !(request.phase === "assess" && b.field === "material.slab"))
+  if (a.status === "assessed" && (a.checks.length === 0 || a.checks.some(c => c.status === "unknown" || c.status === "unsupported") || a.conditions.some(c => c.status !== "satisfied") || missingAssessmentFacts.length > 0)) return "an incomplete assessment was labelled fully assessed"
   if (request.mode === "assessment") {
     const missing = [
       ["material.profileId", request.material.profileId], ["material.profileProvenance", request.material.profileProvenance],

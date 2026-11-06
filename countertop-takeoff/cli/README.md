@@ -83,14 +83,14 @@ unrounded full purchased material cost before dividing by exact job SF. Labor is
 separate. `materialCost` is supplier cost; `materialCharge` includes markup.
 Invoice lines use displayed two-decimal SF and rate. Nulls propagate.
 
-Only stock settings default: slab trim1 inch, kerf0.25 inch, rotation allowed.
+Only stock settings default: slab trim 1 inch, kerf 0.25 inch, rotation allowed.
 Each omitted setting plus gross-SF/nominal-slab/shape conventions appears in
 `assumptions` with `assumed, confirm with Dad`. Historical generic seam minima
 are not normal v2 settings.
 
 ## Development and historical evidence
 
-Effect4.1.2 was npm's stable release when checked on2026-11-06. Commands use
+Effect 4.1.2 was npm's stable release when checked on 2026-11-06. Commands use
 `effect/cli`; Bun platform services own filesystem and scoped processes.
 
 ```powershell
@@ -116,9 +116,9 @@ with an unresolved assessment even if legacy geometry and prices are available.
 No normal command or runtime setting enables it. It cannot establish source-rule
 feasibility or migrate unknown material facts.
 
-Historical benchmark evidence remains frozen: CLI f487e16 with evaluator478f653
-and layout/draw5544c8c passed19 old cases with zero excess slabs. The original
-naive benchmark scored11 on15 known-stock cases; one unknown-stock case was
+Historical benchmark evidence remains frozen: CLI f487e16 with evaluator 478f653
+and layout/draw 5544c8c passed 19 old cases with zero excess slabs. The original
+naive benchmark scored 11 on 15 known-stock cases; one unknown-stock case was
 unscored. These results describe the earlier geometry workload. New physical
 rules use a separate workload; their scores are not directly comparable.
 The earlier external synthetic bundled workflow passed without node_modules.

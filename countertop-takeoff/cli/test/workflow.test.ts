@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { kernelLayer } from "../src/kernels"
-import { DrawInput, Job, Quote } from "../src/schema"
+import { DrawInput, Job, LayoutInput, Quote } from "../src/schema"
 import { workflow } from "../src/workflow"
 import { fake, job, opening, run, transport, withShape } from "./fixtures"
 
@@ -60,19 +60,24 @@ test("private jobs are refused inside any checkout, including junctions", async 
 
 test("unresolved workflow preserves assessment and estimated rectangles in both drawing modes", async () => {
   const drawings: DrawInput[] = []
+  const phases: LayoutInput["phase"][] = []
   const observed = kernelLayer((name, args, stdin) => {
     if (name === "draw_layout" && !args.includes("--selfcheck")) drawings.push(Schema.decodeUnknownSync(DrawInput)(JSON.parse(stdin)))
+    if (name === "layout" && !args.includes("--selfcheck")) phases.push(Schema.decodeUnknownSync(LayoutInput)(JSON.parse(stdin)).phase)
     return transport(name, args, stdin)
   })
   const { dir, input, w } = await fixture(observed)
   const j = { ...withShape({ kind: "rect", lengthIn: 60, depthIn: 24 }, [{ ...opening, at: { xIn: 20, yIn: 4 }, estimate: { fields: ["at"], note: "Authorized synthetic estimate" } }]), material: { ...job.material, slab: null } } satisfies Job
   await run(w.preflight(dir, [input]))
   await writeFile(join(dir, "job.json"), JSON.stringify(j))
-  expect(await run(w.check(dir))).toContain("Preliminary: estimated geometry")
+  expect(await run(w.check(dir).pipe(Effect.provide(observed)))).toContain("Preliminary: estimated geometry")
   await run(w.confirm(dir))
-  expect(await run(w.quote(dir))).toContain("unresolved")
+  expect(await run(w.quote(dir).pipe(Effect.provide(observed)))).toContain("unresolved")
   const q = Schema.decodeUnknownSync(Quote)(JSON.parse(await readFile(join(dir, "quote.json"), "utf8")))
   expect(q.layout).toBeNull(); expect(q.pricing.materialCost).toBeNull()
   expect(drawings).toHaveLength(2)
   expect(drawings.every(d => d.assessment.status === "unresolved" && d.geometryEstimates.length === 1)).toBe(true)
+  expect(drawings.every(d => d.assessment.unresolved.filter(b => b.field === "material.slab").length === 1)).toBe(true)
+  expect(drawings[0]?.assessment.search.status).toBe("not-run")
+  expect(phases).toEqual(["assess", "plan"])
 })
