@@ -43,6 +43,20 @@ Fabrication splits do not split invoice lines or duplicate installed quantities.
 Original-edge cutout-clearance warnings come from the installed geometry and
 remain available in check/quote even when slab dimensions are still unknown.
 
+Optional installation `seam: {kind: "center-through-cutout", cutoutIndex: 0}`
+requests two equal rectangular blanks joined at the run's exact midpoint through
+that centered opening. The CLI rejects incompatible shapes, counts, indices,
+off-center openings and off-grid midpoints. It independently checks the returned
+blank outlines and full join, retaining clearance rules for every other opening.
+Check/quote readback and drawing inputs preserve the explicit join instruction.
+
+`material.markupPercent` is required and nullable; use `"0"` explicitly for no
+markup. This is a deliberate input-schema change. Markup applies to unrounded
+supplier cost for all purchased slabs, before dividing by exact gross job SF.
+Labor is added separately. `pricing.materialCost` remains supplier cost;
+`materialCharge` includes markup. A null percentage preserves known supplier cost
+and labor, leaves dependent charges/rates/amounts null, and produces one question.
+
 ## Development
 
 Effect 4.1.2 was npm's stable release when checked on 2026-11-06. Commands use
@@ -91,7 +105,9 @@ the shipped CLI always resolves kernels relative to its own bundle.
 - The brief does not specify draw stdout. T2's concrete reply is decoded as
   `{ok: true, path: <requested PNG>}`; the returned path must match the request.
 - Exact piece counts do not introduce a minimum piece width. A narrow end strip
-  is permitted by the stated rules; the CLI does not invent a fabrication limit.
+  remains possible without an explicit center join; the CLI does not invent a
+  fabrication limit. An explicit center join fixes equal halves and exempts only
+  that seam and selected opening, without changing original-outer-edge warnings.
 
 ## Evaluation record
 

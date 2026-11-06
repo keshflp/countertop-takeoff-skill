@@ -33,6 +33,7 @@ const Shape = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("outline"), points: Polygon }),
 ])
 const CutoutKind = Schema.Literals(["sink", "cooktop", "other"])
+const CenterJoin = Schema.Struct({ kind: Schema.Literal("center-through-cutout"), cutoutIndex: Count })
 const EstimateFields = Schema.Array(Schema.Literals(["wIn", "hIn", "at"])).check(
   Schema.isMinLength(1), Schema.makeFilter(fields => new Set(fields).size === fields.length),
 )
@@ -50,10 +51,10 @@ export const Job = Schema.Struct({
   version: Schema.Literal(1),
   material: Schema.Struct({
     name: Schema.NullOr(Text), vendor: Schema.NullOr(Text), pricePerSf: Schema.NullOr(Decimal),
-    slab: Schema.NullOr(Slab),
+    slab: Schema.NullOr(Slab), markupPercent: Schema.NullOr(Decimal),
   }),
   laborPerSf: Schema.NullOr(Decimal),
-  installations: Schema.Array(Schema.Struct({ id: Text, label: Text, shape: Shape, cutouts: Schema.Array(Cutout), requiredPieceCount: Schema.optionalKey(PieceCount) })).check(Schema.isMinLength(1)),
+  installations: Schema.Array(Schema.Struct({ id: Text, label: Text, shape: Shape, cutouts: Schema.Array(Cutout), requiredPieceCount: Schema.optionalKey(PieceCount), seam: Schema.optionalKey(CenterJoin) })).check(Schema.isMinLength(1)),
   settings: Schema.Struct({
     slabTrimIn: Schema.optionalKey(Settings.fields.slabTrimIn),
     kerfIn: Schema.optionalKey(Settings.fields.kerfIn),
@@ -66,7 +67,7 @@ export const Job = Schema.Struct({
 export interface Job extends Schema.Schema.Type<typeof Job> {}
 
 const Installation = Schema.Struct({
-  id: Text, outline: Polygon, requiredPieceCount: Schema.optionalKey(PieceCount),
+  id: Text, outline: Polygon, requiredPieceCount: Schema.optionalKey(PieceCount), seam: Schema.optionalKey(CenterJoin),
   cutouts: Schema.Array(Schema.Struct({ kind: CutoutKind, x: Inches, y: Inches, w: Length, h: Length })),
 })
 /** Owner-authorized estimates retain the actual rectangle sent to the kernels. */
@@ -118,9 +119,9 @@ export const InspectReply = Schema.Struct({ files: Schema.Array(Schema.Struct({
 
 /** Persisted output consumed by the agent to prepare an invoice. */
 export const Quote = Schema.Struct({
-  installations: Schema.Array(Schema.Struct({ id: Text, label: Text, areaSqIn: Decimal, sf: TwoDp, requiredPieceCount: Schema.optionalKey(PieceCount) })),
+  installations: Schema.Array(Schema.Struct({ id: Text, label: Text, areaSqIn: Decimal, sf: TwoDp, requiredPieceCount: Schema.optionalKey(PieceCount), seam: Schema.optionalKey(CenterJoin) })),
   totalSf: TwoDp, layout: Schema.NullOr(Layout), slabCount: Schema.NullOr(Count), slabSf: Schema.NullOr(Decimal),
-  pricing: Schema.Struct({ materialCost: Schema.NullOr(TwoDp), materialRatePerSf: Schema.NullOr(TwoDp), laborPerSf: Schema.NullOr(TwoDp), ratePerSf: Schema.NullOr(TwoDp) }),
+  pricing: Schema.Struct({ materialCost: Schema.NullOr(TwoDp), markupPercent: Schema.NullOr(Decimal), materialCharge: Schema.NullOr(TwoDp), materialRatePerSf: Schema.NullOr(TwoDp), laborPerSf: Schema.NullOr(TwoDp), ratePerSf: Schema.NullOr(TwoDp) }),
   invoice: Schema.Array(Schema.Struct({ installation: Text, material: Schema.NullOr(Text), sf: TwoDp, ratePerSf: Schema.NullOr(TwoDp), amount: Schema.NullOr(TwoDp) })),
   blanks: Schema.Array(Schema.Struct({ field: Text, question: Text })),
   assumptions: Schema.Array(Schema.Struct({ setting: Text, value: Schema.String, note: Schema.Literal("assumed, confirm with Dad") })),

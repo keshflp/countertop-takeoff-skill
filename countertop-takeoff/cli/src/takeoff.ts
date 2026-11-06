@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { calculate, prepare } from "./core"
 import { JobError, KernelError } from "./errors"
+import { matchesCenterJoin } from "./geometry"
 import { Kernels } from "./kernels"
 import { Job, Quote } from "./schema"
 
@@ -19,6 +20,11 @@ export const takeoff = Effect.fn("Takeoff.quote")(function* (job: Job) {
       const count = layout.pieces.filter(piece => piece.installationId === installation.id).length
       if (count === 0 || (installation.requiredPieceCount !== undefined && count !== installation.requiredPieceCount)) return yield* Effect.fail(new KernelError({
         message: `${installation.label} needs ${installation.requiredPieceCount === undefined ? "at least one" : `exactly ${installation.requiredPieceCount}`} cut piece(s), but the layout returned ${count}. Ask Rishi to check the layout tool.`,
+      }))
+    }
+    for (const installation of prepared.kernelInstallations) {
+      if (!matchesCenterJoin(installation, layout, prepared.settings)) return yield* Effect.fail(new KernelError({
+        message: `${installation.id}: the layout did not return the requested center join and two equal rectangular blanks, or it placed the join too close to another opening. Ask Rishi to check the layout tool.`,
       }))
     }
   }

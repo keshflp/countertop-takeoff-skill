@@ -20,6 +20,9 @@ const estimateReadback = (estimates: Quote["geometryEstimates"]) => estimates.le
   "Preliminary: estimated geometry",
   ...estimates.map(e => `${e.installationId}, cutout ${e.cutoutIndex + 1}: estimated ${e.fields.join(", ")}; ${e.wIn} by ${e.hIn} inches at top-left (${e.xIn}, ${e.yIn}) inches. ${e.note}`),
 ]
+const joinReadback = (installations: readonly Pick<Job["installations"][number], "label" | "seam">[]) => installations.flatMap(i => i.seam === undefined ? [] : [
+  `${i.label}: join two equal halves through cutout ${i.seam.cutoutIndex + 1} at the run's midpoint.`,
+])
 
 /** Owns persisted step order; the concrete kernel Layer is chosen only by the entrypoint. */
 export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) {
@@ -167,7 +170,7 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
         return `${i.label}: ${s.kind}, ${size}.${i.requiredPieceCount === undefined ? "" : ` Exactly ${i.requiredPieceCount} cut piece(s) required.`} ${i.cutouts.length ? i.cutouts.map(c => `${c.kind} ${c.wIn} by ${c.hIn} inches, ${"leg" in c.at ? c.at.centerFromStartIn === "center" ? `centered along the full ${c.at.leg} leg` : `${c.at.leg} leg center ${c.at.centerFromStartIn} inches from its outer start` : `top-left (${c.at.xIn}, ${c.at.yIn}) inches`}`).join("; ") : "No cutouts"}.`
       })
       const readback = calculate(job, prepared, null)
-      return [...estimateReadback(prepared.geometryEstimates), ...lines, `Material: ${job.material.name ?? "blank"}; vendor: ${job.material.vendor ?? "blank"}; price/SF: ${job.material.pricePerSf ?? "blank"}; slab: ${job.material.slab ? `${job.material.slab.lengthIn} by ${job.material.slab.widthIn} inches` : "blank"}; labor/SF: ${job.laborPerSf ?? "blank"}.`,
+      return [...estimateReadback(prepared.geometryEstimates), ...lines, ...joinReadback(job.installations), `Material: ${job.material.name ?? "blank"}; vendor: ${job.material.vendor ?? "blank"}; supplier price/SF: ${job.material.pricePerSf ?? "blank"}; material markup: ${job.material.markupPercent === null ? "blank" : `${job.material.markupPercent}% on cost`}; slab: ${job.material.slab ? `${job.material.slab.lengthIn} by ${job.material.slab.widthIn} inches` : "blank"}; labor/SF: ${job.laborPerSf ?? "blank"}.`,
         ...readback.assumptions.map(a => `${a.setting}: ${a.value}, ${a.note}.`),
         ...readback.blanks.map(b => b.question), ...readback.warnings, "Show Dad preview.png and this readback. Run confirm only after he says yes."].join("\n")
     }),
@@ -191,7 +194,7 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
       if ((yield* preflightState(dir)) !== preflightHash || (yield* jobState(dir)).jobHash !== jobHash) return yield* Effect.fail(new WorkflowError({ message: "The job changed while quoting. Run check and confirm again." }))
       yield* write(path.join(dir, "quote.json"), quote)
       yield* write(path.join(dir, "quoted.json"), { jobHash, preflightHash, quoteHash: yield* fingerprint(path.join(dir, "quote.json")), layoutHash: yield* fingerprint(path.join(dir, "layout.png")) })
-      return [...estimateReadback(quote.geometryEstimates), `${quote.totalSf} SF; slabs: ${quote.slabCount ?? "blank"}; material cost: ${quote.pricing.materialCost === null ? "blank" : `$${quote.pricing.materialCost}`}; rate/SF including labor: ${quote.pricing.ratePerSf ?? "blank"}.`, `Saved quote.json and layout.png.${quote.layout === null ? " The picture shows the shapes; slab layout needs the slab size." : ""}`, ...quote.blanks.map(b => b.question), ...quote.warnings].join("\n")
+      return [...estimateReadback(quote.geometryEstimates), ...joinReadback(quote.installations), `${quote.totalSf} SF; slabs: ${quote.slabCount ?? "blank"}; supplier material cost: ${quote.pricing.materialCost === null ? "blank" : `$${quote.pricing.materialCost}`}; material markup: ${quote.pricing.markupPercent === null ? "blank" : `${quote.pricing.markupPercent}% on cost`}; material charge: ${quote.pricing.materialCharge === null ? "blank" : `$${quote.pricing.materialCharge}`}; labor/SF: ${quote.pricing.laborPerSf ?? "blank"}; rate/SF including labor: ${quote.pricing.ratePerSf ?? "blank"}.`, `Saved quote.json and layout.png.${quote.layout === null ? " The picture shows the shapes; slab layout needs the slab size." : ""}`, ...quote.blanks.map(b => b.question), ...quote.warnings].join("\n")
     }),
     next: Effect.fn("Workflow.next")(function* (jobDir: string) {
       const dir = yield* privateDir(jobDir)
