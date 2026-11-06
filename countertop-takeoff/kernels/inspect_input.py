@@ -42,6 +42,8 @@ def inspect_file(file: str | Path) -> Inspection:
             with pymupdf.open(path) as document:
                 if document.is_encrypted or (document.metadata or {}).get("encryption"):
                     result["problem"] = "That PDF is password protected. Please send an unlocked copy."
+                elif document.is_repaired:
+                    result["problem"] = "That PDF is damaged. Please send the original again."
                 elif document.page_count == 0:
                     result["problem"] = "That PDF has no pages. Please send the plans again."
                 else:

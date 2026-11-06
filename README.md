@@ -19,12 +19,12 @@ Keep private jobs in `%USERPROFILE%\takeoff-private\<job>\`, outside the skill a
 
 ## Evaluate
 
-From the repo root, run the public synthetic cases:
+For evaluator development, run `bun install --cwd countertop-takeoff/cli` once. From the repo root, run the public synthetic cases:
 
 ```powershell
 uv run evals/kitchen/eval.py --layout-cmd "uv run countertop-takeoff/kernels/layout.py" --quote-cmd "bun countertop-takeoff/cli/src/eval.ts"
 ```
 
-Pass `--cases C:\Users\<user>\takeoff-private\<cases>` for private cases. The evaluator checks quantities, slab placement and seams, pricing, and blanks, then reports excess slabs against the case optimum. Work on CLI source requires its development dependencies; Dad runs the bundled CLI.
+Pass `--cases C:\Users\<user>\takeoff-private\<cases>` for private cases. The evaluator checks quantities, slab placement and seams, pricing, and blanks, then reports excess slabs against the case optimum. Dad runs the bundled CLI.
 
 [Parked ideas](IDEAS.md) enter the skill when a real job needs them. The tag `baseline-2026-11-06` preserves the removed multi-family pipeline. [MIT license](countertop-takeoff/LICENSE).

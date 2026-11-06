@@ -106,6 +106,17 @@ class InspectInputTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["previews"], [])
 
+    def test_pdf_that_needs_repair_is_reported_as_damaged(self) -> None:
+        path = self.directory / "truncated.pdf"
+        with pymupdf.open() as document:
+            document.new_page()
+            document.save(path)
+        path.write_bytes(path.read_bytes()[:-40])
+        result = inspect_file(path)
+        self.assertFalse(result["ok"])
+        self.assertIn("damaged", result["problem"])
+        self.assertEqual(result["previews"], [])
+
     def test_cli_returns_all_results_and_selfcheck_is_json(self) -> None:
         image = self.directory / "phone sketch.png"
         Image.new("RGB", (10, 10)).save(image)

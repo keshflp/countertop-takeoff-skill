@@ -12,7 +12,7 @@ Talk to Dad like an estimator: sizes, square feet, slabs and price.
 **Blank, not guessed.** Unknown values stay `null`, with one plain question for each. Ask about unreadable dimensions before drawing the counter.
 
 `<skill>` is this skill folder. Keep job folders outside the skill folder and its repository, for example `C:\Users\<user>\takeoff-private\<job>`, because plans are private.
-All commands below use `bun <skill>/cli/takeoff.js`. Whenever you are unsure what comes next, run `bun <skill>/cli/takeoff.js next <jobDir>` after preflight.
+Whenever you are unsure what comes next, run `bun <skill>/cli/takeoff.js next <jobDir>` after preflight.
 
 ## Steps
 
