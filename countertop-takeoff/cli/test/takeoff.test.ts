@@ -181,6 +181,9 @@ test("private job folders cannot be in the skill repository, including through a
   const link = join(root, "linked-code")
   await symlink(skillDir, link, "junction")
   await expect(execute(w.preflight(join(link, "private-job-must-not-be-created"), [input]))).rejects.toThrow("Keep plans outside")
+  // A separate checkout of the same public repo is equally unsafe for private plans.
+  await writeFile(join(root, ".git"), await readFile(resolve(skillDir, "..", ".git")))
+  await expect(execute(w.preflight(join(root, "another-checkout-job"), [input]))).rejects.toThrow("Keep plans outside")
 })
 
 test("null slabs still save a quote with blanks and a shapes-only picture", async () => {

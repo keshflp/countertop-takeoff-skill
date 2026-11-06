@@ -49,17 +49,33 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
     const relative = path.relative(root, target)
     return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
   }
-  const privateDir = Effect.fn("Workflow.privateDir")(function* (jobDir: string) {
-    const target = yield* canonical(jobDir)
-    let root = yield* canonical(skillDir)
-    let cursor = root
+  const repository = Effect.fn("Workflow.repository")(function* (directory: string) {
+    let cursor = directory
     while (true) {
-      if (yield* exists(path.join(cursor, ".git"))) { root = cursor; break }
+      const marker = path.join(cursor, ".git")
+      if (yield* exists(marker)) {
+        const info = yield* io(fs.stat(marker), "I couldn't check whether the job folder keeps plans private.")
+        let metadata = marker
+        if (info.type !== "Directory") {
+          const match = /^gitdir:\s*(.+)$/m.exec((yield* read(marker)).trim())
+          if (!match?.[1]) return yield* Effect.fail(new WorkflowError({ message: "I couldn't check this code folder. Choose a fresh private job folder under Takeoffs." }))
+          metadata = path.resolve(cursor, match[1].trim())
+        }
+        const commonFile = path.join(metadata, "commondir")
+        const common = yield* canonical((yield* exists(commonFile)) ? path.resolve(metadata, (yield* read(commonFile)).trim()) : metadata)
+        return { root: cursor, common }
+      }
       const parent = path.dirname(cursor)
-      if (parent === cursor) break
+      if (parent === cursor) return null
       cursor = parent
     }
-    if (inside(root, target)) return yield* Effect.fail(new WorkflowError({
+  })
+  const privateDir = Effect.fn("Workflow.privateDir")(function* (jobDir: string) {
+    const target = yield* canonical(jobDir)
+    const skill = yield* canonical(skillDir)
+    const ownRepo = yield* repository(skill)
+    const targetRepo = yield* repository(target)
+    if (inside(ownRepo?.root ?? skill, target) || (ownRepo !== null && targetRepo?.common === ownRepo.common)) return yield* Effect.fail(new WorkflowError({
       message: `Keep plans outside the takeoff code folder so they stay private. Use ${path.join(homedir(), "Takeoffs", "<job>")} for this job.`,
     }))
     return target
