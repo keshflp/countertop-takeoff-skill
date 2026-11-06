@@ -19,12 +19,13 @@ export function resolveSettings(job: Job) {
 export const prepare = Effect.fn("Takeoff.prepare")(function* (job: Job) {
   const installations = yield* expand(job)
   const { settings, assumptions } = resolveSettings(job)
-  return { installations, settings, assumptions }
+  const kernelInstallations = installations.map(({ label: _label, areaTicks: _area, geometryEstimates: _estimates, ...installation }) => installation)
+  return { installations, kernelInstallations, settings, assumptions, geometryEstimates: installations.flatMap(i => i.geometryEstimates) }
 })
 
 /** Exact gross quantities and invoice arithmetic, independent of files and Python. */
 export function calculate(job: Job, prepared: Effect.Success<ReturnType<typeof prepare>>, layout: Layout | null): Quote {
-  const installations = prepared.installations.map(i => ({ id: i.id, label: i.label, areaSqIn: areaDecimal({ n: i.areaTicks, d: 256n }), sf: rounded({ n: i.areaTicks, d: 36864n }) }))
+  const installations = prepared.installations.map(i => ({ id: i.id, label: i.label, areaSqIn: areaDecimal({ n: i.areaTicks, d: 256n }), sf: rounded({ n: i.areaTicks, d: 36864n }), ...(i.requiredPieceCount === undefined ? {} : { requiredPieceCount: i.requiredPieceCount }) }))
   const totalTicks = prepared.installations.reduce((sum, i) => sum + i.areaTicks, 0n)
   const slab = job.material.slab
   const slabArea = slab === null ? null : { n: BigInt(slab.lengthIn * 16) * BigInt(slab.widthIn * 16), d: 36864n }
@@ -52,5 +53,6 @@ export function calculate(job: Job, prepared: Effect.Success<ReturnType<typeof p
       { setting: "nominalSlabSf", value: "slab pricing uses the full untrimmed size", note: "assumed, confirm with Dad" },
       { setting: "shapeRules", value: "outer wall lengths; uniform depth; cutouts centered in their leg", note: "assumed, confirm with Dad" }],
     warnings: layout?.warnings ?? [],
+    geometryEstimates: prepared.geometryEstimates,
   }
 }

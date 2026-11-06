@@ -10,7 +10,7 @@ import { calculate, prepare, resolveSettings } from "../src/core"
 import { decimal, rounded } from "../src/exact"
 import { KernelError } from "../src/errors"
 import { kernelLayer, Kernels } from "../src/kernels"
-import { Job, Layout, Quote } from "../src/schema"
+import { DrawInput, Job, Layout, LayoutInput, Quote } from "../src/schema"
 import { takeoff } from "../src/takeoff"
 import { workflow } from "../src/workflow"
 
@@ -24,7 +24,7 @@ const layout: Layout = {
   seams: [], slabs: [{ index: 1, placements: [{ pieceId: "p1", x: 0, y: 0, rotated: false }] }],
   slabCount: 1, lowerBound: 1, provenOptimal: true, warnings: [],
 }
-const fake = kernelLayer((name, args) => {
+const fakeTransport: Parameters<typeof kernelLayer>[0] = (name, args) => {
   if (args.includes("--selfcheck")) return Effect.succeed('{"ok":true}')
   if (name === "layout") return Effect.succeed(JSON.stringify(layout))
   if (name === "inspect_input") return Effect.succeed(JSON.stringify({ files: args.map(path => ({ path, ok: true, kind: "image", pages: 1, previews: [path], problem: null })) }))
@@ -33,7 +33,8 @@ const fake = kernelLayer((name, args) => {
     try: async () => { if (!out) throw new Error("missing test output path"); await writeFile(out, "fake PNG"); return JSON.stringify({ ok: true, path: out }) },
     catch: () => new KernelError({ message: "Test drawing failed" }),
   })
-})
+}
+const fake = kernelLayer(fakeTransport)
 const run = <A, E>(effect: Effect.Effect<A, E, Kernels>) => Effect.runPromise(effect.pipe(Effect.provide(fake)))
 function withShape(shape: Job["installations"][number]["shape"], cutouts: Job["installations"][number]["cutouts"] = []): Job {
   return { ...job, installations: [{ id: "perimeter", label: "Perimeter", shape, cutouts }] }
@@ -195,6 +196,65 @@ test("null slabs still save a quote with blanks and a shapes-only picture", asyn
   expect(result.layout).toBeNull()
   expect(result.pricing.materialCost).toBeNull()
   expect(result.blanks).toHaveLength(1)
+})
+
+test("centered estimates survive quote and drawing while exact cut-piece counts are enforced", async () => {
+  const estimate = { fields: ["wIn", "hIn", "at"], note: "Owner authorized these synthetic opening estimates for this test." } satisfies NonNullable<Job["installations"][number]["cutouts"][number]["estimate"]>
+  const centered = { ...job, installations: [{ id: "island", label: "Island", shape: { kind: "rect", lengthIn: 100, depthIn: 24 }, requiredPieceCount: 2,
+    cutouts: [{ kind: "sink", wIn: 20, hIn: 16, at: { leg: "main", centerFromStartIn: "center" }, estimate }] }] } satisfies Job
+  const expected = [{ installationId: "island", cutoutIndex: 0, ...estimate, xIn: 40, yIn: 4, wIn: 20, hIn: 16 }]
+  const prepared = await Effect.runPromise(prepare(centered))
+  expect(prepared.geometryEstimates).toEqual(expected)
+  const numeric = { ...centered, installations: centered.installations.map(i => ({ ...i, cutouts: i.cutouts.map(c => ({ ...c, at: { leg: "main", centerFromStartIn: 50 } })) })) } satisfies Job
+  expect((await Effect.runPromise(prepare(numeric))).kernelInstallations).toEqual(prepared.kernelInstallations)
+  const twoPieces: Layout = { ...layout,
+    pieces: [{ id: "p1", installationId: "island", outline: [[0, 0], [25, 0], [25, 24], [0, 24]] }, { id: "p2", installationId: "island", outline: [[25, 0], [100, 0], [100, 24], [25, 24]] }],
+    seams: [{ installationId: "island", x0: 25, y0: 0, x1: 25, y1: 24 }],
+    slabs: [{ index: 1, placements: [{ pieceId: "p1", x: 0, y: 0, rotated: false }, { pieceId: "p2", x: 25.25, y: 0, rotated: false }] }],
+  }
+  const drawings: DrawInput[] = []
+  const observed = kernelLayer((name, args, stdin) => {
+    if (name === "layout" && !args.includes("--selfcheck")) {
+      const request = Schema.decodeUnknownSync(LayoutInput)(JSON.parse(stdin))
+      expect(request.installations[0]?.requiredPieceCount).toBe(2)
+      return Effect.succeed(JSON.stringify(twoPieces))
+    }
+    if (name === "draw_layout" && !args.includes("--selfcheck")) drawings.push(Schema.decodeUnknownSync(DrawInput)(JSON.parse(stdin)))
+    return fakeTransport(name, args, stdin)
+  })
+  const { dir, input } = await fixture()
+  const w = await Effect.runPromise(workflow(skillDir).pipe(Effect.provide(observed), Effect.provide(BunServices.layer)))
+  await run(w.preflight(dir, [input]))
+  await writeFile(join(dir, "job.json"), JSON.stringify(centered))
+  expect(await run(w.check(dir))).toContain("Preliminary: estimated geometry")
+  await run(w.confirm(dir))
+  expect(await Effect.runPromise(w.quote(dir).pipe(Effect.provide(observed)))).toContain("Preliminary: estimated geometry")
+  const quote = Schema.decodeUnknownSync(Quote)(JSON.parse(await readFile(join(dir, "quote.json"), "utf8")))
+  expect(quote.geometryEstimates).toEqual(expected)
+  expect(quote.installations[0]?.requiredPieceCount).toBe(2)
+  expect(quote.invoice).toHaveLength(1)
+  expect(drawings.map(d => d.geometryEstimates)).toEqual([expected, expected])
+  expect(drawings.every(d => d.installations[0]?.requiredPieceCount === 2)).toBe(true)
+  expect(quote.assumptions).toEqual((await run(takeoff(job))).assumptions)
+  await expect(run(takeoff(centered))).rejects.toThrow("exactly 2")
+  expect((await run(takeoff(job))).geometryEstimates).toEqual([])
+  const invalidEstimate = { ...centered, installations: centered.installations.map(i => ({ ...i, cutouts: i.cutouts.map(c => ({ ...c, estimate: { ...estimate, fields: ["wIn", "wIn"] } })) })) }
+  expect(() => Schema.decodeUnknownSync(Job)(invalidEstimate)).toThrow()
+})
+
+test("center uses each full outer leg and refuses off-grid resulting rectangles", async () => {
+  const u = { kind: "U", backIn: 120, leftIn: 80, rightIn: 100, depthIn: 24 } satisfies Job["installations"][number]["shape"]
+  for (const [leg, center] of [["back", 60], ["left", 40], ["right", 50]] as const) {
+    const base = { kind: "sink", wIn: 20, hIn: 16 } as const
+    const symbolic = await Effect.runPromise(prepare(withShape(u, [{ ...base, at: { leg, centerFromStartIn: "center" } }])))
+    const numeric = await Effect.runPromise(prepare(withShape(u, [{ ...base, at: { leg, centerFromStartIn: center } }])))
+    expect(symbolic.kernelInstallations).toEqual(numeric.kernelInstallations)
+    expect(symbolic.geometryEstimates).toEqual([])
+  }
+  const offGrid = withShape({ kind: "rect", lengthIn: 100.0625, depthIn: 24 }, [{ kind: "sink", wIn: 20, hIn: 16, at: { leg: "main", centerFromStartIn: "center" } }])
+  await expect(Effect.runPromise(prepare(offGrid))).rejects.toThrow("sixteenth-inch marks")
+  const exactHalfTickCenter = withShape({ kind: "rect", lengthIn: 100.0625, depthIn: 24 }, [{ kind: "sink", wIn: 20.0625, hIn: 16, at: { leg: "main", centerFromStartIn: "center" } }])
+  expect((await Effect.runPromise(prepare(exactHalfTickCenter))).kernelInstallations[0]?.cutouts[0]?.x).toBe(40)
 })
 
 test("the committed standalone bundle matches its source", async () => {

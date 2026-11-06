@@ -8,6 +8,7 @@ const Inches = Schema.Number.check(
 )
 const Length = Inches.check(Schema.isGreaterThan(0))
 const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+const PieceCount = Count.check(Schema.isGreaterThan(0))
 const Text = Schema.String.check(Schema.makeFilter((s) => s.trim().length > 0))
 const Point = Schema.Tuple([Inches, Inches])
 const Polygon = Schema.Array(Point).check(Schema.isMinLength(4))
@@ -32,12 +33,16 @@ const Shape = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("outline"), points: Polygon }),
 ])
 const CutoutKind = Schema.Literals(["sink", "cooktop", "other"])
+const EstimateFields = Schema.Array(Schema.Literals(["wIn", "hIn", "at"])).check(
+  Schema.isMinLength(1), Schema.makeFilter(fields => new Set(fields).size === fields.length),
+)
 const Cutout = Schema.Struct({
   kind: CutoutKind, wIn: Length, hIn: Length,
   at: Schema.Union([
-    Schema.Struct({ leg: Schema.Literals(["main", "back", "left", "right"]), centerFromStartIn: Inches }),
+    Schema.Struct({ leg: Schema.Literals(["main", "back", "left", "right"]), centerFromStartIn: Schema.Union([Inches, Schema.Literal("center")]) }),
     Schema.Struct({ xIn: Inches, yIn: Inches }),
   ]),
+  estimate: Schema.optionalKey(Schema.Struct({ fields: EstimateFields, note: Text })),
 })
 
 /** Confirmed facts, including explicit nulls for facts Dad has not supplied. */
@@ -48,7 +53,7 @@ export const Job = Schema.Struct({
     slab: Schema.NullOr(Slab),
   }),
   laborPerSf: Schema.NullOr(Decimal),
-  installations: Schema.Array(Schema.Struct({ id: Text, label: Text, shape: Shape, cutouts: Schema.Array(Cutout) })).check(Schema.isMinLength(1)),
+  installations: Schema.Array(Schema.Struct({ id: Text, label: Text, shape: Shape, cutouts: Schema.Array(Cutout), requiredPieceCount: Schema.optionalKey(PieceCount) })).check(Schema.isMinLength(1)),
   settings: Schema.Struct({
     slabTrimIn: Schema.optionalKey(Settings.fields.slabTrimIn),
     kerfIn: Schema.optionalKey(Settings.fields.kerfIn),
@@ -61,9 +66,14 @@ export const Job = Schema.Struct({
 export interface Job extends Schema.Schema.Type<typeof Job> {}
 
 const Installation = Schema.Struct({
-  id: Text, outline: Polygon,
+  id: Text, outline: Polygon, requiredPieceCount: Schema.optionalKey(PieceCount),
   cutouts: Schema.Array(Schema.Struct({ kind: CutoutKind, x: Inches, y: Inches, w: Length, h: Length })),
 })
+/** Owner-authorized estimates retain the actual rectangle sent to the kernels. */
+export const GeometryEstimates = Schema.Array(Schema.Struct({
+  installationId: Text, cutoutIndex: Count, fields: EstimateFields, note: Text,
+  xIn: Inches, yIn: Inches, wIn: Length, hIn: Length,
+}))
 /** CLI-expanded geometry sent to the layout kernel. */
 export const LayoutInput = Schema.Struct({ slab: Slab, settings: Settings, installations: Schema.Array(Installation) })
 /** Layout request in inches, converted from exact sixteenth-inch integers. */
@@ -91,7 +101,7 @@ export interface Layout extends Schema.Schema.Type<typeof Layout> {}
 export const LayoutReply = Schema.Union([Layout, KernelFailure])
 
 /** Drawing uses the same geometry, optionally with a solved layout. */
-export const DrawInput = Schema.Struct({ slab: Schema.NullOr(Slab), settings: Settings, installations: Schema.Array(Installation), layout: Schema.optionalKey(Layout) })
+export const DrawInput = Schema.Struct({ slab: Schema.NullOr(Slab), settings: Settings, installations: Schema.Array(Installation), layout: Schema.optionalKey(Layout), geometryEstimates: Schema.optionalKey(GeometryEstimates) })
 /** Preview or finished-layout drawing request. */
 export interface DrawInput extends Schema.Schema.Type<typeof DrawInput> {}
 /** T2's concrete drawing protocol returns the saved PNG path on success. */
@@ -108,13 +118,14 @@ export const InspectReply = Schema.Struct({ files: Schema.Array(Schema.Struct({
 
 /** Persisted output consumed by the agent to prepare an invoice. */
 export const Quote = Schema.Struct({
-  installations: Schema.Array(Schema.Struct({ id: Text, label: Text, areaSqIn: Decimal, sf: TwoDp })),
+  installations: Schema.Array(Schema.Struct({ id: Text, label: Text, areaSqIn: Decimal, sf: TwoDp, requiredPieceCount: Schema.optionalKey(PieceCount) })),
   totalSf: TwoDp, layout: Schema.NullOr(Layout), slabCount: Schema.NullOr(Count), slabSf: Schema.NullOr(Decimal),
   pricing: Schema.Struct({ materialCost: Schema.NullOr(TwoDp), materialRatePerSf: Schema.NullOr(TwoDp), laborPerSf: Schema.NullOr(TwoDp), ratePerSf: Schema.NullOr(TwoDp) }),
   invoice: Schema.Array(Schema.Struct({ installation: Text, material: Schema.NullOr(Text), sf: TwoDp, ratePerSf: Schema.NullOr(TwoDp), amount: Schema.NullOr(TwoDp) })),
   blanks: Schema.Array(Schema.Struct({ field: Text, question: Text })),
   assumptions: Schema.Array(Schema.Struct({ setting: Text, value: Schema.String, note: Schema.Literal("assumed, confirm with Dad") })),
   warnings: Schema.Array(Schema.String),
+  geometryEstimates: GeometryEstimates,
 })
 /** Computed quantities, pricing, and the unanswered questions. */
 export interface Quote extends Schema.Schema.Type<typeof Quote> {}

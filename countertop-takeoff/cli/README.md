@@ -26,6 +26,21 @@ one question each. Without slab dimensions, quote saves quantities and questions
 with a shapes-only layout.png. Unknown labor leaves the invoice rate and amount
 blank. Expected failures print one plain message and exit 1, without a traceback.
 
+Leg-relative cutouts accept `centerFromStartIn: "center"`; the CLI centers along
+the full outer leg without agent arithmetic. An optional cutout
+`estimate: {fields: ["wIn", "hIn", "at"], note: "owner authorization and basis"}`
+marks only explicitly authorized estimates. The fields list must be nonempty and
+unique. `quote.geometryEstimates` always exists, preserves those fields and note,
+and records the actual resolved rectangle. Both drawing modes receive the same
+metadata. Check and quote visibly say `Preliminary: estimated geometry`; defaults
+remain in `assumptions`, separate from geometry estimates. A centered position
+alone does not mark anything estimated.
+
+Optional installation `requiredPieceCount` requires exactly that many rectangular
+fabrication pieces. It passes through to layout and drawing, remains on the quote
+installation, and is checked independently against the successful kernel reply.
+Fabrication splits do not split invoice lines or duplicate installed quantities.
+
 ## Development
 
 Effect 4.1.2 was npm's stable release when checked on 2026-11-06. Commands use
@@ -83,5 +98,7 @@ with known slabs. The first CLI candidate with T2 layout passes all gates on all
 report marks its aggregate score unavailable because one case has no slab size;
 do not interpret the absence of that layout as a failed gate.
 
-No confirmed private cases were available for this run. Full drawing integration
-and final evaluator revision evidence are recorded in the PR.
+The base synthetic preflight/check/confirm/quote/next run passed against all three
+real kernels, with the bundle outside the repository and no node_modules. The
+extended evaluator and drawing integration evidence is recorded in the PR.
+Real-case sources and results remain outside this public repository.

@@ -16,6 +16,10 @@ const Checked = Schema.Struct({ jobHash: Hash, preflightHash: Hash, previewHash:
 const Confirmed = Schema.Struct({ ...Checked.fields, confirmed: Schema.Literal(true) })
 const Quoted = Schema.Struct({ jobHash: Hash, preflightHash: Hash, quoteHash: Hash, layoutHash: Hash })
 const hash = (data: string | Uint8Array) => createHash("sha256").update(data).digest("hex")
+const estimateReadback = (estimates: Quote["geometryEstimates"]) => estimates.length === 0 ? [] : [
+  "Preliminary: estimated geometry",
+  ...estimates.map(e => `${e.installationId}, cutout ${e.cutoutIndex + 1}: estimated ${e.fields.join(", ")}; ${e.wIn} by ${e.hIn} inches at top-left (${e.xIn}, ${e.yIn}) inches. ${e.note}`),
+]
 
 /** Owns persisted step order; the concrete kernel Layer is chosen only by the entrypoint. */
 export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) {
@@ -152,7 +156,7 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
       const preflightHash = yield* preflightState(dir)
       const { job, jobHash } = yield* jobState(dir)
       const prepared = yield* prepare(job)
-      yield* kernels.draw({ slab: job.material.slab, settings: prepared.settings, installations: prepared.installations.map(({ id, outline, cutouts }) => ({ id, outline, cutouts })) }, path.join(dir, "preview.png"), true)
+      yield* kernels.draw({ slab: job.material.slab, settings: prepared.settings, installations: prepared.kernelInstallations, geometryEstimates: prepared.geometryEstimates }, path.join(dir, "preview.png"), true)
       yield* write(path.join(dir, "check.json"), { jobHash, preflightHash, previewHash: yield* fingerprint(path.join(dir, "preview.png")) })
       const lines = job.installations.map(i => {
         const s = i.shape
@@ -160,10 +164,10 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
           : s.kind === "L" ? `back ${s.backIn}, ${s.side} side ${s.sideIn}, depth ${s.depthIn} inches`
           : s.kind === "U" ? `left ${s.leftIn}, back ${s.backIn}, right ${s.rightIn}, depth ${s.depthIn} inches`
           : `corners ${s.points.map(p => `(${p.join(", ")})`).join(" ")} inches`
-        return `${i.label}: ${s.kind}, ${size}. ${i.cutouts.length ? i.cutouts.map(c => `${c.kind} ${c.wIn} by ${c.hIn} inches, ${"leg" in c.at ? `${c.at.leg} leg center ${c.at.centerFromStartIn} inches from its outer start` : `top-left (${c.at.xIn}, ${c.at.yIn}) inches`}`).join("; ") : "No cutouts"}.`
+        return `${i.label}: ${s.kind}, ${size}.${i.requiredPieceCount === undefined ? "" : ` Exactly ${i.requiredPieceCount} cut piece(s) required.`} ${i.cutouts.length ? i.cutouts.map(c => `${c.kind} ${c.wIn} by ${c.hIn} inches, ${"leg" in c.at ? c.at.centerFromStartIn === "center" ? `centered along the full ${c.at.leg} leg` : `${c.at.leg} leg center ${c.at.centerFromStartIn} inches from its outer start` : `top-left (${c.at.xIn}, ${c.at.yIn}) inches`}`).join("; ") : "No cutouts"}.`
       })
       const readback = calculate(job, prepared, null)
-      return [...lines, `Material: ${job.material.name ?? "blank"}; vendor: ${job.material.vendor ?? "blank"}; price/SF: ${job.material.pricePerSf ?? "blank"}; slab: ${job.material.slab ? `${job.material.slab.lengthIn} by ${job.material.slab.widthIn} inches` : "blank"}; labor/SF: ${job.laborPerSf ?? "blank"}.`,
+      return [...estimateReadback(prepared.geometryEstimates), ...lines, `Material: ${job.material.name ?? "blank"}; vendor: ${job.material.vendor ?? "blank"}; price/SF: ${job.material.pricePerSf ?? "blank"}; slab: ${job.material.slab ? `${job.material.slab.lengthIn} by ${job.material.slab.widthIn} inches` : "blank"}; labor/SF: ${job.laborPerSf ?? "blank"}.`,
         ...readback.assumptions.map(a => `${a.setting}: ${a.value}, ${a.note}.`),
         ...readback.blanks.map(b => b.question), "Show Dad preview.png and this readback. Run confirm only after he says yes."].join("\n")
     }),
@@ -182,12 +186,12 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
       yield* confirmation(dir, jobHash, preflightHash)
       const quote = yield* takeoff(job)
       const prepared = yield* prepare(job)
-      yield* kernels.draw({ slab: job.material.slab, settings: prepared.settings, installations: prepared.installations.map(({ id, outline, cutouts }) => ({ id, outline, cutouts })), ...(quote.layout === null ? {} : { layout: quote.layout }) }, path.join(dir, "layout.png"), quote.layout === null)
+      yield* kernels.draw({ slab: job.material.slab, settings: prepared.settings, installations: prepared.kernelInstallations, geometryEstimates: prepared.geometryEstimates, ...(quote.layout === null ? {} : { layout: quote.layout }) }, path.join(dir, "layout.png"), quote.layout === null)
       // Refuse to publish if the facts or inputs changed while Python was running.
       if ((yield* preflightState(dir)) !== preflightHash || (yield* jobState(dir)).jobHash !== jobHash) return yield* Effect.fail(new WorkflowError({ message: "The job changed while quoting. Run check and confirm again." }))
       yield* write(path.join(dir, "quote.json"), quote)
       yield* write(path.join(dir, "quoted.json"), { jobHash, preflightHash, quoteHash: yield* fingerprint(path.join(dir, "quote.json")), layoutHash: yield* fingerprint(path.join(dir, "layout.png")) })
-      return [`${quote.totalSf} SF; slabs: ${quote.slabCount ?? "blank"}; material cost: ${quote.pricing.materialCost === null ? "blank" : `$${quote.pricing.materialCost}`}; rate/SF including labor: ${quote.pricing.ratePerSf ?? "blank"}.`, `Saved quote.json and layout.png.${quote.layout === null ? " The picture shows the shapes; slab layout needs the slab size." : ""}`, ...quote.blanks.map(b => b.question), ...quote.warnings].join("\n")
+      return [...estimateReadback(quote.geometryEstimates), `${quote.totalSf} SF; slabs: ${quote.slabCount ?? "blank"}; material cost: ${quote.pricing.materialCost === null ? "blank" : `$${quote.pricing.materialCost}`}; rate/SF including labor: ${quote.pricing.ratePerSf ?? "blank"}.`, `Saved quote.json and layout.png.${quote.layout === null ? " The picture shows the shapes; slab layout needs the slab size." : ""}`, ...quote.blanks.map(b => b.question), ...quote.warnings].join("\n")
     }),
     next: Effect.fn("Workflow.next")(function* (jobDir: string) {
       const dir = yield* privateDir(jobDir)

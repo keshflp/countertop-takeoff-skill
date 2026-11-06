@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { JobError } from "./errors"
-import type { Job, LayoutInput } from "./schema"
+import type { Job, LayoutInput, Quote } from "./schema"
 
 type Point = readonly [bigint, bigint]
 const point = (x: bigint, y: bigint): Point => [x, y]
@@ -94,7 +94,6 @@ export const expand = Effect.fn("Geometry.expand")(function* (job: Job) {
         x = ticks(cutout.at.xIn); y = ticks(cutout.at.yIn)
       } else {
         const { leg, centerFromStartIn } = cutout.at
-        const c = ticks(centerFromStartIn)
         if (shape.kind === "outline") return yield* Effect.fail(invalid("place outline cutouts with xIn and yIn."))
         const d = ticks(shape.depthIn)
         const horizontal = leg === "main" || leg === "back"
@@ -102,15 +101,25 @@ export const expand = Effect.fn("Geometry.expand")(function* (job: Job) {
           : shape.kind === "L" ? leg === "back" || leg === shape.side
           : leg === "back" || leg === "left" || leg === "right"
         if (!valid) return yield* Effect.fail(invalid(`there is no ${leg} leg for this cutout.`))
-        const x2 = horizontal ? 2n * c - w : leg === "left" ? d - w : 2n * ticks(shape.kind === "rect" ? shape.lengthIn : shape.backIn) - d - w
-        const y2 = horizontal ? d - h : 2n * c - h
+        const legLength = shape.kind === "rect" ? shape.lengthIn : leg === "back" ? shape.backIn
+          : shape.kind === "L" ? shape.sideIn : leg === "left" ? shape.leftIn : shape.rightIn
+        // Twice the center stays integral even when the leg's midpoint is a half tick.
+        const center2 = centerFromStartIn === "center" ? ticks(legLength) : 2n * ticks(centerFromStartIn)
+        const x2 = horizontal ? center2 - w : leg === "left" ? d - w : 2n * ticks(shape.kind === "rect" ? shape.lengthIn : shape.backIn) - d - w
+        const y2 = horizontal ? d - h : center2 - h
         if (x2 % 2n !== 0n || y2 % 2n !== 0n) return yield* Effect.fail(invalid("centering this cutout falls between sixteenth-inch marks. Supply its top-left xIn and yIn instead."))
         x = x2 / 2n; y = y2 / 2n
       }
       if (x < 0n || y < 0n || !containsRectangle(polygon, x, y, w, h)) return yield* Effect.fail(invalid(`the ${cutout.kind} cutout extends outside the countertop. Please check its size and position.`))
       return { kind: cutout.kind, x: inches(x), y: inches(y), w: inches(w), h: inches(h) }
     }))
-    const wire: LayoutInput["installations"][number] = { id: installation.id, outline: polygon.map(([x, y]): readonly [number, number] => [inches(x), inches(y)]), cutouts }
-    return { ...wire, label: installation.label, areaTicks: twiceArea / 2n }
+    const geometryEstimates: Quote["geometryEstimates"] = installation.cutouts.flatMap((cutout, cutoutIndex) => {
+      const rectangle = cutouts[cutoutIndex]
+      return cutout.estimate && rectangle ? [{ installationId: installation.id, cutoutIndex,
+        ...cutout.estimate, xIn: rectangle.x, yIn: rectangle.y, wIn: rectangle.w, hIn: rectangle.h }] : []
+    })
+    const wire: LayoutInput["installations"][number] = { id: installation.id, outline: polygon.map(([x, y]): readonly [number, number] => [inches(x), inches(y)]), cutouts,
+      ...(installation.requiredPieceCount === undefined ? {} : { requiredPieceCount: installation.requiredPieceCount }) }
+    return { ...wire, label: installation.label, areaTicks: twiceArea / 2n, geometryEstimates }
   }))
 })
