@@ -40,6 +40,8 @@ Optional installation `requiredPieceCount` requires exactly that many rectangula
 fabrication pieces. It passes through to layout and drawing, remains on the quote
 installation, and is checked independently against the successful kernel reply.
 Fabrication splits do not split invoice lines or duplicate installed quantities.
+Original-edge cutout-clearance warnings come from the installed geometry and
+remain available in check/quote even when slab dimensions are still unknown.
 
 ## Development
 

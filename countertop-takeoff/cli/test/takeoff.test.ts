@@ -257,6 +257,18 @@ test("center uses each full outer leg and refuses off-grid resulting rectangles"
   expect((await Effect.runPromise(prepare(exactHalfTickCenter))).kernelInstallations[0]?.cutouts[0]?.x).toBe(40)
 })
 
+test("known original-edge clearance warns without a slab on a concave outline", async () => {
+  const outline = { kind: "outline", points: [[0, 0], [100, 0], [100, 24], [24, 24], [24, 80], [0, 80]] } satisfies Job["installations"][number]["shape"]
+  const narrow = { ...withShape(outline, [{ kind: "sink", wIn: 20, hIn: 20, at: { xIn: 40, yIn: 2 } }]), material: { ...job.material, slab: null } }
+  const quote = await run(takeoff(narrow))
+  expect(quote.layout).toBeNull()
+  expect(quote.warnings).toHaveLength(1)
+  expect(quote.warnings[0]).toContain("sink cutout 1")
+  expect(quote.warnings[0]).toContain("original countertop edge")
+  const justEnough = { ...narrow, settings: { minMaterialBesideCutoutIn: 2 } }
+  expect((await run(takeoff(justEnough))).warnings).toEqual([])
+})
+
 test("the committed standalone bundle matches its source", async () => {
   const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "..")
   const built = await Bun.build({ entrypoints: [join(cliDir, "src", "main.ts")], target: "bun", minify: true })

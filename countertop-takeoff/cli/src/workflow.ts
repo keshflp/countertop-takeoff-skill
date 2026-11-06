@@ -169,7 +169,7 @@ export const workflow = Effect.fn("Workflow.make")(function* (skillDir: string) 
       const readback = calculate(job, prepared, null)
       return [...estimateReadback(prepared.geometryEstimates), ...lines, `Material: ${job.material.name ?? "blank"}; vendor: ${job.material.vendor ?? "blank"}; price/SF: ${job.material.pricePerSf ?? "blank"}; slab: ${job.material.slab ? `${job.material.slab.lengthIn} by ${job.material.slab.widthIn} inches` : "blank"}; labor/SF: ${job.laborPerSf ?? "blank"}.`,
         ...readback.assumptions.map(a => `${a.setting}: ${a.value}, ${a.note}.`),
-        ...readback.blanks.map(b => b.question), "Show Dad preview.png and this readback. Run confirm only after he says yes."].join("\n")
+        ...readback.blanks.map(b => b.question), ...readback.warnings, "Show Dad preview.png and this readback. Run confirm only after he says yes."].join("\n")
     }),
     confirm: Effect.fn("Workflow.confirm")(function* (jobDir: string) {
       const dir = yield* privateDir(jobDir)

@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { JobError } from "./errors"
-import type { Job, LayoutInput, Quote } from "./schema"
+import type { Job, LayoutInput, Quote, Settings } from "./schema"
 
 type Point = readonly [bigint, bigint]
 const point = (x: bigint, y: bigint): Point => [x, y]
@@ -36,6 +36,21 @@ function containsRectangle(points: readonly Point[], x: bigint, y: bigint, w: bi
   return xs.slice(1).every((right, i) => ys.slice(1).every((bottom, j) => {
     const left = xs[i], top = ys[j]
     return left !== undefined && top !== undefined && contains(points, left + right, top + bottom)
+  }))
+}
+
+/** Original-edge clearance is known from installed geometry, even without a slab. */
+export function originalEdgeWarnings(installations: LayoutInput["installations"], settings: Settings) {
+  const minimum = ticks(settings.minMaterialBesideCutoutIn)
+  return installations.flatMap(inst => inst.cutouts.flatMap((cutout, index) => {
+    const left = ticks(cutout.x), right = left + ticks(cutout.w)
+    const top = ticks(cutout.y), bottom = top + ticks(cutout.h)
+    const tooThin = edges(inst.outline.map(([x, y]) => point(ticks(x), ticks(y)))).some(({ a, b }) => {
+      const dx = max(0n, max(min(a[0], b[0]) - right, left - max(a[0], b[0])))
+      const dy = max(0n, max(min(a[1], b[1]) - bottom, top - max(a[1], b[1])))
+      return dx * dx + dy * dy < minimum * minimum
+    })
+    return tooThin ? [`${inst.id}: ${cutout.kind} cutout ${index + 1} leaves less than ${settings.minMaterialBesideCutoutIn} inches of material at an original countertop edge. Confirm this with the fabricator.`] : []
   }))
 }
 

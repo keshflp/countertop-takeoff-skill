@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { add, areaDecimal, decimal, multiply, rounded } from "./exact"
-import { expand } from "./geometry"
+import { expand, originalEdgeWarnings } from "./geometry"
 import type { Job, Layout, Quote, Settings } from "./schema"
 
 const defaults: Settings = { slabTrimIn: 1, kerfIn: 0.25, minSeamToCutoutIn: 6, minMaterialBesideCutoutIn: 3, allowRotate: true }
@@ -20,7 +20,7 @@ export const prepare = Effect.fn("Takeoff.prepare")(function* (job: Job) {
   const installations = yield* expand(job)
   const { settings, assumptions } = resolveSettings(job)
   const kernelInstallations = installations.map(({ label: _label, areaTicks: _area, geometryEstimates: _estimates, ...installation }) => installation)
-  return { installations, kernelInstallations, settings, assumptions, geometryEstimates: installations.flatMap(i => i.geometryEstimates) }
+  return { installations, kernelInstallations, settings, assumptions, geometryEstimates: installations.flatMap(i => i.geometryEstimates), warnings: originalEdgeWarnings(kernelInstallations, settings) }
 })
 
 /** Exact gross quantities and invoice arithmetic, independent of files and Python. */
@@ -52,7 +52,7 @@ export function calculate(job: Job, prepared: Effect.Success<ReturnType<typeof p
       { setting: "grossSf", value: "cutouts are not subtracted", note: "assumed, confirm with Dad" },
       { setting: "nominalSlabSf", value: "slab pricing uses the full untrimmed size", note: "assumed, confirm with Dad" },
       { setting: "shapeRules", value: "outer wall lengths; uniform depth; cutouts centered in their leg", note: "assumed, confirm with Dad" }],
-    warnings: layout?.warnings ?? [],
+    warnings: layout?.warnings ?? prepared.warnings,
     geometryEstimates: prepared.geometryEstimates,
   }
 }
