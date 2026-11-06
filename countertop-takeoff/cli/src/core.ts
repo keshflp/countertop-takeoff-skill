@@ -8,7 +8,8 @@ const defaults: Settings = { slabTrimIn: 1, kerfIn: 0.25, minSeamToCutoutIn: 6, 
 /** Resolve defaults once and retain exactly which choices need Dad's confirmation. */
 export function resolveSettings(job: Job) {
   const settings = { ...defaults, ...job.settings }
-  const assumptions: Quote["assumptions"] = (Object.keys(defaults) as (keyof Settings)[])
+  const keys = ["slabTrimIn", "kerfIn", "minSeamToCutoutIn", "minMaterialBesideCutoutIn", "allowRotate"] as const
+  const assumptions: Quote["assumptions"] = keys
     .filter(key => job.settings[key] === undefined)
     .map(key => ({ setting: key, value: String(settings[key]), note: "assumed, confirm with Dad" }))
   return { settings, assumptions }

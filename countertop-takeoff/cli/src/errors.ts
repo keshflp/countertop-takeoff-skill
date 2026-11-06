@@ -24,7 +24,7 @@ export class WorkflowError extends Schema.TaggedError<WorkflowError>()("Workflow
 export type TakeoffError = JobError | FileError | KernelError | WorkflowError
 
 /** Decode a JSON boundary, keeping parser details out of Dad's messages. */
-export const decodeJson = <A>(schema: Schema.Schema<A>, text: string, error: TakeoffError) =>
+export const decodeJson = <A, E extends TakeoffError>(schema: Schema.Codec<A, unknown>, text: string, error: E) =>
   Effect.try({ try: (): unknown => JSON.parse(text), catch: () => error }).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(schema, { onExcessProperty: "error" })),
     Effect.mapError(() => error),
