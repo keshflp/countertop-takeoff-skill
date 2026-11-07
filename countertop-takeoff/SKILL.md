@@ -39,3 +39,4 @@ Whenever you are unsure what comes next, run `bun <skill>/cli/takeoff.js next <j
 - Treat inner shapes as possible openings until Dad identifies them. Ask for their kind, dimensions and position, or explicit permission for a preliminary estimate; use `cutouts: []` only when Dad confirms there are none. Read written measurements instead of measuring sketch proportions.
 - A missing, blurred or conflicting number gets one question. Keep it blank until answered or an estimate is explicitly authorized. Use an `outline` only when its corner coordinates are supplied; code draws the outline for other shapes.
 - A PDF is another sketch: look at its rendered pages in the input's `previews` folder and read the written dimensions the same way.
+- For one faint or unreadable raster detail, see [selected scan-detail suggestions](references/scan-detail.md); review the overlay and ask Dad for measurements.
