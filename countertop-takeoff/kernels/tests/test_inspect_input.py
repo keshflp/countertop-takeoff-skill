@@ -24,7 +24,7 @@ class InspectInputTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name).resolve()
 
     def test_phone_images_produce_png_previews(self) -> None:
         for extension in ("png", "jpg", "heic"):
