@@ -360,7 +360,8 @@ class SourceEvaluationTests(unittest.TestCase):
                 self.assertEqual(key["pricing"], evaluator.old.expected_pricing(fixture["job"], data, key["optimumSlabs"]), path.name)
         frozen = json.loads((HERE / "historical-baseline.json").read_text())
         for path, sha in frozen["fixtures"].items():
-            self.assertEqual(hashlib.sha256((HERE.parents[1] / path).read_bytes()).hexdigest(), sha)
+            # Hash committed LF bytes consistently across checkout settings.
+            self.assertEqual(hashlib.sha256((HERE.parents[1] / path).read_bytes().replace(b"\r\n", b"\n")).hexdigest(), sha)
 
     def test_v2_runner_does_not_skip_null_slab_or_score_conditional(self):
         fixture, output = witness()

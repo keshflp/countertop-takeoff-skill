@@ -27,4 +27,12 @@ uv run evals/kitchen/eval.py
 
 Pass `--cases C:\Users\<user>\takeoff-private\<cases>` for private cases. The evaluator independently checks polygons, source predicates/evidence, conditions, quantities, prices and blanks. It reports assessment counts and scored slab results separately. The frozen historical geometry/pricing workload uses the developer-only `--geometry-replay` flag; its score is separate and provides no source-rule assessment. See [evaluator details](evals/kitchen/README.md). Dad uses the bundled CLI and v2 [job format](countertop-takeoff/references/job-format.md).
 
+## Checks
+
+Public kitchen checks run on pull requests and pushes to `main`; see the [workflow](.github/workflows/kitchen-checks.yml). Run the kernel tests from the repo root with:
+
+```powershell
+uv run --with ortools==9.14.6206 --with pillow==12.0.0 --with "pymupdf>=1.26,<2" --with "pillow-heif>=1,<2" --with opencv-python-headless==4.12.0.88 --with numpy==2.2.6 python -m unittest discover -s countertop-takeoff/kernels/tests -p "test_*.py"
+```
+
 [Parked ideas](IDEAS.md) enter the skill when a real job needs them. The tag `baseline-2026-11-06` preserves the removed multi-family pipeline. [MIT license](countertop-takeoff/LICENSE).

@@ -1,0 +1,68 @@
+name: Kitchen checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kitchen-checks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kitchen:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: 0.12.23
+          python-version: "3.13"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install CLI dependencies
+        working-directory: countertop-takeoff/cli
+        run: bun install --frozen-lockfile
+
+      - name: Type check CLI
+        working-directory: countertop-takeoff/cli
+        run: bun run check
+
+      - name: Test CLI and committed bundle
+        working-directory: countertop-takeoff/cli
+        run: bun test
+
+      - name: Test kitchen evaluator
+        run: uv run --no-project -m unittest discover -s evals/kitchen -p "test_*.py"
+
+      - name: Test kitchen kernels
+        run: uv run --with ortools==9.14.6206 --with pillow==12.0.0 --with "pymupdf>=1.26,<2" --with "pillow-heif>=1,<2" --with opencv-python-headless==4.12.0.88 --with numpy==2.2.6 python -m unittest discover -s countertop-takeoff/kernels/tests -p "test_*.py"
+
+      - name: Evaluate public source cases through raw kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run evals/kitchen/eval.py --layout-only --json |
+            uv run --no-project python -c 'import json,sys; r=json.load(sys.stdin); print("assessmentCounts="+str(r["assessmentCounts"])+" score="+str(r["score"])); sys.exit(0 if (r["pass"] is True and r["evaluatedCases"] == 19 and r["pendingCases"] == 0 and r["skippedCases"] == 0) else "incomplete eval: pass="+str(r["pass"])+" evaluated="+str(r["evaluatedCases"])+" pending="+str(r["pendingCases"])+" skipped="+str(r["skippedCases"]))'
+
+      - name: Evaluate public source cases through CLI quote
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run evals/kitchen/eval.py --json |
+            uv run --no-project python -c 'import json,sys; r=json.load(sys.stdin); print("assessmentCounts="+str(r["assessmentCounts"])+" score="+str(r["score"])); sys.exit(0 if (r["pass"] is True and r["evaluatedCases"] == 19 and r["pendingCases"] == 0 and r["skippedCases"] == 0) else "incomplete eval: pass="+str(r["pass"])+" evaluated="+str(r["evaluatedCases"])+" pending="+str(r["pendingCases"])+" skipped="+str(r["skippedCases"]))'
+
+      - name: Replay historical developer cases through CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run evals/kitchen/eval.py --geometry-replay --cases evals/kitchen/cases --cases evals/kitchen/contract-cases --quote-cmd "bun countertop-takeoff/cli/src/replay.ts" --json |
+            uv run --no-project python -c 'import json,sys; r=json.load(sys.stdin); print("assessmentCounts="+str(r["assessmentCounts"])+" score="+str(r["score"])); sys.exit(0 if (r["pass"] is True and r["evaluatedCases"] == 19 and r["pendingCases"] == 0 and r["skippedCases"] == 0) else "incomplete eval: pass="+str(r["pass"])+" evaluated="+str(r["evaluatedCases"])+" pending="+str(r["pendingCases"])+" skipped="+str(r["skippedCases"]))'
