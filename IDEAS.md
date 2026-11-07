@@ -10,8 +10,8 @@ An idea moves into the skill only when a real job needs it.
 - Vein matching: why parked: it needs material-specific placement constraints from a real job.
 - A programmatic PDF invoice: why parked: ChatGPT makes the PDF from quote.json.
 - QuickBooks: why parked: no real account import or integration requirement has been supplied.
-- PDF vector measurement and whole-plan recognition: why parked: optional selected-detail suggestions exist in `countertop-takeoff/kernels/scan_detail.py` and `countertop-takeoff/references/scan-detail.md`; whole-plan measurement remains parked.
+- PDF vector measurement and whole-plan recognition: why parked: the agent reads written dimensions; optional selected-detail suggestions cover one faint detail (`countertop-takeoff/references/scan-detail.md`); the previous pipeline is preserved at `baseline-2026-11-06`.
 - A compiled takeoff.exe: why parked: uv and the committed Bun bundle keep laptop setup small.
 - Automatically moving the conversation from Chat to Work: why parked: a real handoff need and supported transfer route should drive it.
 - Native desktop/mobile apps: why parked: the agent workflow must prove useful before adding another interface.
-- MCP integration: why parked: Open PDF Studio guidance is optional, docs-based and untested in `countertop-takeoff/references/scan-detail.md`; live MCP integration remains parked.
+- MCP integration: why parked: the bundled CLI already provides the current tool boundary; Open PDF Studio guidance is optional, docs-based and untested (`countertop-takeoff/references/scan-detail.md`); live MCP integration remains parked.
