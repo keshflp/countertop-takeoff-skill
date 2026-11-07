@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Schema } from "effect"
-import { mkdtemp, readFile, rm, writeFile, symlink } from "node:fs/promises"
+import { mkdtemp, readFile, rm, stat, writeFile, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -54,7 +54,9 @@ test("private jobs are refused inside any checkout, including junctions", async 
   const link = join(root, "code-link")
   await symlink(skillDir, link, "junction")
   await expect(run(w.preflight(join(link, "private-job"), [input]))).rejects.toThrow("Keep plans outside")
-  await writeFile(join(root, ".git"), await readFile(resolve(skillDir, "..", ".git")))
+  const gitMetadata = resolve(skillDir, "..", ".git")
+  const simulatedMarker = (await stat(gitMetadata)).isDirectory() ? `gitdir: ${gitMetadata}\n` : await readFile(gitMetadata)
+  await writeFile(join(root, ".git"), simulatedMarker)
   await expect(run(w.preflight(join(root, "other-checkout-job"), [input]))).rejects.toThrow("Keep plans outside")
 })
 
