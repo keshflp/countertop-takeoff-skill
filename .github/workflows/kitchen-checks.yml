@@ -51,18 +51,18 @@ jobs:
         run: |
           set -euo pipefail
           uv run evals/kitchen/eval.py --layout-only --json |
-            uv run --no-project python -c 'import json,sys; r=json.load(sys.stdin); print("assessmentCounts="+str(r["assessmentCounts"])+" score="+str(r["score"])); assert r["pass"] is True and r["evaluatedCases"] == 19 and r["pendingCases"] == 0 and r["skippedCases"] == 0'
+            uv run --no-project python -c 'import json,sys; r=json.load(sys.stdin); print("assessmentCounts="+str(r["assessmentCounts"])+" score="+str(r["score"])); sys.exit(0 if (r["pass"] is True and r["evaluatedCases"] == 19 and r["pendingCases"] == 0 and r["skippedCases"] == 0) else "incomplete eval: pass="+str(r["pass"])+" evaluated="+str(r["evaluatedCases"])+" pending="+str(r["pendingCases"])+" skipped="+str(r["skippedCases"]))'
 
       - name: Evaluate public source cases through CLI quote
         shell: bash
         run: |
           set -euo pipefail
           uv run evals/kitchen/eval.py --json |
-            uv run --no-project python -c 'import json,sys; r=json.load(sys.stdin); print("assessmentCounts="+str(r["assessmentCounts"])+" score="+str(r["score"])); assert r["pass"] is True and r["evaluatedCases"] == 19 and r["pendingCases"] == 0 and r["skippedCases"] == 0'
+            uv run --no-project python -c 'import json,sys; r=json.load(sys.stdin); print("assessmentCounts="+str(r["assessmentCounts"])+" score="+str(r["score"])); sys.exit(0 if (r["pass"] is True and r["evaluatedCases"] == 19 and r["pendingCases"] == 0 and r["skippedCases"] == 0) else "incomplete eval: pass="+str(r["pass"])+" evaluated="+str(r["evaluatedCases"])+" pending="+str(r["pendingCases"])+" skipped="+str(r["skippedCases"]))'
 
       - name: Replay historical developer cases through CLI
         shell: bash
         run: |
           set -euo pipefail
           uv run evals/kitchen/eval.py --geometry-replay --cases evals/kitchen/cases --cases evals/kitchen/contract-cases --quote-cmd "bun countertop-takeoff/cli/src/replay.ts" --json |
-            uv run --no-project python -c 'import json,sys; r=json.load(sys.stdin); print("assessmentCounts="+str(r["assessmentCounts"])+" score="+str(r["score"])); assert r["pass"] is True and r["evaluatedCases"] == 19 and r["pendingCases"] == 0 and r["skippedCases"] == 0'
+            uv run --no-project python -c 'import json,sys; r=json.load(sys.stdin); print("assessmentCounts="+str(r["assessmentCounts"])+" score="+str(r["score"])); sys.exit(0 if (r["pass"] is True and r["evaluatedCases"] == 19 and r["pendingCases"] == 0 and r["skippedCases"] == 0) else "incomplete eval: pass="+str(r["pass"])+" evaluated="+str(r["evaluatedCases"])+" pending="+str(r["pendingCases"])+" skipped="+str(r["skippedCases"]))'
