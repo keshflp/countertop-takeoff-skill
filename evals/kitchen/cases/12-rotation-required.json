@@ -1,0 +1,57 @@
+{
+  "job": {
+    "version": 1,
+    "material": {
+      "name": "Synthetic quartz",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "15.00",
+      "slab": {
+        "lengthIn": 126,
+        "widthIn": 63
+      },
+      "markupPercent": "0"
+    },
+    "laborPerSf": "12.25",
+    "installations": [
+      {
+        "id": "perimeter",
+        "label": "Perimeter",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 25.5,
+          "depthIn": 96
+        },
+        "cutouts": []
+      }
+    ],
+    "settings": {
+      "slabTrimIn": 1,
+      "kerfIn": 0.25,
+      "minSeamToCutoutIn": 6,
+      "minMaterialBesideCutoutIn": 3,
+      "allowRotate": true
+    }
+  },
+  "expected": {
+    "installations": {
+      "perimeter": {
+        "sf": "17.00"
+      }
+    },
+    "totalSf": "17.00",
+    "pricing": {
+      "materialCost": "826.88",
+      "materialRatePerSf": "48.64",
+      "laborPerSf": "12.25",
+      "ratePerSf": "60.89",
+      "markupPercent": "0",
+      "materialCharge": "826.88"
+    },
+    "blanks": [],
+    "invoiceAmounts": [
+      "1035.13"
+    ],
+    "optimumSlabs": 1
+  },
+  "why": "25.5*96=2448 sq in. The one original rectangle only fits usable 124x61 after a 90 degree rotation to 96x25.5. One slab is optimal. All five settings are explicit, so none needs a default assumption. Nominal slab SF = 126*63/144 = 55.125. At 1 slab(s), unrounded material cost = 826.87500; cost = 826.88; material rate = round(826.87500/(2448/144), 2) = 48.64. Installation SF = ['17.00']; exact-total SF rounds to 17.00. Labor = 12.25; invoice rate = 60.89; rounded line amounts = ['1035.13']. Cutouts do not reduce gross area."
+}

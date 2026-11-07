@@ -1,0 +1,72 @@
+{
+  "job": {
+    "version": 2,
+    "material": {
+      "name": "Synthetic profiled surface",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "12.00",
+      "markupPercent": "10",
+      "slab": {
+        "lengthIn": 126,
+        "widthIn": 90
+      },
+      "profileId": "silestone-2024-02",
+      "profileProvenance": "Synthetic material explicitly specified to the pinned Cosentino Silestone REV.03 02/2024 countertop profile.",
+      "nominalThicknessMm": "20"
+    },
+    "laborPerSf": "8.00",
+    "installations": [
+      {
+        "id": "counter",
+        "label": "Counter",
+        "shape": {
+          "kind": "U",
+          "backIn": 96,
+          "leftIn": 72,
+          "rightIn": 72,
+          "depthIn": 24
+        },
+        "cutouts": [],
+        "insideCornerRadiusMm": "10",
+        "sourceArrangement": null,
+        "conditions": [
+          {
+            "kind": "installation-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "level-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-continuous-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-reinforcement",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          }
+        ]
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "assessmentStatus": "conditional",
+    "installations": {
+      "counter": {
+        "sf": "32.00"
+      }
+    },
+    "totalSf": "32.00"
+  },
+  "why": "U area96*24+2*(72-24)*24=4608sqin=32SF. Whole96x72 bbox fits124x88. Geometry is representable, but the inspected S1 L detail does not establish all U/corner conditions. Preserve unsupported-detail condition; do not call this fully assessed. Gross quantities: counter: 4608 sq in /144 ->32.00 SF. Total rounds exact sum once. Cutout envelopes are included. Pricing, if a layout qualifies, uses nominal purchased slab area, exact supplier cost times (1+markup/100), then exact job SF before rate rounding; labor is separate."
+}

@@ -5,3 +5,17 @@ __pycache__/
 build/
 *.index.json
 *.geometry.json
+# Real plans live in takeoff-private, outside this public repository.
+node_modules/
+jobs/
+job/
+*.job/
+job-*/
+*-job/
+# CLI-generated job state, including jobs accidentally created under other names.
+job.json
+preflight.json
+confirmation.json
+quote.json
+layout.png
+preview.png

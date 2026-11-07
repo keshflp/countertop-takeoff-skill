@@ -1,0 +1,96 @@
+{
+  "job": {
+    "version": 2,
+    "material": {
+      "name": "Synthetic profiled surface",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "12.00",
+      "markupPercent": "10",
+      "slab": null,
+      "profileId": "silestone-2024-02",
+      "profileProvenance": "Synthetic material explicitly specified to the pinned Cosentino Silestone REV.03 02/2024 countertop profile.",
+      "nominalThicknessMm": "20"
+    },
+    "laborPerSf": "8.00",
+    "installations": [
+      {
+        "id": "counter",
+        "label": "Counter",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 104,
+          "depthIn": 27
+        },
+        "cutouts": [
+          {
+            "kind": "cooktop",
+            "wIn": 26,
+            "hIn": 17,
+            "at": {
+              "xIn": 39,
+              "yIn": 5
+            },
+            "radiusMm": "10",
+            "mount": "under"
+          }
+        ],
+        "insideCornerRadiusMm": null,
+        "sourceArrangement": {
+          "kind": "rectangular-run",
+          "axis": "x",
+          "rear": "min",
+          "provenance": "Synthetic source explicitly identifies x as the run and min-y as rear."
+        },
+        "conditions": [
+          {
+            "kind": "installation-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "level-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-continuous-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-reinforcement",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "fixture-support",
+            "cutoutIndex": 0,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "opening-continuous-support",
+            "cutoutIndex": 0,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          }
+        ]
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "assessmentStatus": "unresolved",
+    "installations": {
+      "counter": {
+        "sf": "19.50"
+      }
+    },
+    "totalSf": "19.50"
+  },
+  "why": "Source profile/thickness/radii/support and original geometry remain evaluable with unknown slab. No packing or slab-derived charges; known supplier cost per SF, markup and labor remain preserved. One slab question. Gross quantities: counter: 2808 sq in /144 ->19.50 SF. Total rounds exact sum once. Cutout envelopes are included. Pricing, if a layout qualifies, uses nominal purchased slab area, exact supplier cost times (1+markup/100), then exact job SF before rate rounding; labor is separate."
+}

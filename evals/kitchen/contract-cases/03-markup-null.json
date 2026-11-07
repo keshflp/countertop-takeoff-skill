@@ -1,0 +1,36 @@
+{
+  "job": {
+    "version": 1,
+    "material": {
+      "name": "Synthetic quartz",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "11.30",
+      "markupPercent": null,
+      "slab": {"lengthIn": 126, "widthIn": 63}
+    },
+    "laborPerSf": "8.25",
+    "installations": [{
+      "id": "counter",
+      "label": "Counter",
+      "shape": {"kind": "rect", "lengthIn": 84, "depthIn": 25.5},
+      "cutouts": []
+    }],
+    "settings": {}
+  },
+  "expected": {
+    "installations": {"counter": {"sf": "14.88"}},
+    "totalSf": "14.88",
+    "optimumSlabs": 1,
+    "pricing": {
+      "materialCost": "622.91",
+      "markupPercent": null,
+      "materialCharge": null,
+      "materialRatePerSf": null,
+      "laborPerSf": "8.25",
+      "ratePerSf": null
+    },
+    "invoiceAmounts": [null],
+    "blanks": ["material.markupPercent"]
+  },
+  "why": "84*25.5=2142 sq in; 2142/144=14.875 ->14.88 SF half-up. One 84x25.5 rectangle fits usable 124x61, so one slab is optimal. Nominal slab SF=126*63/144=55.125. Actual supplier purchase cost=55.125*11.30=622.9125 ->622.91 remains known. Markup is unknown: charge, material rate, invoice rate and line amount remain null with exactly one markup question. Known labor remains 8.25. No financial percentage is defaulted."
+}

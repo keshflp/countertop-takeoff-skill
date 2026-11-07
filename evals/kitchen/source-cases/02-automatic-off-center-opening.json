@@ -1,0 +1,111 @@
+{
+  "job": {
+    "version": 2,
+    "material": {
+      "name": "Synthetic profiled surface",
+      "vendor": "Synthetic supplier",
+      "pricePerSf": "12.00",
+      "markupPercent": "10",
+      "slab": {
+        "lengthIn": 120,
+        "widthIn": 55
+      },
+      "profileId": "silestone-2024-02",
+      "profileProvenance": "Synthetic material explicitly specified to the pinned Cosentino Silestone REV.03 02/2024 countertop profile.",
+      "nominalThicknessMm": "20"
+    },
+    "laborPerSf": "8.00",
+    "installations": [
+      {
+        "id": "counter",
+        "label": "Counter",
+        "shape": {
+          "kind": "rect",
+          "lengthIn": 180,
+          "depthIn": 25.5
+        },
+        "cutouts": [
+          {
+            "kind": "sink",
+            "wIn": 60,
+            "hIn": 18,
+            "at": {
+              "xIn": 55,
+              "yIn": 4
+            },
+            "radiusMm": "10",
+            "mount": "under"
+          }
+        ],
+        "insideCornerRadiusMm": null,
+        "sourceArrangement": {
+          "kind": "rectangular-run",
+          "axis": "x",
+          "rear": "min",
+          "provenance": "Synthetic source explicitly identifies x as the run and min-y as rear."
+        },
+        "conditions": [
+          {
+            "kind": "installation-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "level-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-continuous-support",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "corner-reinforcement",
+            "cutoutIndex": null,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "fixture-support",
+            "cutoutIndex": 0,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          },
+          {
+            "kind": "opening-continuous-support",
+            "cutoutIndex": 0,
+            "status": "documented",
+            "note": "Synthetic supplied support evidence for this named scope; not a reinforcement design."
+          }
+        ]
+      }
+    ],
+    "settings": {}
+  },
+  "expected": {
+    "assessmentStatus": "assessed",
+    "installations": {
+      "counter": {
+        "sf": "31.88"
+      }
+    },
+    "totalSf": "31.88",
+    "optimumSlabs": 1,
+    "pricing": {
+      "materialCost": "550.00",
+      "markupPercent": "10",
+      "materialCharge": "605.00",
+      "materialRatePerSf": "18.98",
+      "laborPerSf": "8.00",
+      "ratePerSf": "26.98"
+    },
+    "invoiceAmounts": [
+      "860.12"
+    ]
+  },
+  "why": "Whole180x25.5 cannot fit usable118x53. Any two-piece fitting cross-cut lies x62..118. Opening spans55..115: outside seam must be at most51.0625 or at least118.9375 for100mm, outside that fit interval. The source-permitted center x85 yields85x25.5 and95x25.5, stacked at y0 and25.75 on ONE slab. Source-facing sink rear4in=101.6mm and front3.5in=88.9mm pass; ends55/65in pass. Both halves retain clipped void and one logical join has stone segments y0..4 and22..25.5. No seam/count supplied: stock-fit requires a join. One slab meets area bound. Exact cost550, marked605; exact SF31.875, material rate18.98, invoice26.98, line31.88*26.98 ->860.12. Gross quantities: counter: 4590.0 sq in /144 ->31.88 SF. Total rounds exact sum once. Cutout envelopes are included. Pricing, if a layout qualifies, uses nominal purchased slab area, exact supplier cost times (1+markup/100), then exact job SF before rate rounding; labor is separate."
+}
