@@ -111,7 +111,11 @@ def preview_provenance(
             "page": page,
             "crop_box_px": [x0, y0, x1, y1],
             "render_zoom": PDF_PREVIEW_ZOOM,
-            "source_space": "pdf_page_points",
+            "source_space": "rendered_page_points",
+            "coordinate_note": (
+                "Displayed PDF page after /Rotate, with origin at the visible CropBox top-left and y down. "
+                "No conversion to unrotated PDF, annotation or OPS coordinates is supported."
+            ),
         }
         return provenance, transform
     if page is not None:

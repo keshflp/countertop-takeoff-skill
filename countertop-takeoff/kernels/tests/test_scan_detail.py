@@ -90,6 +90,8 @@ class ScanDetailTests(unittest.TestCase):
         self.assertEqual(result["original_crop"]["sha256"], hashlib.sha256((output / "crop.png").read_bytes()).hexdigest())
         self.assertEqual(result["provenance"]["source"], str(source.resolve()))
         self.assertEqual(result["provenance"]["page"], 2)
+        self.assertEqual(result["provenance"]["source_space"], "rendered_page_points")
+        self.assertIn("CropBox", result["provenance"]["coordinate_note"])
         self.assertEqual(result["provenance"]["crop_box_px"], list(box))
         self.assertEqual(result["original_to_page"], [[0.5, 0, 3.5], [0, 0.5, 4.5], [0, 0, 1]])
 
